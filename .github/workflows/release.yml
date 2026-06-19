@@ -1,0 +1,123 @@
+name: Release
+
+on:
+  push:
+    # chitra uses bare-number tags (e.g. `0.1.0`); the `v`-prefixed forms
+    # are accepted too for parity with mabda. Pre-release `-rc.N` /
+    # `-beta.N` / `-alpha.N` suffixes are flagged as GitHub pre-releases by
+    # the final job, so consumers' tag-resolvers won't pick them up by
+    # default.
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-beta.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+-beta.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-alpha.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+-alpha.[0-9]+'
+
+permissions:
+  contents: write
+
+jobs:
+  ci:
+    name: CI Gate
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: Build Release
+    needs: [ci]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify version
+        run: |
+          FILE_VERSION=$(tr -d '[:space:]' < VERSION)
+          TAG="${GITHUB_REF_NAME#v}"
+          # Accept x.y.z OR x.y.z-{rc,beta,alpha}.N (matches the tag-pattern
+          # filter on the trigger). VERSION is the single source of truth
+          # (cyrius.cyml pulls it via ${file:VERSION}); the tag must match it.
+          echo "$TAG" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-(rc|beta|alpha)\.[0-9]+)?$' || {
+            echo "tag ($TAG) is not semver x.y.z[-{rc,beta,alpha}.N]"; exit 1; }
+          [ "$FILE_VERSION" = "$TAG" ] || {
+            echo "VERSION ($FILE_VERSION) != tag ($TAG)"; exit 1; }
+          echo "Version verified: $TAG (cyrius.cyml pulls from VERSION via \${file:VERSION})"
+
+      - name: Install Cyrius toolchain
+        # Upstream installer → versioned ~/.cyrius/versions/<ver>/ layout that
+        # matches how cyrius resolves the cyrius.cyml pin (no hardcoded version
+        # in YAML; the old hand-rolled flat copy broke `cyrius deps`).
+        run: |
+          set -e
+          CYRIUS_VERSION="$(grep '^cyrius = ' cyrius.cyml | head -1 | sed 's/cyrius = "\(.*\)"/\1/')"
+          echo "Installing Cyrius $CYRIUS_VERSION"
+          curl -sSf https://raw.githubusercontent.com/MacCracken/cyrius/main/scripts/install.sh | \
+            CYRIUS_VERSION="$CYRIUS_VERSION" sh
+          echo "$HOME/.cyrius/bin" >> "$GITHUB_PATH"
+
+      - name: Resolve deps
+        # lib/ is a real directory populated by `cyrius deps`, never a symlink
+        # to a cyrius checkout (cross-repo writes). chitra is pure-Cyrius — no
+        # external C libs to fetch.
+        run: |
+          rm -rf lib
+          mkdir lib
+          cyrius deps
+
+      - name: Build (link-check, DCE on)
+        run: |
+          mkdir -p build
+          CYRIUS_DCE=1 cyrius build programs/smoke.cyr build/chitra_smoke
+          echo "smoke: $(wc -c < build/chitra_smoke) bytes"
+
+      - name: Test
+        run: |
+          # Functionality-grouped domain suites under tests/tcyr/ — globbed.
+          for f in tests/tcyr/*.tcyr; do cyrius test "$f" || exit 1; done
+
+      - name: Regenerate dist bundle
+        run: cyrius distlib
+
+      - name: Clean toolchain artifacts
+        run: rm -f cyrius-*.tar.gz
+
+      - name: Archive
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          git archive --format=tar.gz --prefix="chitra-${TAG}/" -o "chitra-${TAG}-src.tar.gz" HEAD
+          cp dist/chitra.cyr "chitra-${TAG}.cyr"
+          sha256sum chitra-*.tar.gz chitra-*.cyr > SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: |
+            chitra-*.tar.gz
+            chitra-*.cyr
+            SHA256SUMS
+
+  release:
+    name: Create GitHub Release
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+      - name: Changelog
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          awk "/^## \\[${TAG}\\]/{found=1; next} /^## \\[/{if(found) exit} found{print}" CHANGELOG.md > /tmp/body.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: "chitra ${{ github.ref_name }}"
+          body_path: /tmp/body.md
+          # Flag as pre-release for 0.x tags AND any -rc / -beta / -alpha suffix.
+          prerelease: ${{ startsWith(github.ref_name, '0.') || startsWith(github.ref_name, 'v0.') || contains(github.ref_name, '-rc.') || contains(github.ref_name, '-beta.') || contains(github.ref_name, '-alpha.') }}
+          files: |
+            chitra-*.tar.gz
+            chitra-*.cyr
+            SHA256SUMS
