@@ -1,0 +1,47 @@
+[package]
+name = "chitra"
+version = "${file:VERSION}"
+description = "chitra (चित्र — image / picture) — pure-Cyrius CPU raster decoder for AGNOS (PNG → canonical RGBA8 at v0.1.0; JPEG later)"
+license = "GPL-3.0-only"
+repository = "https://github.com/MacCracken/chitra"
+language = "cyrius"
+cyrius = "6.2.23"
+
+# chitra is a library — no CLI binary. `cyrius build` targets a smoke
+# program that links the full include chain to prove lib.cyr parses clean.
+# Consumers (mabda for gpu_texture_load_png) pull `dist/chitra.cyr` via a
+# `[deps.chitra]` entry pointing at a git tag.
+[build]
+entry = "programs/smoke.cyr"
+output = "build/chitra_smoke"
+
+# `[lib]` feeds `cyrius distlib` — module order matters: stdlib first
+# (declared in src/lib.cyr), then domain modules in dependency order.
+# error.cyr is dep-free; png.cyr uses it. Don't reorder without re-running
+# `cyrius distlib` and verifying the concatenated bundle still compiles clean.
+[lib]
+modules = [
+    "src/error.cyr",
+    "src/png.cyr",
+]
+
+[deps]
+# Stdlib base set mirrors mabda's foundation, plus "sankoch" (RFC 1950/1951
+# zlib_decompress + crc32/adler32 for PNG IDAT inflate — same dep kii uses)
+# and "thread" (sankoch's _sankoch_lock/_unlock wrap mutex_lock/mutex_unlock).
+# Both pulled in now so the v0.1.0 PNG decoder bites have them ready.
+stdlib = [
+    "string",
+    "fmt",
+    "alloc",
+    "io",
+    "vec",
+    "str",
+    "syscalls",
+    "assert",
+    "bench",
+    "args",
+    "flags",
+    "sankoch",
+    "thread",
+]

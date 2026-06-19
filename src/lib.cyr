@@ -1,0 +1,44 @@
+# @public — chitra library include chain.
+# chitra (चित्र — image / picture) — pure-Cyrius CPU raster decoder.
+#
+# Provides: PNG → canonical RGBA8 decode (v0.1.0). Sibling AGNOS package
+# in the mould of sakshi / patra / samvada. Consumed by mabda for
+# gpu_texture_load_png (a plain dist dep — chitra is pure CPU Cyrius,
+# no C shim).
+#
+# Stdlib includes live ONLY in this file — domain modules are flat,
+# which is what makes `cyrius distlib` (strip-include concatenation)
+# produce a compile-clean `dist/chitra.cyr`. Don't add stdlib includes
+# in individual src/*.cyr files.
+
+# ================================================================
+# Standard library
+# ================================================================
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/alloc.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/io.cyr"
+include "lib/args.cyr"
+include "lib/syscalls.cyr"
+include "lib/flags.cyr"
+include "lib/assert.cyr"
+include "lib/bench.cyr"
+
+# thread.cyr (mutex_* via clone(CLONE_VM)) must precede sankoch.cyr —
+# sankoch's public-API lock wraps mutex_lock/mutex_unlock. thread.cyr
+# self-includes mmap.cyr + atomic.cyr.
+include "lib/thread.cyr"
+
+# sankoch — RFC 1950/1951 zlib_decompress + crc32 + adler32. PNG IDAT
+# inflate + chunk-CRC validation route through here (DEFLATE is not
+# chitra's work, exactly as kii does).
+include "lib/sankoch.cyr"
+
+# ================================================================
+# chitra domain modules — flat, dependency order.
+# error.cyr is dep-free; png.cyr uses ChitraErr from it.
+# ================================================================
+include "src/error.cyr"
+include "src/png.cyr"

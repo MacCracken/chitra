@@ -1,0 +1,76 @@
+# @public — stable API surface for chitra error handling.
+# error.cyr — chitra raster-decode error codes + Result helpers.
+#
+# ChitraErr is a 16-byte record layout-compatible with mabda's GpuErr
+# so a consumer (mabda) can map a decode failure cleanly onto
+# GPU_ERR_IMAGE_DECODE. Error codes are integer constants; for errors
+# that carry context (a message pointer), use chitra_err_new(code, msg).
+#
+# ChitraErr struct layout (16 bytes):
+#   +0: code    — error code constant (one of the CHITRA_* below)
+#   +8: detail  — pointer to detail string (or 0)
+
+# ================================================================
+# Error code constants
+# ================================================================
+
+enum ChitraErrCode {
+    CHITRA_OK              = 0;   # no error
+    CHITRA_ERR_SIGNATURE  = 1;   # missing/corrupt PNG 8-byte signature
+    CHITRA_ERR_TRUNCATED  = 2;   # input ends before a chunk/field completes
+    CHITRA_ERR_BAD_CHUNK  = 3;   # malformed chunk (length/CRC/type/order)
+    CHITRA_ERR_UNSUPPORTED = 4;  # valid PNG but a feature chitra can't decode
+    CHITRA_ERR_INFLATE    = 5;   # sankoch zlib_decompress reported failure
+    CHITRA_ERR_OOM        = 6;   # allocation failed / decompression-bomb cap hit
+    CHITRA_ERR_OTHER      = 99;  # catch-all
+}
+
+# ================================================================
+# ChitraErr struct
+# ================================================================
+
+# Create a ChitraErr with code and an optional detail string (0 = none).
+fn chitra_err_new(code, detail): i64 {
+    var e = alloc(16);
+    store64(e, code);
+    store64(e + 8, detail);
+    return e;
+}
+
+# Create a ChitraErr with code only (no detail).
+fn chitra_err(code): i64 {
+    return chitra_err_new(code, 0);
+}
+
+# Get the error code.
+fn chitra_err_code(e): i64 {
+    return load64(e);
+}
+
+# Get the detail string pointer (or 0).
+fn chitra_err_detail(e): i64 {
+    return load64(e + 8);
+}
+
+# ================================================================
+# Error name lookup — returns a cstring (never null).
+# ================================================================
+
+fn chitra_err_name(code): i64 {
+    if (code == CHITRA_OK)              { return "ok"; }
+    if (code == CHITRA_ERR_SIGNATURE)  { return "bad PNG signature"; }
+    if (code == CHITRA_ERR_TRUNCATED)  { return "truncated input"; }
+    if (code == CHITRA_ERR_BAD_CHUNK)  { return "malformed chunk"; }
+    if (code == CHITRA_ERR_UNSUPPORTED) { return "unsupported feature"; }
+    if (code == CHITRA_ERR_INFLATE)    { return "inflate failed"; }
+    if (code == CHITRA_ERR_OOM)        { return "out of memory"; }
+    if (code == CHITRA_ERR_OTHER)      { return "other error"; }
+    return "unknown error";
+}
+
+# Print an error name to stderr (fd 2).
+fn chitra_err_print_name(code): i64 {
+    var name = chitra_err_name(code);
+    syscall(1, 2, name, strlen(name));
+    return 0;
+}

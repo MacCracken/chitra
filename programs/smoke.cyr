@@ -1,0 +1,19 @@
+# programs/smoke.cyr — compile-time proof that src/lib.cyr links clean.
+#
+# chitra is a library — there is no CLI binary. This program exists so
+# `cyrius build programs/smoke.cyr build/chitra_smoke` can verify the
+# full include chain (stdlib + sankoch + thread + domain modules) parses
+# and links without error. The emitted binary writes a one-line banner
+# and exits 0.
+
+include "src/lib.cyr"
+
+fn main(): i64 {
+    alloc_init();
+    var banner = "chitra smoke: lib.cyr linked clean\n";
+    syscall(1, 1, banner, strlen(banner));
+    return 0;
+}
+
+var exit_code = main();
+syscall(60, exit_code);

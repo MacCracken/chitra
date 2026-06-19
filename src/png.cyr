@@ -1,0 +1,36 @@
+# @public — chitra PNG decoder (STUB at v0.1.0 scaffold; real decoder
+# lands in the AL.P0b–AL.P0e bites of the mabda v3.3 arc).
+#
+# png.cyr — PNG → canonical RGBA8 decoder.
+#
+# Planned public API (see docs/proposals/v3.3-chitra-png-decoder-package.md
+# in the mabda repo; tracked, not implemented here yet):
+#
+#   # Decode PNG bytes → an owned RGBA8 image. Ok(ChitraImage*) | Err(ChitraErr).
+#   fn chitra_png_decode(src, len): i64                       # @public
+#   # Convenience: returns the RGBA8 pixel ptr (w/h via out-params), 0 on error.
+#   fn chitra_png_decode_rgba8(src, len, w_out, h_out): i64   # @public
+#   fn chitra_image_free(img): i64                            # @public
+#
+#   ChitraImage (32 bytes):
+#     +0:  width    (i64)
+#     +8:  height   (i64)
+#     +16: pixels   (ptr — w*h*4 RGBA8, owned)
+#     +24: channels (i64 — always 4 in 0.1.0)
+#
+# v0.1.0 scope: PNG signature + chunk parse (IHDR / IDAT-concat / IEND /
+# PLTE / tRNS), color types 0/2/3/4/6 at bit depth 8, sankoch IDAT inflate,
+# the five unfilter predictors, canonical-RGBA8 output, the kii security
+# guards. No Adam7 interlace (single-pass only). Forked from kii's proven
+# png.cyr core with a new byte-buffer I/O boundary + RGBA8 normalization.
+
+# ================================================================
+# Version probe — the only live fn at the scaffold stage so the
+# module is non-empty and links. 0.1.0 packed as major*100 + minor*10
+# + patch → 1*100 + 0*10 + 0 = 100.
+# ================================================================
+
+# @public
+fn chitra_version(): i64 {
+    return 100;
+}
