@@ -22,6 +22,11 @@ enum ChitraErrCode {
     CHITRA_ERR_UNSUPPORTED = 4;  # valid PNG but a feature chitra can't decode
     CHITRA_ERR_INFLATE    = 5;   # sankoch zlib_decompress reported failure
     CHITRA_ERR_OOM        = 6;   # allocation failed / decompression-bomb cap hit
+    CHITRA_ERR_CRC        = 7;   # chunk CRC-32 mismatch (corruption / tamper)
+    CHITRA_ERR_INTERLACE  = 8;   # interlace != 0 (Adam7) — single-pass only (chitra 0.2)
+    CHITRA_ERR_BIT_DEPTH  = 9;   # bit_depth != 8 — 1/2/4/16 are chitra 0.2 / AL.P0d scope
+    CHITRA_ERR_DIMENSIONS = 10;  # width/height vs data: lying-IHDR / overflow / bomb caps
+    CHITRA_ERR_FILTER     = 11;  # per-row filter byte not in {0,1,2,3,4} (spec § 9)
     CHITRA_ERR_OTHER      = 99;  # catch-all
 }
 
@@ -64,6 +69,11 @@ fn chitra_err_name(code): i64 {
     if (code == CHITRA_ERR_UNSUPPORTED) { return "unsupported feature"; }
     if (code == CHITRA_ERR_INFLATE)    { return "inflate failed"; }
     if (code == CHITRA_ERR_OOM)        { return "out of memory"; }
+    if (code == CHITRA_ERR_CRC)        { return "chunk CRC mismatch"; }
+    if (code == CHITRA_ERR_INTERLACE)  { return "interlace unsupported"; }
+    if (code == CHITRA_ERR_BIT_DEPTH)  { return "bit depth unsupported"; }
+    if (code == CHITRA_ERR_DIMENSIONS) { return "bad dimensions"; }
+    if (code == CHITRA_ERR_FILTER)     { return "bad filter byte"; }
     if (code == CHITRA_ERR_OTHER)      { return "other error"; }
     return "unknown error";
 }

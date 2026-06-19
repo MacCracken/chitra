@@ -22,6 +22,8 @@ output = "build/chitra_smoke"
 [lib]
 modules = [
     "src/error.cyr",
+    "src/png_chunks.cyr",
+    "src/png_filter.cyr",
     "src/png.cyr",
 ]
 

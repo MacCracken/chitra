@@ -1,0 +1,210 @@
+# @internal — PNG byte-buffer chunk framing + IDAT inflate (AL.P0b).
+# png_chunks.cyr — turn untrusted PNG bytes into a parsed IHDR + the
+# concatenated, inflated IDAT stream. Forked from kii/src/png.cyr's
+# proven framing/CRC/security core, re-shaped from path-based io reads
+# to a bounds-checked byte-buffer cursor over (src, len).
+#
+# Every read is validated against `len` BEFORE the access (untrusted
+# input — a byte-buffer decoder over network/disk bytes must never read
+# out of bounds). Chunk CRC-32 is validated via sankoch's crc32. The
+# decompression-bomb / lying-IHDR / dimension caps are ported verbatim
+# from kii (audit 2026-05-22 findings 1/2/3).
+#
+# The handoff to the later color pass (AL.P0d) is the ChitraPngRaw
+# struct produced by chitra_png_parse_raw (see png_filter.cyr for the
+# unfilter step that fills the scanline buffer).
+
+# ================================================================
+# PNG signature (W3C PNG § 5.2) — bytes 0..7 of every PNG.
+#   0x89  high-bit byte (catches 7-bit-stripping gateways)
+#   P N G ASCII identifier
+#   \r \n CRLF (catches DOS<->Unix mangling)
+#   0x1A  DOS EOF marker
+#   \n    final LF (catches \r\n -> \r)
+# String-literal storage: Cyrius cstrings are NUL-terminated and byte 8
+# (the NUL) is never inspected — loops bound on CHITRA_PNG_MAGIC_LEN.
+# ================================================================
+var CHITRA_PNG_MAGIC     = "\x89PNG\r\n\x1a\n";
+var CHITRA_PNG_MAGIC_LEN = 8;
+
+# ================================================================
+# Security ceilings (ported from kii — audit 2026-05-22 finding 1).
+# Cap attacker-controllable IHDR fields BEFORE any allocation. PNG
+# permits width/height up to 2^31-1; chitra's texture-loader use case
+# stays far below the i64-overflow boundary. All caps trip
+# CHITRA_ERR_DIMENSIONS / CHITRA_ERR_OOM.
+# ================================================================
+var CHITRA_MAX_PIXELS    = 16777216;   # 4096 x 4096
+var CHITRA_MAX_RAW_BYTES = 268435456;  # 256 MB absolute single-buffer ceiling
+var CHITRA_MAX_DIM       = 65535;      # per-side cap
+
+# DEFLATE's theoretical maximum ratio is 1032:1 (RFC 1951 § 3.2.5).
+# inflated/idat above 1100 is a decompression bomb (kii finding 3).
+var CHITRA_MAX_INFLATE_RATIO = 1100;
+
+# ================================================================
+# ChitraPngRaw — the AL.P0b -> AL.P0d handoff record (96 bytes).
+# Produced by chitra_png_parse_raw (framing + inflate + unfilter); the
+# canonical-RGBA8 color pass (AL.P0d) consumes it. PLTE/tRNS spans are
+# captured here as (offset-into-src, length) pairs — the bytes are NOT
+# processed yet (that is the color pass's job). offset 0 with length 0
+# means "chunk absent".
+#
+#   +0   width        (i64 — pixels)
+#   +8   height       (i64 — pixels)
+#   +16  bit_depth    (i64 — 8 only at AL.P0b; others rejected loud)
+#   +24  color_type   (i64 — 0/2/3/4/6)
+#   +32  channels     (i64 — samples per pixel: 1/3/1/2/4)
+#   +40  scanlines    (ptr — owned unfiltered raw buffer, h*w*bpp bytes)
+#   +48  scanlines_len(i64 — byte count of the scanline buffer)
+#   +56  plte_off     (i64 — byte offset of PLTE data within src, 0 if none)
+#   +64  plte_len     (i64 — PLTE data length, 0 if none)
+#   +72  trns_off     (i64 — byte offset of tRNS data within src, 0 if none)
+#   +80  trns_len     (i64 — tRNS data length, 0 if none)
+#   +88  (reserved)
+# ================================================================
+var RAW_WIDTH_OFFSET        = 0;
+var RAW_HEIGHT_OFFSET       = 8;
+var RAW_BIT_DEPTH_OFFSET    = 16;
+var RAW_COLOR_TYPE_OFFSET   = 24;
+var RAW_CHANNELS_OFFSET     = 32;
+var RAW_SCANLINES_OFFSET    = 40;
+var RAW_SCANLINES_LEN_OFFSET = 48;
+var RAW_PLTE_OFF_OFFSET     = 56;
+var RAW_PLTE_LEN_OFFSET     = 64;
+var RAW_TRNS_OFF_OFFSET     = 72;
+var RAW_TRNS_LEN_OFFSET     = 80;
+var CHITRA_PNG_RAW_SIZE     = 96;
+
+# ---- ChitraPngRaw accessors -------------------------------------
+fn chitra_raw_width(raw): i64       { return load64(raw + RAW_WIDTH_OFFSET); }
+fn chitra_raw_height(raw): i64      { return load64(raw + RAW_HEIGHT_OFFSET); }
+fn chitra_raw_bit_depth(raw): i64   { return load64(raw + RAW_BIT_DEPTH_OFFSET); }
+fn chitra_raw_color_type(raw): i64  { return load64(raw + RAW_COLOR_TYPE_OFFSET); }
+fn chitra_raw_channels(raw): i64    { return load64(raw + RAW_CHANNELS_OFFSET); }
+fn chitra_raw_scanlines(raw): i64   { return load64(raw + RAW_SCANLINES_OFFSET); }
+fn chitra_raw_scanlines_len(raw): i64 { return load64(raw + RAW_SCANLINES_LEN_OFFSET); }
+fn chitra_raw_plte_off(raw): i64    { return load64(raw + RAW_PLTE_OFF_OFFSET); }
+fn chitra_raw_plte_len(raw): i64    { return load64(raw + RAW_PLTE_LEN_OFFSET); }
+fn chitra_raw_trns_off(raw): i64    { return load64(raw + RAW_TRNS_OFF_OFFSET); }
+fn chitra_raw_trns_len(raw): i64    { return load64(raw + RAW_TRNS_LEN_OFFSET); }
+
+# Release a ChitraPngRaw. The stdlib `alloc` is a bump allocator with no
+# per-block free, so this is a no-op kept for API symmetry / a future
+# arena-backed allocator; documented so callers don't assume reclaim.
+# Safe on a 0 ptr.
+fn chitra_raw_free(raw): i64 {
+    return 0;
+}
+
+# ================================================================
+# Byte-buffer cursor — bounds-checked reads over (src, len).
+# A 16-byte record:
+#   +0  base ptr  (start of the byte buffer)
+#   +8  pos       (current read offset; 0 <= pos <= len)
+# `len` is carried separately by callers via _cur_remaining(cur, len)
+# style? No — to keep every read self-validating we store len too. Use
+# a 24-byte cursor instead:
+#   +0  base, +8 pos, +16 len.
+# ================================================================
+var CUR_BASE_OFFSET = 0;
+var CUR_POS_OFFSET  = 8;
+var CUR_LEN_OFFSET  = 16;
+
+# Init a stack cursor: caller passes a >=24-byte buffer.
+fn _cur_init(cur, base, len): i64 {
+    store64(cur + CUR_BASE_OFFSET, base);
+    store64(cur + CUR_POS_OFFSET, 0);
+    store64(cur + CUR_LEN_OFFSET, len);
+    return 0;
+}
+
+fn _cur_pos(cur): i64       { return load64(cur + CUR_POS_OFFSET); }
+fn _cur_len(cur): i64       { return load64(cur + CUR_LEN_OFFSET); }
+fn _cur_remaining(cur): i64 {
+    return load64(cur + CUR_LEN_OFFSET) - load64(cur + CUR_POS_OFFSET);
+}
+
+# True (1) iff `n` bytes can be read from the current position without
+# running past len. n must be >= 0 (callers pass chunk_len which is
+# masked to 31 bits, so always non-negative).
+fn _cur_can_read(cur, n): i64 {
+    if (n < 0) { return 0; }
+    if (_cur_remaining(cur) < n) { return 0; }
+    return 1;
+}
+
+# Read one u8 at the cursor and advance. Caller MUST have checked
+# _cur_can_read(cur, 1) first; this asserts it returns 0 defensively if
+# out of bounds (never an OOB load).
+fn _cur_u8(cur): i64 {
+    if (_cur_can_read(cur, 1) == 0) { return 0; }
+    var p = load64(cur + CUR_BASE_OFFSET) + load64(cur + CUR_POS_OFFSET);
+    var v = load8(p);
+    store64(cur + CUR_POS_OFFSET, load64(cur + CUR_POS_OFFSET) + 1);
+    return v;
+}
+
+# Read a big-endian u32 (PNG is big-endian throughout, spec § 7) and
+# advance 4 bytes. Returns the value; caller checks _cur_can_read first.
+# Masked to 32 bits so a high bit can't sign-extend into a negative i64.
+fn _cur_u32_be(cur): i64 {
+    if (_cur_can_read(cur, 4) == 0) { return 0; }
+    var p = load64(cur + CUR_BASE_OFFSET) + load64(cur + CUR_POS_OFFSET);
+    var b0 = load8(p + 0);
+    var b1 = load8(p + 1);
+    var b2 = load8(p + 2);
+    var b3 = load8(p + 3);
+    store64(cur + CUR_POS_OFFSET, load64(cur + CUR_POS_OFFSET) + 4);
+    return ((b0 << 24) | (b1 << 16) | (b2 << 8) | b3) & 4294967295;
+}
+
+# Absolute pointer at the cursor's current position (for chunk-data
+# scanning without copying). Caller validates the span via _cur_can_read.
+fn _cur_ptr(cur): i64 {
+    return load64(cur + CUR_BASE_OFFSET) + load64(cur + CUR_POS_OFFSET);
+}
+
+# Skip `n` bytes forward (no bounds clamp — caller pre-validates).
+fn _cur_skip(cur, n): i64 {
+    store64(cur + CUR_POS_OFFSET, load64(cur + CUR_POS_OFFSET) + n);
+    return 0;
+}
+
+# ================================================================
+# Signature check — pure in-memory, length-validated.
+# ================================================================
+fn chitra_png_check_signature(src, len): i64 {
+    if (len < CHITRA_PNG_MAGIC_LEN) { return 0; }
+    return memeq(src, CHITRA_PNG_MAGIC, CHITRA_PNG_MAGIC_LEN);
+}
+
+# ================================================================
+# Chunk-type predicates — 4-byte case-sensitive ASCII (spec § 5.4).
+# `p` points at the 4 type bytes.
+# ================================================================
+fn _chunk_is(p, c0, c1, c2, c3): i64 {
+    if (load8(p + 0) == c0 && load8(p + 1) == c1 &&
+    load8(p + 2) == c2 && load8(p + 3) == c3) { return 1; }
+    return 0;
+}
+fn _chunk_is_ihdr(p): i64 { return _chunk_is(p, 0x49, 0x48, 0x44, 0x52); }
+fn _chunk_is_idat(p): i64 { return _chunk_is(p, 0x49, 0x44, 0x41, 0x54); }
+fn _chunk_is_iend(p): i64 { return _chunk_is(p, 0x49, 0x45, 0x4E, 0x44); }
+fn _chunk_is_plte(p): i64 { return _chunk_is(p, 0x50, 0x4C, 0x54, 0x45); }
+fn _chunk_is_trns(p): i64 { return _chunk_is(p, 0x74, 0x52, 0x4E, 0x53); }
+
+# ================================================================
+# Color-type -> channels-per-pixel (spec § 11.2.2 Table 11.1):
+#   0 greyscale -> 1   2 RGB -> 3   3 palette -> 1
+#   4 grey+alpha -> 2  6 RGBA -> 4
+# Returns -1 for an unknown color type.
+# ================================================================
+fn chitra_png_color_channels(color_type): i64 {
+    if (color_type == 0) { return 1; }
+    if (color_type == 2) { return 3; }
+    if (color_type == 3) { return 1; }
+    if (color_type == 4) { return 2; }
+    if (color_type == 6) { return 4; }
+    return 0 - 1;
+}

@@ -38,7 +38,13 @@ include "lib/sankoch.cyr"
 
 # ================================================================
 # chitra domain modules — flat, dependency order.
-# error.cyr is dep-free; png.cyr uses ChitraErr from it.
+# error.cyr is dep-free. png_chunks.cyr (byte-buffer cursor +
+# signature + chunk predicates + ChitraPngRaw struct/accessors) and
+# png_filter.cyr (the 5 unfilter predictors + chitra_png_parse_raw
+# framing driver) build on error.cyr + sankoch; png.cyr (the public
+# decode API) sits atop both.
 # ================================================================
 include "src/error.cyr"
+include "src/png_chunks.cyr"
+include "src/png_filter.cyr"
 include "src/png.cyr"

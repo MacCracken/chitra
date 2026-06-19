@@ -32,6 +32,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   - `Makefile`, `scripts/version-check.sh`,
     `scripts/count-test-assertions.sh`, `.gitignore`, `README.md` —
     adapted from mabda's conventions.
+- PNG byte-buffer framing + IDAT inflate + unfilter + security layer
+  (mabda v3.3 arc, bite **AL.P0b**) — forked from kii's proven
+  `png.cyr` core, re-shaped onto a byte-buffer cursor. Turns PNG bytes
+  into inflated, unfiltered raw scanlines + the parsed IHDR (the
+  AL.P0d color-pass handoff). **Not** the canonical-RGBA8 pass or the
+  public `chitra_png_decode` yet (AL.P0d / AL.P0e):
+  - `src/png_chunks.cyr` — a bounds-checked `(src, len)` cursor (every
+    u8/u32-BE/skip validated against `len` before access), the 8-byte
+    signature check, chunk-type predicates (IHDR/IDAT/IEND/PLTE/tRNS),
+    color-type→channels, the kii security ceilings, and the
+    `ChitraPngRaw` (96-byte) handoff struct + accessors.
+  - `src/png_filter.cyr` — the five PNG unfilter predictors
+    (None/Sub/Up/Average/Paeth) and `chitra_png_parse_raw`: a two-pass
+    chunk walk (CRC-32 every chunk via sankoch, parse IHDR, capture
+    PLTE/tRNS spans, concat IDAT, inflate with the bomb caps, unfilter
+    into the scanline buffer). Every failure path returns a `ChitraErr`,
+    never an OOB read.
+  - `src/error.cyr` — new codes `CHITRA_ERR_CRC` / `_INTERLACE` /
+    `_BIT_DEPTH` / `_DIMENSIONS` / `_FILTER` + names.
+  - Security guards ported from kii: lying-IHDR / dimension caps,
+    decompression-bomb ratio cap, CRC-mismatch + truncated-stream
+    rejection. Adam7 interlace and bit depths != 8 reject loud
+    (tracked: chitra 0.2 / AL.P0d).
+  - `tests/tcyr/png.tcyr` — 95 CPU assertions: cursor bounds, signature,
+    Paeth + all five unfilter predictors, three embedded-byte-array
+    fixtures (rgba8 2x2 None, rgb8 2x2 Sub+Up, rgba8 1x1 Paeth — raw
+    bytes asserted exactly), and five adversarial rejections
+    (bad-signature, truncated, CRC-mismatch, interlaced, bomb).
 
 ### Planned
 - **PNG → canonical RGBA8** (color types 0/2/3/4/6 @ bit depth 8, sankoch
