@@ -1,0 +1,71 @@
+# tests/tcyr/error.tcyr — ChitraErr codes/name + chitra_version scaffold smoke.
+# Self-contained CPU suite (own main + assert_summary), standalone like
+# mabda's tcyr files: include the lib chain + the assert harness.
+include "src/lib.cyr"
+include "lib/assert.cyr"
+
+# ================================================================
+# Error code constants are distinct
+# ================================================================
+fn test_error_codes_unique() {
+    assert(CHITRA_OK             != CHITRA_ERR_SIGNATURE,   "ok != signature");
+    assert(CHITRA_ERR_SIGNATURE  != CHITRA_ERR_TRUNCATED,  "signature != truncated");
+    assert(CHITRA_ERR_TRUNCATED  != CHITRA_ERR_BAD_CHUNK,  "truncated != bad chunk");
+    assert(CHITRA_ERR_BAD_CHUNK  != CHITRA_ERR_UNSUPPORTED, "bad chunk != unsupported");
+    assert(CHITRA_ERR_UNSUPPORTED != CHITRA_ERR_INFLATE,   "unsupported != inflate");
+    assert(CHITRA_ERR_INFLATE    != CHITRA_ERR_OOM,        "inflate != oom");
+    assert(CHITRA_ERR_OOM        != CHITRA_ERR_OTHER,      "oom != other");
+    return 0;
+}
+
+# ================================================================
+# ChitraErr struct construction + accessors (16-byte, GpuErr-compatible)
+# ================================================================
+fn test_chitra_err_new() {
+    var e = chitra_err_new(CHITRA_ERR_INFLATE, "zlib failed");
+    assert_eq(chitra_err_code(e), CHITRA_ERR_INFLATE, "code stored");
+    var d = chitra_err_detail(e);
+    assert(d != 0, "detail stored");
+    assert_eq(strlen(d), 11, "detail string length");
+    return 0;
+}
+
+fn test_chitra_err_no_detail() {
+    var e = chitra_err(CHITRA_ERR_OOM);
+    assert_eq(chitra_err_code(e), CHITRA_ERR_OOM, "code stored");
+    assert_eq(chitra_err_detail(e), 0, "no detail");
+    return 0;
+}
+
+# ================================================================
+# chitra_err_name round-trips a couple codes + has a fallback
+# ================================================================
+fn test_chitra_err_name() {
+    assert(streq(chitra_err_name(CHITRA_OK), "ok"), "ok name");
+    assert(streq(chitra_err_name(CHITRA_ERR_SIGNATURE), "bad PNG signature"),
+    "signature name");
+    assert(streq(chitra_err_name(CHITRA_ERR_OOM), "out of memory"), "oom name");
+    # Unknown code → the non-null fallback, never a null deref.
+    assert(streq(chitra_err_name(12345), "unknown error"), "unknown fallback");
+    return 0;
+}
+
+# ================================================================
+# chitra_version() — 0.1.0 packed
+# ================================================================
+fn test_chitra_version() {
+    assert_eq(chitra_version(), 100, "version 0.1.0 packs to 100");
+    return 0;
+}
+
+fn main() {
+    test_error_codes_unique();
+    test_chitra_err_new();
+    test_chitra_err_no_detail();
+    test_chitra_err_name();
+    test_chitra_version();
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);
