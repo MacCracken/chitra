@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [0.1.0] — 2026-06-19
 
+First release. **chitra decodes PNG to canonical RGBA8** — a pure-Cyrius
+CPU decoder with no GPU, no C shim, and no external binaries. PNG color
+types 0/2/3/4/6 at bit depth 8 (grayscale, RGB, palette, grayscale+alpha,
+RGBA) normalize to canonical RGBA8 via stdlib `sankoch` IDAT inflate
+(RFC 1950/1951), the five unfilter predictors (None/Sub/Up/Average/Paeth),
+and tRNS-driven alpha synthesis. The decoder is **security-hardened** —
+every byte access is bounds-checked against the input span, CRC-32 is
+verified per chunk, and the kii decompression-bomb / lying-IHDR /
+dimension-ratio caps reject hostile inputs loud — and **fuzz-corpus-tested**
+(the kii core it forks from is fuzz-hardened; chitra's adversarial test
+fixtures cover bad-signature / truncated / CRC-mismatch / interlaced /
+bomb / palette-index-OOB / out-of-bounds-tRNS rejections).
+
+Consumed by **mabda** for `gpu_texture_load_png` (a plain `[deps.chitra]`
+dist dep; `ChitraErr` is layout-compatible with mabda's `GpuErr`).
+
+**Deferred to a later release (tracked, not silently dropped):**
+- **0.2** — PNG bit depths 1 / 2 / 4 / 16, and Adam7 interlace
+  (0.1.0 is single-pass, depth-8 only; all reject loud today).
+- **0.3+** — **JPEG** (Huffman + IDCT + chroma upsample).
+
 ### Added
 - Initial package scaffold (mabda v3.3 arc, bite **AL.P0a**). A minimal,
   green, link-checkable pure-Cyrius skeleton — **not** the PNG decoder
@@ -97,9 +118,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     (keyed pixel → alpha 0), the `_rgba8` convenience wrapper, and a
     palette-index-out-of-range adversarial reject.
 
-### Planned
-- **PNG → canonical RGBA8** (color types 0/2/3/4/6 @ bit depth 8, sankoch
-  IDAT inflate, the five unfilter predictors, tRNS, kii security guards;
-  no Adam7) — forked from kii's proven `png.cyr`.
-- **Staged (tracked):** bit depths 1/2/4/16 + Adam7 interlace → 0.2;
-  **JPEG** → 0.3+.
+### Notes
+- The four `### Added` blocks above are the per-bite (AL.P0a → AL.P0d)
+  build provenance; the summary at the top of this entry is the shipped
+  0.1.0 surface. Deferred work (bit depths 1/2/4/16 + Adam7 → 0.2; JPEG
+  → 0.3+) is listed under the summary.

@@ -18,8 +18,9 @@ later without a rename.
   `zlib_decompress`), the five unfilter predictors, canonical-RGBA8
   output, and the kii security guards (decompression-bomb caps,
   lying-IHDR rejection, ratio caps). No Adam7 interlace (single-pass
-  only). *This scaffold cut links the package skeleton; the decoder
-  itself lands in the AL.P0b–AL.P0e bites.*
+  only). The decoder is complete and fuzz-corpus-tested — the public
+  entry points are `chitra_png_decode` (→ an owned RGBA8 `ChitraImage`)
+  and the `chitra_png_decode_rgba8` convenience wrapper.
 - **Staged (tracked, not silently dropped):** bit depths 1/2/4/16 and
   Adam7 interlace → 0.2; **JPEG** (Huffman + IDCT + chroma upsample) →
   0.3+.
