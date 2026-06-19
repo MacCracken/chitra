@@ -699,40 +699,348 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
     return raw;
 }
 
+# --- png_color.cyr ---
+
+# @internal — canonical-RGBA8 color-normalization pass (AL.P0d).
+# png_color.cyr — turn a ChitraPngRaw (parsed IHDR + unfiltered raw
+# scanlines + captured PLTE/tRNS spans) into an owned RGBA8 pixel
+# buffer (width*height*4). This is the genuinely new code over kii:
+# kii emits native channels / palette indices for the terminal path;
+# chitra normalizes every color type to canonical RGBA8 + synthesizes
+# alpha from tRNS.
+#
+# PLTE/tRNS access wiring (documented choice): the ChitraPngRaw captures
+# PLTE/tRNS only as (offset-into-original-src, length) spans — the bytes
+# themselves are not retained. chitra_png_parse_raw does NOT copy them
+# (no struct widening, no extra allocs on the parse path). The public
+# decode entry (png.cyr) still holds the original (src, len), so it
+# passes src + len into the color pass, which resolves the spans via
+# `src + plte_off` / `src + trns_off`. The parse-time bounds checks
+# (every span lies within len; PLTE multiple-of-3 + <=768) already
+# validated those offsets, but the color pass re-validates defensively
+# against (src, len) so it is safe even if called on a hand-built raw.
+#
+# Only bit depth 8 is handled here (parse_raw rejects others loud), so
+# every sample is one byte and scanline layout is dense channels-per-
+# pixel with no bit unpacking.
+
+# ================================================================
+# Color-type sample-byte sizes (bit depth 8 => 1 byte per channel).
+# These mirror chitra_png_color_channels but name the per-color-type
+# byte strides the color pass walks the scanline with.
+# ================================================================
+
+# Resolve a PLTE entry count from the captured span (length / 3). A 0
+# length means "no PLTE" — callers must reject palette images then.
+fn _chitra_plte_entry_count(raw): i64 {
+    var plen = chitra_raw_plte_len(raw);
+    return plen / 3;
+}
+
+# ================================================================
+# chitra_png_color_to_rgba8 — the AL.P0d color pass.
+#
+# Inputs:
+#   raw  — a ChitraPngRaw with scanlines populated (parse_raw output).
+#   src  — the ORIGINAL PNG byte buffer (PLTE/tRNS offsets index here).
+#   len  — byte length of src (for defensive span re-validation).
+#   err_out — >=8-byte slot; on failure receives a ChitraErr ptr.
+#
+# Returns an owned RGBA8 buffer (width*height*4 bytes) on success, or 0
+# with *err_out set. *err_out is left 0 on the success path.
+#
+# New reject paths over AL.P0b:
+#   - palette index >= PLTE entry count        -> CHITRA_ERR_BAD_CHUNK
+#   - color_type 3 with no/short PLTE          -> CHITRA_ERR_BAD_CHUNK
+#   - tRNS span out of (src, len) bounds       -> CHITRA_ERR_BAD_CHUNK
+#   - tRNS wrong length for the color type      -> CHITRA_ERR_BAD_CHUNK
+#       (gray:2 bytes, RGB:6 bytes, palette:<=entry_count bytes)
+# ================================================================
+fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
+    store64(err_out, 0);
+
+    var width = chitra_raw_width(raw);
+    var height = chitra_raw_height(raw);
+    var color_type = chitra_raw_color_type(raw);
+    var channels = chitra_raw_channels(raw);
+    var scan = chitra_raw_scanlines(raw);
+    var scan_len = chitra_raw_scanlines_len(raw);
+
+    # width*height was capped <= CHITRA_MAX_PIXELS in parse_raw, so
+    # out_size <= 64 Mi*4 = 256 Mi — within CHITRA_MAX_RAW_BYTES and far
+    # below the i64-overflow boundary. Re-derive (don't trust a span).
+    var npix = width * height;
+    if (npix <= 0) { store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS)); return 0; }
+    var out_size = npix * 4;
+
+    # The scanline buffer must hold the channels parse_raw promised.
+    if (scan_len < npix * channels) {
+        store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
+        return 0;
+    }
+
+    var out = alloc(out_size);
+    if (out == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
+
+    # ---- resolve + validate the tRNS span against (src, len) -------
+    var trns_off = chitra_raw_trns_off(raw);
+    var trns_len = chitra_raw_trns_len(raw);
+    var has_trns = 0;
+    var trns_ptr = 0;
+    if (trns_len > 0) {
+        if (trns_off < 0 || trns_off + trns_len > len) {
+            store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
+            return 0;
+        }
+        has_trns = 1;
+        trns_ptr = src + trns_off;
+    }
+
+    # ---- grayscale (0): g -> (g,g,g,255); tRNS = one gray sample ----
+    if (color_type == 0) {
+        # tRNS for grayscale is a 2-byte big-endian sample; at depth 8
+        # the keyed value is the low byte (high byte is 0).
+        var key_g = 0 - 1;     # -1 == no key
+        if (has_trns == 1) {
+            if (trns_len != 2) {
+                store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
+                return 0;
+            }
+            key_g = load8(trns_ptr + 1);
+        }
+        var i = 0;
+        while (i < npix) {
+            var g = load8(scan + i);
+            var a = 255;
+            if (g == key_g) { a = 0; }
+            var o = out + i * 4;
+            store8(o + 0, g);
+            store8(o + 1, g);
+            store8(o + 2, g);
+            store8(o + 3, a);
+            i = i + 1;
+        }
+        return out;
+    }
+
+    # ---- truecolor RGB (2): (r,g,b) -> (r,g,b,255); tRNS = 1 triple --
+    if (color_type == 2) {
+        var key_r = 0 - 1;
+        var key_g2 = 0;
+        var key_b = 0;
+        if (has_trns == 1) {
+            # tRNS is three 2-byte big-endian samples (R,G,B); depth 8
+            # keyed value is each low byte.
+            if (trns_len != 6) {
+                store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
+                return 0;
+            }
+            key_r = load8(trns_ptr + 1);
+            key_g2 = load8(trns_ptr + 3);
+            key_b = load8(trns_ptr + 5);
+        }
+        var i = 0;
+        while (i < npix) {
+            var s = scan + i * 3;
+            var r = load8(s + 0);
+            var g = load8(s + 1);
+            var b = load8(s + 2);
+            var a = 255;
+            if (r == key_r && g == key_g2 && b == key_b) { a = 0; }
+            var o = out + i * 4;
+            store8(o + 0, r);
+            store8(o + 1, g);
+            store8(o + 2, b);
+            store8(o + 3, a);
+            i = i + 1;
+        }
+        return out;
+    }
+
+    # ---- palette (3): index -> PLTE[index]; alpha from tRNS array ---
+    if (color_type == 3) {
+        var plte_off = chitra_raw_plte_off(raw);
+        var plte_len = chitra_raw_plte_len(raw);
+        var entry_count = plte_len / 3;
+        # Palette images REQUIRE a PLTE chunk (spec § 11.2.3).
+        if (entry_count <= 0) {
+            store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
+            return 0;
+        }
+        # Defensive: the PLTE span must lie within (src, len).
+        if (plte_off < 0 || plte_off + plte_len > len) {
+            store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
+            return 0;
+        }
+        var plte_ptr = src + plte_off;
+        # tRNS for palette is a per-entry alpha array (1 byte each),
+        # length <= entry_count; entries beyond it default to 255.
+        if (has_trns == 1 && trns_len > entry_count) {
+            store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
+            return 0;
+        }
+        var i = 0;
+        while (i < npix) {
+            var idx = load8(scan + i);
+            # Every index must be a valid palette entry (reject OOB).
+            if (idx >= entry_count) {
+                store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
+                return 0;
+            }
+            var pe = plte_ptr + idx * 3;
+            var a = 255;
+            if (has_trns == 1 && idx < trns_len) { a = load8(trns_ptr + idx); }
+            var o = out + i * 4;
+            store8(o + 0, load8(pe + 0));
+            store8(o + 1, load8(pe + 1));
+            store8(o + 2, load8(pe + 2));
+            store8(o + 3, a);
+            i = i + 1;
+        }
+        return out;
+    }
+
+    # ---- grayscale+alpha (4): (g,a) -> (g,g,g,a) --------------------
+    if (color_type == 4) {
+        var i = 0;
+        while (i < npix) {
+            var s = scan + i * 2;
+            var g = load8(s + 0);
+            var a = load8(s + 1);
+            var o = out + i * 4;
+            store8(o + 0, g);
+            store8(o + 1, g);
+            store8(o + 2, g);
+            store8(o + 3, a);
+            i = i + 1;
+        }
+        return out;
+    }
+
+    # ---- truecolor+alpha (6): (r,g,b,a) passthrough ----------------
+    if (color_type == 6) {
+        var i = 0;
+        while (i < npix) {
+            var s = scan + i * 4;
+            var o = out + i * 4;
+            store8(o + 0, load8(s + 0));
+            store8(o + 1, load8(s + 1));
+            store8(o + 2, load8(s + 2));
+            store8(o + 3, load8(s + 3));
+            i = i + 1;
+        }
+        return out;
+    }
+
+    # Unknown color type — parse_raw already rejects these, but guard.
+    store64(err_out, chitra_err(CHITRA_ERR_UNSUPPORTED));
+    return 0;
+}
+
 # --- png.cyr ---
 
-# @public — chitra PNG decoder (STUB at v0.1.0 scaffold; real decoder
-# lands in the AL.P0b–AL.P0e bites of the mabda v3.3 arc).
+# @public — chitra PNG decoder: PNG bytes -> canonical RGBA8.
 #
-# png.cyr — PNG → canonical RGBA8 decoder.
-#
-# Planned public API (see docs/proposals/v3.3-chitra-png-decoder-package.md
-# in the mabda repo; tracked, not implemented here yet):
-#
-#   # Decode PNG bytes → an owned RGBA8 image. Ok(ChitraImage*) | Err(ChitraErr).
-#   fn chitra_png_decode(src, len): i64                       # @public
-#   # Convenience: returns the RGBA8 pixel ptr (w/h via out-params), 0 on error.
-#   fn chitra_png_decode_rgba8(src, len, w_out, h_out): i64   # @public
-#   fn chitra_image_free(img): i64                            # @public
-#
-#   ChitraImage (32 bytes):
-#     +0:  width    (i64)
-#     +8:  height   (i64)
-#     +16: pixels   (ptr — w*h*4 RGBA8, owned)
-#     +24: channels (i64 — always 4 in 0.1.0)
+# png.cyr — the public decode API. Wires the AL.P0b parse driver
+# (chitra_png_parse_raw: framing + inflate + unfilter) to the AL.P0d
+# color pass (chitra_png_color_to_rgba8: canonical-RGBA8 + tRNS) and
+# wraps the result in a ChitraImage.
 #
 # v0.1.0 scope: PNG signature + chunk parse (IHDR / IDAT-concat / IEND /
-# PLTE / tRNS), color types 0/2/3/4/6 at bit depth 8, sankoch IDAT inflate,
-# the five unfilter predictors, canonical-RGBA8 output, the kii security
-# guards. No Adam7 interlace (single-pass only). Forked from kii's proven
-# png.cyr core with a new byte-buffer I/O boundary + RGBA8 normalization.
+# PLTE / tRNS), color types 0/2/3/4/6 at bit depth 8, sankoch IDAT
+# inflate, the five unfilter predictors, canonical-RGBA8 output, the kii
+# security guards. No Adam7 interlace (single-pass only). Bit depths
+# 1/2/4/16 + Adam7 are tracked for chitra 0.2 (the parse driver rejects
+# them loud via CHITRA_ERR_BIT_DEPTH / CHITRA_ERR_INTERLACE).
+#
+# PLTE/tRNS wiring: chitra_png_parse_raw captures PLTE/tRNS only as
+# (offset-into-src, length) spans (no byte copy). The public decode
+# entry holds the original (src, len), so it forwards src + len into the
+# color pass, which resolves the spans (see png_color.cyr's header).
 
 # ================================================================
-# Version probe — the only live fn at the scaffold stage so the
-# module is non-empty and links. 0.1.0 packed as major*100 + minor*10
-# + patch → 1*100 + 0*10 + 0 = 100.
+# ChitraImage — the public decode result (32 bytes).
+#   +0:  width    (i64 — pixels)
+#   +8:  height   (i64 — pixels)
+#   +16: pixels   (ptr — owned RGBA8, width*height*4 bytes)
+#   +24: channels (i64 — always 4 in 0.1.0)
 # ================================================================
+var IMAGE_WIDTH_OFFSET    = 0;
+var IMAGE_HEIGHT_OFFSET   = 8;
+var IMAGE_PIXELS_OFFSET   = 16;
+var IMAGE_CHANNELS_OFFSET = 24;
+var CHITRA_IMAGE_SIZE     = 32;
 
+# ---- ChitraImage accessors --------------------------------------
+fn chitra_image_width(img): i64    { return load64(img + IMAGE_WIDTH_OFFSET); }
+fn chitra_image_height(img): i64   { return load64(img + IMAGE_HEIGHT_OFFSET); }
+fn chitra_image_pixels(img): i64   { return load64(img + IMAGE_PIXELS_OFFSET); }
+fn chitra_image_channels(img): i64 { return load64(img + IMAGE_CHANNELS_OFFSET); }
+
+# ================================================================
+# chitra_png_decode — the top-level public decode. Parse (src, len) PNG
+# bytes -> an owned RGBA8 ChitraImage.
+#
+# Returns the ChitraImage ptr on success, or 0 with *err_out set to a
+# ChitraErr ptr. *err_out is left 0 on success. err_out is a >=8-byte
+# slot the caller owns (mirrors chitra_png_parse_raw's convention so the
+# Ok/Err split is a (ptr, err_out) pair rather than a tagged union).
+# ================================================================
+# @public
+fn chitra_png_decode(src, len, err_out): i64 {
+    store64(err_out, 0);
+
+    # ---- parse: framing + inflate + unfilter (AL.P0b) ----
+    var raw = chitra_png_parse_raw(src, len, err_out);
+    if (raw == 0) { return 0; }      # *err_out already set by parse_raw
+
+    # ---- color pass: canonical RGBA8 + tRNS (AL.P0d) ----
+    var rgba = chitra_png_color_to_rgba8(raw, src, len, err_out);
+    if (rgba == 0) { return 0; }     # *err_out already set by the color pass
+
+    var img = alloc(CHITRA_IMAGE_SIZE);
+    if (img == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
+    store64(img + IMAGE_WIDTH_OFFSET, chitra_raw_width(raw));
+    store64(img + IMAGE_HEIGHT_OFFSET, chitra_raw_height(raw));
+    store64(img + IMAGE_PIXELS_OFFSET, rgba);
+    store64(img + IMAGE_CHANNELS_OFFSET, 4);
+    return img;
+}
+
+# ================================================================
+# chitra_png_decode_rgba8 — convenience wrapper. Decode (src, len) and
+# return the RGBA8 pixel pointer directly, writing width/height through
+# w_out / h_out (>=8-byte slots). Returns 0 on any failure (the detailed
+# ChitraErr is not surfaced here — callers needing it use chitra_png_decode).
+# On the 0 path w_out/h_out are left at 0.
+# ================================================================
+# @public
+fn chitra_png_decode_rgba8(src, len, w_out, h_out): i64 {
+    store64(w_out, 0);
+    store64(h_out, 0);
+    var err = 0;
+    var img = chitra_png_decode(src, len, &err);
+    if (img == 0) { return 0; }
+    store64(w_out, chitra_image_width(img));
+    store64(h_out, chitra_image_height(img));
+    return chitra_image_pixels(img);
+}
+
+# ================================================================
+# chitra_image_free — release a ChitraImage. The stdlib `alloc` is a
+# bump allocator with no per-block free, so this is a documented no-op
+# kept for API symmetry (matches chitra_raw_free) and a future arena-
+# backed allocator. Safe on a 0 ptr.
+# ================================================================
+# @public
+fn chitra_image_free(img): i64 {
+    return 0;
+}
+
+# ================================================================
+# Version probe — 0.1.0 packed as major*100 + minor*10 + patch =
+# 1*100 + 0*10 + 0 = 100.
+# ================================================================
 # @public
 fn chitra_version(): i64 {
     return 100;

@@ -274,6 +274,193 @@ fn test_reject_bomb() {
 }
 
 # ================================================================
+# AL.P0d color pass — canonical RGBA8 per color type @ depth 8.
+# Each fixture is decoded end-to-end via chitra_png_decode and the
+# RGBA8 pixels are asserted exactly (ground truth from a reference
+# decoder re-decoding the same fixture bytes — see the AL.P0d report).
+# ================================================================
+
+# Helper: assert one RGBA8 pixel at index `i` in the pixel buffer.
+fn _assert_px(px, i, r, g, b, a, tag) {
+    var o = px + i * 4;
+    assert_eq(load8(o + 0), r, tag);
+    assert_eq(load8(o + 1), g, tag);
+    assert_eq(load8(o + 2), b, tag);
+    assert_eq(load8(o + 3), a, tag);
+    return 0;
+}
+
+# ---- color type 0 grayscale: g -> (g,g,g,255) ----
+fn test_decode_gray8() {
+    var lo = 0;
+    var bytes = fx_gray8_2x2(&lo);
+    var err = 0;
+    var img = chitra_png_decode(bytes, lo, &err);
+    assert(img != 0, "gray8 decode ok");
+    assert_eq(err, 0, "gray8 no err");
+    assert_eq(chitra_image_width(img), 2, "gray8 w=2");
+    assert_eq(chitra_image_height(img), 2, "gray8 h=2");
+    assert_eq(chitra_image_channels(img), 4, "gray8 channels=4");
+    var px = chitra_image_pixels(img);
+    _assert_px(px, 0, 10, 10, 10, 255, "gray8 px0");
+    _assert_px(px, 1, 200, 200, 200, 255, "gray8 px1");
+    _assert_px(px, 2, 40, 40, 40, 255, "gray8 px2");
+    _assert_px(px, 3, 255, 255, 255, 255, "gray8 px3");
+    return 0;
+}
+
+# ---- color type 0 grayscale + tRNS key gray=200 -> alpha 0 ----
+fn test_decode_gray8_trns() {
+    var lo = 0;
+    var bytes = fx_gray8_2x2_trns(&lo);
+    var err = 0;
+    var img = chitra_png_decode(bytes, lo, &err);
+    assert(img != 0, "gray8 trns decode ok");
+    var px = chitra_image_pixels(img);
+    # Keyed gray=200 (px1) becomes transparent; the rest opaque.
+    _assert_px(px, 0, 10, 10, 10, 255, "gray8t px0 opaque");
+    _assert_px(px, 1, 200, 200, 200, 0, "gray8t px1 keyed");
+    _assert_px(px, 2, 40, 40, 40, 255, "gray8t px2 opaque");
+    _assert_px(px, 3, 255, 255, 255, 255, "gray8t px3 opaque");
+    return 0;
+}
+
+# ---- color type 2 truecolor RGB: (r,g,b) -> (r,g,b,255) ----
+fn test_decode_rgb8() {
+    var lo = 0;
+    var bytes = fx_rgb8_2x2(&lo);
+    var err = 0;
+    var img = chitra_png_decode(bytes, lo, &err);
+    assert(img != 0, "rgb8 decode ok");
+    assert_eq(chitra_image_width(img), 2, "rgb8 w=2");
+    var px = chitra_image_pixels(img);
+    _assert_px(px, 0, 255, 0, 0, 255, "rgb8 px0 red");
+    _assert_px(px, 1, 0, 255, 0, 255, "rgb8 px1 green");
+    _assert_px(px, 2, 0, 0, 255, 255, "rgb8 px2 blue");
+    _assert_px(px, 3, 10, 20, 30, 255, "rgb8 px3");
+    return 0;
+}
+
+# ---- color type 2 RGB + tRNS key (0,255,0) -> green alpha 0 ----
+fn test_decode_rgb8_trns() {
+    var lo = 0;
+    var bytes = fx_rgb8_2x2_trns(&lo);
+    var err = 0;
+    var img = chitra_png_decode(bytes, lo, &err);
+    assert(img != 0, "rgb8 trns decode ok");
+    var px = chitra_image_pixels(img);
+    _assert_px(px, 0, 255, 0, 0, 255, "rgb8t px0 opaque");
+    _assert_px(px, 1, 0, 255, 0, 0, "rgb8t px1 keyed green");
+    _assert_px(px, 2, 0, 0, 255, 255, "rgb8t px2 opaque");
+    _assert_px(px, 3, 10, 20, 30, 255, "rgb8t px3 opaque");
+    return 0;
+}
+
+# ---- color type 3 palette + tRNS per-entry alpha ----
+fn test_decode_palette_trns() {
+    var lo = 0;
+    var bytes = fx_palette_2x2_trns(&lo);
+    var err = 0;
+    var img = chitra_png_decode(bytes, lo, &err);
+    assert(img != 0, "palette trns decode ok");
+    assert_eq(err, 0, "palette trns no err");
+    var px = chitra_image_pixels(img);
+    # PLTE: 0=(255,0,0),1=(0,255,0),2=(0,0,255),3=(255,255,0).
+    # tRNS=[0,128]: entry0 alpha 0, entry1 alpha 128, 2/3 default 255.
+    # indices: 0,1 / 2,3.
+    _assert_px(px, 0, 255, 0, 0, 0, "pal px0 entry0 a=0");
+    _assert_px(px, 1, 0, 255, 0, 128, "pal px1 entry1 a=128");
+    _assert_px(px, 2, 0, 0, 255, 255, "pal px2 entry2 a=255");
+    _assert_px(px, 3, 255, 255, 0, 255, "pal px3 entry3 a=255");
+    return 0;
+}
+
+# ---- color type 4 grayscale+alpha: (g,a) -> (g,g,g,a) ----
+fn test_decode_graya8() {
+    var lo = 0;
+    var bytes = fx_graya8_2x2(&lo);
+    var err = 0;
+    var img = chitra_png_decode(bytes, lo, &err);
+    assert(img != 0, "graya8 decode ok");
+    var px = chitra_image_pixels(img);
+    # (g,a): (10,255),(200,128) / (40,0),(255,64).
+    _assert_px(px, 0, 10, 10, 10, 255, "graya8 px0");
+    _assert_px(px, 1, 200, 200, 200, 128, "graya8 px1");
+    _assert_px(px, 2, 40, 40, 40, 0, "graya8 px2");
+    _assert_px(px, 3, 255, 255, 255, 64, "graya8 px3");
+    return 0;
+}
+
+# ---- color type 6 truecolor+alpha: passthrough ----
+# Reuses the AL.P0b fx_rgba8_2x2 fixture, now run through the full
+# public decode (parse + color pass) — alpha is preserved verbatim.
+fn test_decode_rgba8() {
+    var lo = 0;
+    var bytes = fx_rgba8_2x2(&lo);
+    var err = 0;
+    var img = chitra_png_decode(bytes, lo, &err);
+    assert(img != 0, "rgba8 decode ok");
+    assert_eq(chitra_image_channels(img), 4, "rgba8 channels=4");
+    var px = chitra_image_pixels(img);
+    # Same pixels asserted on the raw scanlines in test_parse_rgba8_2x2;
+    # type 6 is a passthrough so RGBA8 == scanlines.
+    _assert_px(px, 0, 255, 0, 0, 255, "rgba8 px0");
+    _assert_px(px, 1, 0, 255, 0, 255, "rgba8 px1");
+    _assert_px(px, 3, 255, 255, 0, 128, "rgba8 px3 alpha=128");
+    return 0;
+}
+
+# ---- convenience wrapper chitra_png_decode_rgba8 ----
+fn test_decode_rgba8_convenience() {
+    var lo = 0;
+    var bytes = fx_rgb8_2x2(&lo);
+    var w = 0;
+    var h = 0;
+    var px = chitra_png_decode_rgba8(bytes, lo, &w, &h);
+    assert(px != 0, "convenience returns pixels");
+    assert_eq(w, 2, "convenience w=2");
+    assert_eq(h, 2, "convenience h=2");
+    _assert_px(px, 0, 255, 0, 0, 255, "convenience px0 red");
+    # A bad-signature input returns 0 with w/h zeroed.
+    store8(bytes, 0x00);
+    var w2 = 0;
+    var h2 = 0;
+    var px2 = chitra_png_decode_rgba8(bytes, lo, &w2, &h2);
+    assert_eq(px2, 0, "convenience bad sig -> 0");
+    assert_eq(w2, 0, "convenience bad sig -> w=0");
+    assert_eq(h2, 0, "convenience bad sig -> h=0");
+    return 0;
+}
+
+# ================================================================
+# Adversarial (AL.P0d): palette index out of range -> reject loud,
+# no OOB palette read.
+# ================================================================
+fn test_reject_palette_oob() {
+    var lo = 0;
+    var bytes = fx_palette_2x2_oob(&lo);
+    var err = 0;
+    var img = chitra_png_decode(bytes, lo, &err);
+    assert_eq(img, 0, "palette oob -> null");
+    assert(err != 0, "palette oob -> err set");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_BAD_CHUNK, "palette oob -> BAD_CHUNK");
+    return 0;
+}
+
+# ================================================================
+# chitra_image_free is a documented no-op; safe on a real img + 0.
+# ================================================================
+fn test_image_free() {
+    var lo = 0;
+    var bytes = fx_gray8_2x2(&lo);
+    var err = 0;
+    var img = chitra_png_decode(bytes, lo, &err);
+    assert_eq(chitra_image_free(img), 0, "free img -> 0");
+    assert_eq(chitra_image_free(0), 0, "free null -> 0");
+    return 0;
+}
+
+# ================================================================
 # Embedded PNG fixtures (generated; see header).
 # ================================================================
 # Returns an alloc'd buffer of the 77-byte fixture; sets *len_out.
@@ -760,6 +947,667 @@ fn fx_bomb_huge_dims(len_out): i64 {
     return b;
 }
 
+# Grayscale (color_type 0) 2x2, filter None. px = [10,200 / 40,255].
+# Returns an alloc'd buffer of the 71-byte fixture; sets *len_out.
+fn fx_gray8_2x2(len_out): i64 {
+    var b = alloc(71);
+    store64(len_out, 71);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 2);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 2);
+    store8(b + 24, 8);
+    store8(b + 25, 0);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 87);
+    store8(b + 30, 221);
+    store8(b + 31, 82);
+    store8(b + 32, 248);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 14);
+    store8(b + 37, 73);
+    store8(b + 38, 68);
+    store8(b + 39, 65);
+    store8(b + 40, 84);
+    store8(b + 41, 120);
+    store8(b + 42, 218);
+    store8(b + 43, 99);
+    store8(b + 44, 224);
+    store8(b + 45, 58);
+    store8(b + 46, 193);
+    store8(b + 47, 160);
+    store8(b + 48, 241);
+    store8(b + 49, 31);
+    store8(b + 50, 0);
+    store8(b + 51, 4);
+    store8(b + 52, 167);
+    store8(b + 53, 1);
+    store8(b + 54, 250);
+    store8(b + 55, 224);
+    store8(b + 56, 215);
+    store8(b + 57, 82);
+    store8(b + 58, 9);
+    store8(b + 59, 0);
+    store8(b + 60, 0);
+    store8(b + 61, 0);
+    store8(b + 62, 0);
+    store8(b + 63, 73);
+    store8(b + 64, 69);
+    store8(b + 65, 78);
+    store8(b + 66, 68);
+    store8(b + 67, 174);
+    store8(b + 68, 66);
+    store8(b + 69, 96);
+    store8(b + 70, 130);
+    return b;
+}
+
+# Grayscale (0) 2x2 + tRNS key gray=200 -> that pixel alpha 0.
+# Returns an alloc'd buffer of the 85-byte fixture; sets *len_out.
+fn fx_gray8_2x2_trns(len_out): i64 {
+    var b = alloc(85);
+    store64(len_out, 85);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 2);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 2);
+    store8(b + 24, 8);
+    store8(b + 25, 0);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 87);
+    store8(b + 30, 221);
+    store8(b + 31, 82);
+    store8(b + 32, 248);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 2);
+    store8(b + 37, 116);
+    store8(b + 38, 82);
+    store8(b + 39, 78);
+    store8(b + 40, 83);
+    store8(b + 41, 0);
+    store8(b + 42, 200);
+    store8(b + 43, 227);
+    store8(b + 44, 44);
+    store8(b + 45, 135);
+    store8(b + 46, 186);
+    store8(b + 47, 0);
+    store8(b + 48, 0);
+    store8(b + 49, 0);
+    store8(b + 50, 14);
+    store8(b + 51, 73);
+    store8(b + 52, 68);
+    store8(b + 53, 65);
+    store8(b + 54, 84);
+    store8(b + 55, 120);
+    store8(b + 56, 218);
+    store8(b + 57, 99);
+    store8(b + 58, 224);
+    store8(b + 59, 58);
+    store8(b + 60, 193);
+    store8(b + 61, 160);
+    store8(b + 62, 241);
+    store8(b + 63, 31);
+    store8(b + 64, 0);
+    store8(b + 65, 4);
+    store8(b + 66, 167);
+    store8(b + 67, 1);
+    store8(b + 68, 250);
+    store8(b + 69, 224);
+    store8(b + 70, 215);
+    store8(b + 71, 82);
+    store8(b + 72, 9);
+    store8(b + 73, 0);
+    store8(b + 74, 0);
+    store8(b + 75, 0);
+    store8(b + 76, 0);
+    store8(b + 77, 73);
+    store8(b + 78, 69);
+    store8(b + 79, 78);
+    store8(b + 80, 68);
+    store8(b + 81, 174);
+    store8(b + 82, 66);
+    store8(b + 83, 96);
+    store8(b + 84, 130);
+    return b;
+}
+
+# Truecolor RGB (2) 2x2, filter None. px = red,green / blue,(10,20,30).
+# Returns an alloc'd buffer of the 76-byte fixture; sets *len_out.
+fn fx_rgb8_2x2(len_out): i64 {
+    var b = alloc(76);
+    store64(len_out, 76);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 2);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 2);
+    store8(b + 24, 8);
+    store8(b + 25, 2);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 253);
+    store8(b + 30, 212);
+    store8(b + 31, 154);
+    store8(b + 32, 115);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 19);
+    store8(b + 37, 73);
+    store8(b + 38, 68);
+    store8(b + 39, 65);
+    store8(b + 40, 84);
+    store8(b + 41, 120);
+    store8(b + 42, 218);
+    store8(b + 43, 99);
+    store8(b + 44, 248);
+    store8(b + 45, 207);
+    store8(b + 46, 192);
+    store8(b + 47, 192);
+    store8(b + 48, 0);
+    store8(b + 49, 194);
+    store8(b + 50, 12);
+    store8(b + 51, 255);
+    store8(b + 52, 185);
+    store8(b + 53, 68);
+    store8(b + 54, 228);
+    store8(b + 55, 0);
+    store8(b + 56, 26);
+    store8(b + 57, 88);
+    store8(b + 58, 3);
+    store8(b + 59, 58);
+    store8(b + 60, 226);
+    store8(b + 61, 146);
+    store8(b + 62, 110);
+    store8(b + 63, 217);
+    store8(b + 64, 0);
+    store8(b + 65, 0);
+    store8(b + 66, 0);
+    store8(b + 67, 0);
+    store8(b + 68, 73);
+    store8(b + 69, 69);
+    store8(b + 70, 78);
+    store8(b + 71, 68);
+    store8(b + 72, 174);
+    store8(b + 73, 66);
+    store8(b + 74, 96);
+    store8(b + 75, 130);
+    return b;
+}
+
+# Truecolor RGB (2) 2x2 + tRNS key (0,255,0) -> green pixel alpha 0.
+# Returns an alloc'd buffer of the 94-byte fixture; sets *len_out.
+fn fx_rgb8_2x2_trns(len_out): i64 {
+    var b = alloc(94);
+    store64(len_out, 94);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 2);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 2);
+    store8(b + 24, 8);
+    store8(b + 25, 2);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 253);
+    store8(b + 30, 212);
+    store8(b + 31, 154);
+    store8(b + 32, 115);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 6);
+    store8(b + 37, 116);
+    store8(b + 38, 82);
+    store8(b + 39, 78);
+    store8(b + 40, 83);
+    store8(b + 41, 0);
+    store8(b + 42, 0);
+    store8(b + 43, 0);
+    store8(b + 44, 255);
+    store8(b + 45, 0);
+    store8(b + 46, 0);
+    store8(b + 47, 208);
+    store8(b + 48, 62);
+    store8(b + 49, 51);
+    store8(b + 50, 124);
+    store8(b + 51, 0);
+    store8(b + 52, 0);
+    store8(b + 53, 0);
+    store8(b + 54, 19);
+    store8(b + 55, 73);
+    store8(b + 56, 68);
+    store8(b + 57, 65);
+    store8(b + 58, 84);
+    store8(b + 59, 120);
+    store8(b + 60, 218);
+    store8(b + 61, 99);
+    store8(b + 62, 248);
+    store8(b + 63, 207);
+    store8(b + 64, 192);
+    store8(b + 65, 192);
+    store8(b + 66, 0);
+    store8(b + 67, 194);
+    store8(b + 68, 12);
+    store8(b + 69, 255);
+    store8(b + 70, 185);
+    store8(b + 71, 68);
+    store8(b + 72, 228);
+    store8(b + 73, 0);
+    store8(b + 74, 26);
+    store8(b + 75, 88);
+    store8(b + 76, 3);
+    store8(b + 77, 58);
+    store8(b + 78, 226);
+    store8(b + 79, 146);
+    store8(b + 80, 110);
+    store8(b + 81, 217);
+    store8(b + 82, 0);
+    store8(b + 83, 0);
+    store8(b + 84, 0);
+    store8(b + 85, 0);
+    store8(b + 86, 73);
+    store8(b + 87, 69);
+    store8(b + 88, 78);
+    store8(b + 89, 68);
+    store8(b + 90, 174);
+    store8(b + 91, 66);
+    store8(b + 92, 96);
+    store8(b + 93, 130);
+    return b;
+}
+
+# Palette (3) 2x2 + PLTE(4 entries) + tRNS[0,128]. idx 0,1/2,3.
+# Returns an alloc'd buffer of the 109-byte fixture; sets *len_out.
+fn fx_palette_2x2_trns(len_out): i64 {
+    var b = alloc(109);
+    store64(len_out, 109);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 2);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 2);
+    store8(b + 24, 8);
+    store8(b + 25, 3);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 69);
+    store8(b + 30, 104);
+    store8(b + 31, 253);
+    store8(b + 32, 22);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 12);
+    store8(b + 37, 80);
+    store8(b + 38, 76);
+    store8(b + 39, 84);
+    store8(b + 40, 69);
+    store8(b + 41, 255);
+    store8(b + 42, 0);
+    store8(b + 43, 0);
+    store8(b + 44, 0);
+    store8(b + 45, 255);
+    store8(b + 46, 0);
+    store8(b + 47, 0);
+    store8(b + 48, 0);
+    store8(b + 49, 255);
+    store8(b + 50, 255);
+    store8(b + 51, 255);
+    store8(b + 52, 0);
+    store8(b + 53, 214);
+    store8(b + 54, 2);
+    store8(b + 55, 143);
+    store8(b + 56, 123);
+    store8(b + 57, 0);
+    store8(b + 58, 0);
+    store8(b + 59, 0);
+    store8(b + 60, 2);
+    store8(b + 61, 116);
+    store8(b + 62, 82);
+    store8(b + 63, 78);
+    store8(b + 64, 83);
+    store8(b + 65, 0);
+    store8(b + 66, 128);
+    store8(b + 67, 155);
+    store8(b + 68, 43);
+    store8(b + 69, 78);
+    store8(b + 70, 24);
+    store8(b + 71, 0);
+    store8(b + 72, 0);
+    store8(b + 73, 0);
+    store8(b + 74, 14);
+    store8(b + 75, 73);
+    store8(b + 76, 68);
+    store8(b + 77, 65);
+    store8(b + 78, 84);
+    store8(b + 79, 120);
+    store8(b + 80, 218);
+    store8(b + 81, 99);
+    store8(b + 82, 96);
+    store8(b + 83, 96);
+    store8(b + 84, 100);
+    store8(b + 85, 96);
+    store8(b + 86, 98);
+    store8(b + 87, 6);
+    store8(b + 88, 0);
+    store8(b + 89, 0);
+    store8(b + 90, 17);
+    store8(b + 91, 0);
+    store8(b + 92, 7);
+    store8(b + 93, 131);
+    store8(b + 94, 202);
+    store8(b + 95, 100);
+    store8(b + 96, 100);
+    store8(b + 97, 0);
+    store8(b + 98, 0);
+    store8(b + 99, 0);
+    store8(b + 100, 0);
+    store8(b + 101, 73);
+    store8(b + 102, 69);
+    store8(b + 103, 78);
+    store8(b + 104, 68);
+    store8(b + 105, 174);
+    store8(b + 106, 66);
+    store8(b + 107, 96);
+    store8(b + 108, 130);
+    return b;
+}
+
+# Palette (3) 2x2 with an out-of-range index (5 vs 4 entries) -> reject.
+# Returns an alloc'd buffer of the 95-byte fixture; sets *len_out.
+fn fx_palette_2x2_oob(len_out): i64 {
+    var b = alloc(95);
+    store64(len_out, 95);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 2);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 2);
+    store8(b + 24, 8);
+    store8(b + 25, 3);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 69);
+    store8(b + 30, 104);
+    store8(b + 31, 253);
+    store8(b + 32, 22);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 12);
+    store8(b + 37, 80);
+    store8(b + 38, 76);
+    store8(b + 39, 84);
+    store8(b + 40, 69);
+    store8(b + 41, 255);
+    store8(b + 42, 0);
+    store8(b + 43, 0);
+    store8(b + 44, 0);
+    store8(b + 45, 255);
+    store8(b + 46, 0);
+    store8(b + 47, 0);
+    store8(b + 48, 0);
+    store8(b + 49, 255);
+    store8(b + 50, 255);
+    store8(b + 51, 255);
+    store8(b + 52, 0);
+    store8(b + 53, 214);
+    store8(b + 54, 2);
+    store8(b + 55, 143);
+    store8(b + 56, 123);
+    store8(b + 57, 0);
+    store8(b + 58, 0);
+    store8(b + 59, 0);
+    store8(b + 60, 14);
+    store8(b + 61, 73);
+    store8(b + 62, 68);
+    store8(b + 63, 65);
+    store8(b + 64, 84);
+    store8(b + 65, 120);
+    store8(b + 66, 218);
+    store8(b + 67, 99);
+    store8(b + 68, 96);
+    store8(b + 69, 96);
+    store8(b + 70, 101);
+    store8(b + 71, 96);
+    store8(b + 72, 98);
+    store8(b + 73, 6);
+    store8(b + 74, 0);
+    store8(b + 75, 0);
+    store8(b + 76, 33);
+    store8(b + 77, 0);
+    store8(b + 78, 11);
+    store8(b + 79, 185);
+    store8(b + 80, 108);
+    store8(b + 81, 217);
+    store8(b + 82, 156);
+    store8(b + 83, 0);
+    store8(b + 84, 0);
+    store8(b + 85, 0);
+    store8(b + 86, 0);
+    store8(b + 87, 73);
+    store8(b + 88, 69);
+    store8(b + 89, 78);
+    store8(b + 90, 68);
+    store8(b + 91, 174);
+    store8(b + 92, 66);
+    store8(b + 93, 96);
+    store8(b + 94, 130);
+    return b;
+}
+
+# Grayscale+alpha (4) 2x2, filter None. (g,a) pairs.
+# Returns an alloc'd buffer of the 75-byte fixture; sets *len_out.
+fn fx_graya8_2x2(len_out): i64 {
+    var b = alloc(75);
+    store64(len_out, 75);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 2);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 2);
+    store8(b + 24, 8);
+    store8(b + 25, 4);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 216);
+    store8(b + 30, 191);
+    store8(b + 31, 197);
+    store8(b + 32, 175);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 18);
+    store8(b + 37, 73);
+    store8(b + 38, 68);
+    store8(b + 39, 65);
+    store8(b + 40, 84);
+    store8(b + 41, 120);
+    store8(b + 42, 218);
+    store8(b + 43, 99);
+    store8(b + 44, 224);
+    store8(b + 45, 250);
+    store8(b + 46, 127);
+    store8(b + 47, 162);
+    store8(b + 48, 129);
+    store8(b + 49, 65);
+    store8(b + 50, 131);
+    store8(b + 51, 225);
+    store8(b + 52, 191);
+    store8(b + 53, 3);
+    store8(b + 54, 0);
+    store8(b + 55, 19);
+    store8(b + 56, 178);
+    store8(b + 57, 3);
+    store8(b + 58, 185);
+    store8(b + 59, 229);
+    store8(b + 60, 143);
+    store8(b + 61, 219);
+    store8(b + 62, 209);
+    store8(b + 63, 0);
+    store8(b + 64, 0);
+    store8(b + 65, 0);
+    store8(b + 66, 0);
+    store8(b + 67, 73);
+    store8(b + 68, 69);
+    store8(b + 69, 78);
+    store8(b + 70, 68);
+    store8(b + 71, 174);
+    store8(b + 72, 66);
+    store8(b + 73, 96);
+    store8(b + 74, 130);
+    return b;
+}
+
 fn main() {
     test_cursor_bounds();
     test_signature();
@@ -774,6 +1622,16 @@ fn main() {
     test_reject_crc();
     test_reject_interlace();
     test_reject_bomb();
+    test_decode_gray8();
+    test_decode_gray8_trns();
+    test_decode_rgb8();
+    test_decode_rgb8_trns();
+    test_decode_palette_trns();
+    test_decode_graya8();
+    test_decode_rgba8();
+    test_decode_rgba8_convenience();
+    test_reject_palette_oob();
+    test_image_free();
     return assert_summary();
 }
 

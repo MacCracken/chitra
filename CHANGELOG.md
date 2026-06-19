@@ -60,6 +60,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     fixtures (rgba8 2x2 None, rgb8 2x2 Sub+Up, rgba8 1x1 Paeth — raw
     bytes asserted exactly), and five adversarial rejections
     (bad-signature, truncated, CRC-mismatch, interlaced, bomb).
+- Canonical-RGBA8 color-normalization pass + the public PNG decoder
+  (mabda v3.3 arc, bite **AL.P0d**) — completes chitra's PNG → RGBA8
+  path for bit depth 8. Consumes a `ChitraPngRaw` and emits an owned
+  RGBA8 `ChitraImage`:
+  - `src/png_color.cyr` — `chitra_png_color_to_rgba8(raw, src, len,
+    err_out)`: the genuinely new code over kii (kii emits native
+    channels / palette indices for the terminal path; chitra normalizes
+    to canonical RGBA8 + synthesizes alpha from tRNS). Handles all five
+    color types at depth 8 — grayscale(0) → (g,g,g,255), RGB(2) →
+    (r,g,b,255), palette(3) → PLTE RGB + per-entry tRNS alpha,
+    grey+alpha(4) → (g,g,g,a), RGBA(6) passthrough — with tRNS keying
+    for types 0/2 (matching gray / RGB → alpha 0). PLTE/tRNS are read
+    from the original `src` via the (offset, length) spans the parse
+    driver captured (no struct widening; documented in the module
+    header), re-validated against `(src, len)` defensively.
+  - `src/png.cyr` — replaces the stub with the public API:
+    `chitra_png_decode(src, len, err_out)` → `ChitraImage*` (parse_raw +
+    the color pass), `chitra_png_decode_rgba8(src, len, w_out, h_out)`
+    convenience, `chitra_image_free` (documented bump-allocator no-op),
+    plus the 32-byte `ChitraImage` struct (`width` / `height` / `pixels`
+    (owned RGBA8 w*h*4) / `channels` = 4) + accessors. `chitra_version`
+    retained.
+  - `src/lib.cyr` + `cyrius.cyml` `[lib].modules` — wire `png_color.cyr`
+    between `png_filter.cyr` and `png.cyr`.
+  - New reject paths: palette index ≥ PLTE entry count → `BAD_CHUNK`;
+    color_type 3 with no/short PLTE → `BAD_CHUNK`; tRNS span out of
+    `(src, len)` bounds or wrong length for the color type → `BAD_CHUNK`.
+    The AL.P0b rejects (interlace / bit-depth / bombs / CRC / truncation)
+    stay intact.
+  - `tests/tcyr/png.tcyr` — grows to 232 CPU assertions: one
+    embedded-byte-array fixture per color type 0/2/3/4/6 at depth 8
+    decoded end-to-end with pixel-exact RGBA8 (ground truth from a
+    reference re-decode of the same bytes), a palette+tRNS fixture
+    (per-entry alpha), grayscale+tRNS and RGB+tRNS keyed-color fixtures
+    (keyed pixel → alpha 0), the `_rgba8` convenience wrapper, and a
+    palette-index-out-of-range adversarial reject.
 
 ### Planned
 - **PNG → canonical RGBA8** (color types 0/2/3/4/6 @ bit depth 8, sankoch

@@ -1,35 +1,105 @@
-# @public — chitra PNG decoder (STUB at v0.1.0 scaffold; real decoder
-# lands in the AL.P0b–AL.P0e bites of the mabda v3.3 arc).
+# @public — chitra PNG decoder: PNG bytes -> canonical RGBA8.
 #
-# png.cyr — PNG → canonical RGBA8 decoder.
-#
-# Planned public API (see docs/proposals/v3.3-chitra-png-decoder-package.md
-# in the mabda repo; tracked, not implemented here yet):
-#
-#   # Decode PNG bytes → an owned RGBA8 image. Ok(ChitraImage*) | Err(ChitraErr).
-#   fn chitra_png_decode(src, len): i64                       # @public
-#   # Convenience: returns the RGBA8 pixel ptr (w/h via out-params), 0 on error.
-#   fn chitra_png_decode_rgba8(src, len, w_out, h_out): i64   # @public
-#   fn chitra_image_free(img): i64                            # @public
-#
-#   ChitraImage (32 bytes):
-#     +0:  width    (i64)
-#     +8:  height   (i64)
-#     +16: pixels   (ptr — w*h*4 RGBA8, owned)
-#     +24: channels (i64 — always 4 in 0.1.0)
+# png.cyr — the public decode API. Wires the AL.P0b parse driver
+# (chitra_png_parse_raw: framing + inflate + unfilter) to the AL.P0d
+# color pass (chitra_png_color_to_rgba8: canonical-RGBA8 + tRNS) and
+# wraps the result in a ChitraImage.
 #
 # v0.1.0 scope: PNG signature + chunk parse (IHDR / IDAT-concat / IEND /
-# PLTE / tRNS), color types 0/2/3/4/6 at bit depth 8, sankoch IDAT inflate,
-# the five unfilter predictors, canonical-RGBA8 output, the kii security
-# guards. No Adam7 interlace (single-pass only). Forked from kii's proven
-# png.cyr core with a new byte-buffer I/O boundary + RGBA8 normalization.
+# PLTE / tRNS), color types 0/2/3/4/6 at bit depth 8, sankoch IDAT
+# inflate, the five unfilter predictors, canonical-RGBA8 output, the kii
+# security guards. No Adam7 interlace (single-pass only). Bit depths
+# 1/2/4/16 + Adam7 are tracked for chitra 0.2 (the parse driver rejects
+# them loud via CHITRA_ERR_BIT_DEPTH / CHITRA_ERR_INTERLACE).
+#
+# PLTE/tRNS wiring: chitra_png_parse_raw captures PLTE/tRNS only as
+# (offset-into-src, length) spans (no byte copy). The public decode
+# entry holds the original (src, len), so it forwards src + len into the
+# color pass, which resolves the spans (see png_color.cyr's header).
 
 # ================================================================
-# Version probe — the only live fn at the scaffold stage so the
-# module is non-empty and links. 0.1.0 packed as major*100 + minor*10
-# + patch → 1*100 + 0*10 + 0 = 100.
+# ChitraImage — the public decode result (32 bytes).
+#   +0:  width    (i64 — pixels)
+#   +8:  height   (i64 — pixels)
+#   +16: pixels   (ptr — owned RGBA8, width*height*4 bytes)
+#   +24: channels (i64 — always 4 in 0.1.0)
 # ================================================================
+var IMAGE_WIDTH_OFFSET    = 0;
+var IMAGE_HEIGHT_OFFSET   = 8;
+var IMAGE_PIXELS_OFFSET   = 16;
+var IMAGE_CHANNELS_OFFSET = 24;
+var CHITRA_IMAGE_SIZE     = 32;
 
+# ---- ChitraImage accessors --------------------------------------
+fn chitra_image_width(img): i64    { return load64(img + IMAGE_WIDTH_OFFSET); }
+fn chitra_image_height(img): i64   { return load64(img + IMAGE_HEIGHT_OFFSET); }
+fn chitra_image_pixels(img): i64   { return load64(img + IMAGE_PIXELS_OFFSET); }
+fn chitra_image_channels(img): i64 { return load64(img + IMAGE_CHANNELS_OFFSET); }
+
+# ================================================================
+# chitra_png_decode — the top-level public decode. Parse (src, len) PNG
+# bytes -> an owned RGBA8 ChitraImage.
+#
+# Returns the ChitraImage ptr on success, or 0 with *err_out set to a
+# ChitraErr ptr. *err_out is left 0 on success. err_out is a >=8-byte
+# slot the caller owns (mirrors chitra_png_parse_raw's convention so the
+# Ok/Err split is a (ptr, err_out) pair rather than a tagged union).
+# ================================================================
+# @public
+fn chitra_png_decode(src, len, err_out): i64 {
+    store64(err_out, 0);
+
+    # ---- parse: framing + inflate + unfilter (AL.P0b) ----
+    var raw = chitra_png_parse_raw(src, len, err_out);
+    if (raw == 0) { return 0; }      # *err_out already set by parse_raw
+
+    # ---- color pass: canonical RGBA8 + tRNS (AL.P0d) ----
+    var rgba = chitra_png_color_to_rgba8(raw, src, len, err_out);
+    if (rgba == 0) { return 0; }     # *err_out already set by the color pass
+
+    var img = alloc(CHITRA_IMAGE_SIZE);
+    if (img == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
+    store64(img + IMAGE_WIDTH_OFFSET, chitra_raw_width(raw));
+    store64(img + IMAGE_HEIGHT_OFFSET, chitra_raw_height(raw));
+    store64(img + IMAGE_PIXELS_OFFSET, rgba);
+    store64(img + IMAGE_CHANNELS_OFFSET, 4);
+    return img;
+}
+
+# ================================================================
+# chitra_png_decode_rgba8 — convenience wrapper. Decode (src, len) and
+# return the RGBA8 pixel pointer directly, writing width/height through
+# w_out / h_out (>=8-byte slots). Returns 0 on any failure (the detailed
+# ChitraErr is not surfaced here — callers needing it use chitra_png_decode).
+# On the 0 path w_out/h_out are left at 0.
+# ================================================================
+# @public
+fn chitra_png_decode_rgba8(src, len, w_out, h_out): i64 {
+    store64(w_out, 0);
+    store64(h_out, 0);
+    var err = 0;
+    var img = chitra_png_decode(src, len, &err);
+    if (img == 0) { return 0; }
+    store64(w_out, chitra_image_width(img));
+    store64(h_out, chitra_image_height(img));
+    return chitra_image_pixels(img);
+}
+
+# ================================================================
+# chitra_image_free — release a ChitraImage. The stdlib `alloc` is a
+# bump allocator with no per-block free, so this is a documented no-op
+# kept for API symmetry (matches chitra_raw_free) and a future arena-
+# backed allocator. Safe on a 0 ptr.
+# ================================================================
+# @public
+fn chitra_image_free(img): i64 {
+    return 0;
+}
+
+# ================================================================
+# Version probe — 0.1.0 packed as major*100 + minor*10 + patch =
+# 1*100 + 0*10 + 0 = 100.
+# ================================================================
 # @public
 fn chitra_version(): i64 {
     return 100;
