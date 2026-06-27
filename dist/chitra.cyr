@@ -1574,6 +1574,26 @@ fn _jpeg_br_init(reader, base, len): i64 {
 fn _jpeg_br_marker(reader): i64 { return load64(reader + BR_MARKER); }
 fn _jpeg_br_pos(reader): i64    { return load64(reader + BR_POS); }
 
+# Resync at a restart-interval boundary (T.81 § F.2.1.3.1 / E.1.1): discard the
+# partial byte (byte-align), then consume the expected RSTn marker (FF D0..D7).
+# After decoding `restart_interval` MCUs the stream is byte-aligned at an RSTn;
+# BR_POS points at its 0xFF (whether or not the bit-reader auto-detected it).
+# Returns 0 on success, -1 if the restart marker is missing/malformed.
+fn _jpeg_br_restart(reader): i64 {
+    store64(reader + BR_CNT, 0);
+    var base = load64(reader + BR_BASE);
+    var pos = load64(reader + BR_POS);
+    var end = load64(reader + BR_END);
+    if (pos + 1 >= end) { return 0 - 1; }
+    if (load8(base + pos) != 0xFF) { return 0 - 1; }
+    var m = load8(base + pos + 1);
+    if (m < 0xD0) { return 0 - 1; }
+    if (m > 0xD7) { return 0 - 1; }
+    store64(reader + BR_POS, pos + 2);
+    store64(reader + BR_MARKER, 0);
+    return 0;
+}
+
 # Load one data byte (8 bits) into the buffer. Only called when CNT == 0. On a
 # stuffing pair (FF 00) the 0xFF is loaded and the 0x00 discarded. On a marker
 # (FF xx, xx != 0) or end-of-data, the marker is recorded (xx, or EOI for a
@@ -2080,6 +2100,7 @@ fn _jpeg_marker_action(m): i64 {
     if (m == 0xDA) { return 2; }                          # SOS — end of header scan
     if (m == 0xDB) { return 5; }                          # DQT — parse
     if (m == 0xC4) { return 6; }                          # DHT — parse
+    if (m == 0xDD) { return 7; }                          # DRI — parse restart interval
     if (m == 0xC2) { return CHITRA_ERR_JPEG_PROGRESSIVE; }
     if (m == 0xC9) { return CHITRA_ERR_JPEG_ARITHMETIC; } # SOF9 ext-seq arithmetic
     if (m == 0xCA) { return CHITRA_ERR_JPEG_ARITHMETIC; } # SOF10 progressive arithmetic
@@ -2231,6 +2252,19 @@ fn _jpeg_parse_dht(cur, frame): i64 {
         }
     }
     return rc;
+}
+
+# ================================================================
+# Parse a DRI segment (T.81 § B.2.4.4): Lr(2) Ri(2). Sets the restart interval
+# (number of MCUs between RSTn markers; 0 disables). Returns 0 or a CHITRA_ERR_*.
+# ================================================================
+fn _jpeg_parse_dri(cur, frame): i64 {
+    if (_cur_can_read(cur, 2) == 0) { return CHITRA_ERR_TRUNCATED; }
+    var seglen = _cur_u16_be(cur);
+    if (seglen != 4) { return CHITRA_ERR_JPEG_MARKER; }
+    if (_cur_can_read(cur, 2) == 0) { return CHITRA_ERR_TRUNCATED; }
+    store64(frame + JF_RESTART_INTERVAL, _cur_u16_be(cur));
+    return 0;
 }
 
 # ================================================================
@@ -2411,6 +2445,10 @@ fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
                 rc = _jpeg_parse_dht(&cur, frame);
                 if (rc != 0) { done = 1; }
             }
+            if (act == 7) {
+                rc = _jpeg_parse_dri(&cur, frame);
+                if (rc != 0) { done = 1; }
+            }
             if (act == 2) {
                 if (load64(frame + JF_SEEN_SOF) == 0) { rc = CHITRA_ERR_JPEG_SOF; }
                 if (rc == 0) { store64(frame + JF_SOS_OFFSET, _cur_pos(&cur)); }
@@ -2445,11 +2483,12 @@ fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
 # the SOS scan header, the entropy/IDCT block pipeline (jpeg_huffman + jpeg_idct),
 # and the color pass into a ChitraImage (the same 48-byte result PNG produces).
 #
-# Scope at bite 6a: baseline GRAYSCALE (1 component, no subsampling). The
-# 3-component YCbCr path + chroma subsampling land in bites 6b/7. The result is
-# the shared ChitraImage (offsets from png.cyr); source_color_type carries a
-# JPEG sentinel (0x100 | num_components) so a consumer's PNG 0/2/3/4/6 switch
-# never aliases it (ADR 0003 / review).
+# Scope (bite 7): baseline JFIF — grayscale (1 component) and YCbCr (3) with
+# arbitrary chroma subsampling (4:4:4 / 4:2:2 / 4:2:0 / general Hi,Vi), box
+# upsampling, and DRI/RSTn restart markers. The result is the shared ChitraImage
+# (offsets from png.cyr); source_color_type carries a JPEG sentinel
+# (0x100 | num_components) so a consumer's PNG 0/2/3/4/6 switch never aliases it
+# (ADR 0003 / review).
 
 # ================================================================
 # YCbCr -> RGB color conversion (JFIF full-range, ITU-R BT.601). Fixed-point
@@ -2552,174 +2591,93 @@ fn _jpeg_parse_sos(frame, src, len, err_out): i64 {
 }
 
 # ================================================================
-# Decode a single-component (grayscale) baseline scan into a ChitraImage. One
-# 8x8 data unit per MCU (H=V=1). Returns the ChitraImage ptr, or 0 with *err_out.
+# Decode a baseline scan (1 or 3 components, any chroma subsampling) into a
+# ChitraImage. The MCU is max_h x max_v data units wide/tall; each component i
+# contributes Hi x Vi 8x8 blocks per MCU at its own (subsampled) plane
+# resolution. After decode, each component plane is box-upsampled to full
+# resolution and (for 3 components) converted YCbCr -> RGB. DRI/RSTn restart
+# intervals reset the DC predictors and byte-align the entropy stream.
+# Returns the ChitraImage ptr, or 0 with *err_out set.
 # ================================================================
-fn _jpeg_decode_gray(frame, src, len, entropy_start, err_out): i64 {
+fn _jpeg_decode_scan(frame, src, len, entropy_start, err_out): i64 {
+    var ncomp = chitra_jpeg_frame_num_components(frame);
     var w = chitra_jpeg_frame_width(frame);
     var h = chitra_jpeg_frame_height(frame);
-    var td = chitra_jpeg_frame_comp_td(frame, 0);
-    var ta = chitra_jpeg_frame_comp_ta(frame, 0);
-    var tq = chitra_jpeg_frame_comp_tq(frame, 0);
-    if ((chitra_jpeg_frame_huff_present(frame) & (1 << td)) == 0) {
-        store64(err_out, chitra_err(CHITRA_ERR_JPEG_SOS)); return 0;
-    }
-    if ((chitra_jpeg_frame_huff_present(frame) & (1 << (4 + ta))) == 0) {
-        store64(err_out, chitra_err(CHITRA_ERR_JPEG_SOS)); return 0;
-    }
-    if ((chitra_jpeg_frame_quant_present(frame) & (1 << tq)) == 0) {
-        store64(err_out, chitra_err(CHITRA_ERR_JPEG_SOF)); return 0;
-    }
-    var dc_tab = chitra_jpeg_frame_huff(frame, 0, td);
-    var ac_tab = chitra_jpeg_frame_huff(frame, 1, ta);
-    var quant = load64(frame + JF_QUANT) + tq * 64 * 8;
+    var max_h = chitra_jpeg_frame_max_h(frame);
+    var max_v = chitra_jpeg_frame_max_v(frame);
+    var mcu_w = 8 * max_h;
+    var mcu_h = 8 * max_v;
+    var mcu_cols = (w + mcu_w - 1) / mcu_w;
+    var mcu_rows = (h + mcu_h - 1) / mcu_h;
 
-    var mcu_cols = (w + 7) / 8;
-    var mcu_rows = (h + 7) / 8;
-    var pw = mcu_cols * 8;
-    var ph = mcu_rows * 8;
-    if (pw * ph > CHITRA_MAX_RAW_BYTES) { store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS)); return 0; }
-    var plane = alloc(pw * ph);
-    if (plane == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
+    # per-component arrays (<= 3 components)
+    var planes[32];
+    var preds[32];
+    var dctabs[32];
+    var actabs[32];
+    var quants[32];
+    var comph[32];
+    var compv[32];
+    var comppw[32];
 
-    var reader[48];
-    _jpeg_br_init(&reader, src + entropy_start, len - entropy_start);
-    var zz = alloc(512);
-    var out = alloc(512);
-    if (zz == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
-    if (out == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
-
-    var pred = 0;
-    var my = 0;
-    var mx = 0;
-    var r = 0;
-    var c = 0;
-    var berr = 0;
-    var done = 0;
-    while (done == 0) {
-        if (my >= mcu_rows) { done = 1; }
-        if (done == 0) {
-            mx = 0;
-            while (mx < mcu_cols) {
-                pred = _jpeg_decode_block(&reader, dc_tab, ac_tab, pred, zz, &berr);
-                if (load64(&berr) != 0) {
-                    store64(err_out, load64(&berr));
-                    done = 1;
-                    mx = mcu_cols;
-                }
-                if (done == 0) {
-                    _jpeg_idct_block(zz, quant, out);
-                    r = 0;
-                    while (r < 8) {
-                        c = 0;
-                        while (c < 8) {
-                            store8(plane + (my * 8 + r) * pw + (mx * 8 + c), load64(out + (r * 8 + c) * 8));
-                            c = c + 1;
-                        }
-                        r = r + 1;
-                    }
-                    mx = mx + 1;
-                }
-            }
-            my = my + 1;
-        }
-    }
-    if (load64(err_out) != 0) { return 0; }
-
-    if (w * h * 4 > CHITRA_MAX_RAW_BYTES) { store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS)); return 0; }
-    var rgba = alloc(w * h * 4);
-    if (rgba == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
-    var y = 0;
-    var x = 0;
-    var g = 0;
-    var o = 0;
-    while (y < h) {
-        x = 0;
-        while (x < w) {
-            g = load8(plane + y * pw + x);
-            o = (y * w + x) * 4;
-            store8(rgba + o + 0, g);
-            store8(rgba + o + 1, g);
-            store8(rgba + o + 2, g);
-            store8(rgba + o + 3, 255);
-            x = x + 1;
-        }
-        y = y + 1;
-    }
-
-    var img = alloc(CHITRA_IMAGE_SIZE);
-    if (img == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
-    store64(img + IMAGE_WIDTH_OFFSET, w);
-    store64(img + IMAGE_HEIGHT_OFFSET, h);
-    store64(img + IMAGE_PIXELS_OFFSET, rgba);
-    store64(img + IMAGE_CHANNELS_OFFSET, 4);
-    store64(img + IMAGE_SEEN_IEND_OFFSET, 1);
-    store64(img + IMAGE_SRC_CTYPE_OFFSET, 256 + 1);   # JPEG grayscale sentinel (0x101)
-    return img;
-}
-
-# ================================================================
-# Decode a 3-component YCbCr baseline scan with NO chroma subsampling (4:4:4,
-# all Hi=Vi=1). One data unit per component per 8x8 MCU. Decodes Y/Cb/Cr planes
-# then converts to RGBA8. Returns the ChitraImage ptr, or 0 with *err_out.
-# Subsampled (4:2:0 / 4:2:2 / general H,V) decode lands in bite 7.
-# ================================================================
-fn _jpeg_decode_color444(frame, src, len, entropy_start, err_out): i64 {
-    var w = chitra_jpeg_frame_width(frame);
-    var h = chitra_jpeg_frame_height(frame);
-    var mcu_cols = (w + 7) / 8;
-    var mcu_rows = (h + 7) / 8;
-    var pw = mcu_cols * 8;
-    var ph = mcu_rows * 8;
-    if (pw * ph > CHITRA_MAX_RAW_BYTES) { store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS)); return 0; }
-
-    var planes[24];   # 3 plane ptrs
-    var preds[24];    # 3 DC predictors
-    var dctabs[24];
-    var actabs[24];
-    var quants[24];
     var ci = 0;
     var td = 0;
     var ta = 0;
     var tq = 0;
+    var chh = 0;
+    var cvv = 0;
+    var cpw = 0;
+    var cph = 0;
     var pl = 0;
     var rc = 0;
-    var setup_done = 0;
-    while (setup_done == 0) {
-        if (ci >= 3) { setup_done = 1; }
-        if (setup_done == 0) {
+    var done = 0;
+    while (done == 0) {
+        if (ci >= ncomp) { done = 1; }
+        if (done == 0) {
             td = chitra_jpeg_frame_comp_td(frame, ci);
             ta = chitra_jpeg_frame_comp_ta(frame, ci);
             tq = chitra_jpeg_frame_comp_tq(frame, ci);
-            if ((chitra_jpeg_frame_huff_present(frame) & (1 << td)) == 0) { rc = CHITRA_ERR_JPEG_SOS; setup_done = 1; }
-            if (setup_done == 0) {
+            chh = chitra_jpeg_frame_comp_h(frame, ci);
+            cvv = chitra_jpeg_frame_comp_v(frame, ci);
+            if ((chitra_jpeg_frame_huff_present(frame) & (1 << td)) == 0) { rc = CHITRA_ERR_JPEG_SOS; done = 1; }
+            if (done == 0) {
                 if ((chitra_jpeg_frame_huff_present(frame) & (1 << (4 + ta))) == 0) {
                     rc = CHITRA_ERR_JPEG_SOS;
-                    setup_done = 1;
+                    done = 1;
                 }
             }
-            if (setup_done == 0) {
+            if (done == 0) {
                 if ((chitra_jpeg_frame_quant_present(frame) & (1 << tq)) == 0) {
                     rc = CHITRA_ERR_JPEG_SOF;
-                    setup_done = 1;
+                    done = 1;
                 }
             }
-            if (setup_done == 0) {
-                pl = alloc(pw * ph);
-                if (pl == 0) { rc = CHITRA_ERR_OOM; setup_done = 1; }
+            if (done == 0) {
+                cpw = mcu_cols * chh * 8;
+                cph = mcu_rows * cvv * 8;
+                if (cpw * cph > CHITRA_MAX_RAW_BYTES) { rc = CHITRA_ERR_DIMENSIONS; done = 1; }
             }
-            if (setup_done == 0) {
+            if (done == 0) {
+                pl = alloc(cpw * cph);
+                if (pl == 0) { rc = CHITRA_ERR_OOM; done = 1; }
+            }
+            if (done == 0) {
                 store64(&planes + ci * 8, pl);
                 store64(&preds + ci * 8, 0);
                 store64(&dctabs + ci * 8, chitra_jpeg_frame_huff(frame, 0, td));
                 store64(&actabs + ci * 8, chitra_jpeg_frame_huff(frame, 1, ta));
                 store64(&quants + ci * 8, load64(frame + JF_QUANT) + tq * 64 * 8);
+                store64(&comph + ci * 8, chh);
+                store64(&compv + ci * 8, cvv);
+                store64(&comppw + ci * 8, cpw);
                 ci = ci + 1;
             }
         }
     }
     if (rc != 0) { store64(err_out, chitra_err(rc)); return 0; }
+    done = 0;
 
+    var ri = chitra_jpeg_frame_restart_interval(frame);
     var reader[48];
     _jpeg_br_init(&reader, src + entropy_start, len - entropy_start);
     var zz = alloc(512);
@@ -2727,71 +2685,156 @@ fn _jpeg_decode_color444(frame, src, len, entropy_start, err_out): i64 {
     if (zz == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
     if (out == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
 
-    var my = 0;
-    var mx = 0;
+    var mcu_count = mcu_cols * mcu_rows;
+    var mi = 0;
+    var mcu_x = 0;
+    var mcu_y = 0;
     var comp = 0;
+    var by = 0;
+    var bx = 0;
+    var ch2 = 0;
+    var cv2 = 0;
+    var cpw2 = 0;
+    var dctab = 0;
+    var actab = 0;
+    var quant = 0;
+    var plane = 0;
+    var pr = 0;
+    var berr = 0;
+    var px = 0;
+    var py = 0;
     var r = 0;
     var c = 0;
-    var berr = 0;
-    var pr = 0;
-    var done = 0;
+    var rrc = 0;
+    var k = 0;
     while (done == 0) {
-        if (my >= mcu_rows) { done = 1; }
+        if (mi >= mcu_count) { done = 1; }
         if (done == 0) {
-            mx = 0;
-            while (mx < mcu_cols) {
-                comp = 0;
-                while (comp < 3) {
-                    pr = load64(&preds + comp * 8);
-                    pr = _jpeg_decode_block(&reader, load64(&dctabs + comp * 8),
-                    load64(&actabs + comp * 8), pr, zz, &berr);
-                    store64(&preds + comp * 8, pr);
-                    if (load64(&berr) != 0) {
-                        store64(err_out, load64(&berr));
-                        done = 1;
-                        comp = 3;
-                        mx = mcu_cols;
-                    }
-                    if (done == 0) {
-                        _jpeg_idct_block(zz, load64(&quants + comp * 8), out);
-                        pl = load64(&planes + comp * 8);
-                        r = 0;
-                        while (r < 8) {
-                            c = 0;
-                            while (c < 8) {
-                                store8(pl + (my * 8 + r) * pw + (mx * 8 + c), load64(out + (r * 8 + c) * 8));
-                                c = c + 1;
-                            }
-                            r = r + 1;
+            if (ri > 0) {
+                if (mi > 0) {
+                    if ((mi % ri) == 0) {
+                        rrc = _jpeg_br_restart(&reader);
+                        if (rrc != 0) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY)); done = 1; }
+                        if (done == 0) {
+                            k = 0;
+                            while (k < ncomp) { store64(&preds + k * 8, 0); k = k + 1; }
                         }
-                        comp = comp + 1;
                     }
                 }
-                if (done == 0) { mx = mx + 1; }
             }
-            my = my + 1;
+        }
+        if (done == 0) {
+            mcu_x = mi % mcu_cols;
+            mcu_y = mi / mcu_cols;
+            comp = 0;
+            while (comp < ncomp) {
+                ch2 = load64(&comph + comp * 8);
+                cv2 = load64(&compv + comp * 8);
+                cpw2 = load64(&comppw + comp * 8);
+                dctab = load64(&dctabs + comp * 8);
+                actab = load64(&actabs + comp * 8);
+                quant = load64(&quants + comp * 8);
+                plane = load64(&planes + comp * 8);
+                by = 0;
+                while (by < cv2) {
+                    bx = 0;
+                    while (bx < ch2) {
+                        pr = load64(&preds + comp * 8);
+                        pr = _jpeg_decode_block(&reader, dctab, actab, pr, zz, &berr);
+                        store64(&preds + comp * 8, pr);
+                        if (load64(&berr) != 0) {
+                            store64(err_out, load64(&berr));
+                            done = 1;
+                            bx = ch2;
+                            by = cv2;
+                            comp = ncomp;
+                            mi = mcu_count;
+                        }
+                        if (done == 0) {
+                            _jpeg_idct_block(zz, quant, out);
+                            px = (mcu_x * ch2 + bx) * 8;
+                            py = (mcu_y * cv2 + by) * 8;
+                            r = 0;
+                            while (r < 8) {
+                                c = 0;
+                                while (c < 8) {
+                                    store8(plane + (py + r) * cpw2 + (px + c), load64(out + (r * 8 + c) * 8));
+                                    c = c + 1;
+                                }
+                                r = r + 1;
+                            }
+                            bx = bx + 1;
+                        }
+                    }
+                    if (done == 0) { by = by + 1; }
+                }
+                if (done == 0) { comp = comp + 1; }
+            }
+            if (done == 0) { mi = mi + 1; }
         }
     }
     if (load64(err_out) != 0) { return 0; }
 
+    # ---- box upsample + color convert -> RGBA8 ----
     if (w * h * 4 > CHITRA_MAX_RAW_BYTES) { store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS)); return 0; }
     var rgba = alloc(w * h * 4);
     if (rgba == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
     var p0 = load64(&planes + 0);
-    var p1 = load64(&planes + 8);
-    var p2 = load64(&planes + 16);
+    var h0 = load64(&comph + 0);
+    var v0 = load64(&compv + 0);
+    var pw0 = load64(&comppw + 0);
+    var p1 = 0;
+    var p2 = 0;
+    var h1 = 0;
+    var v1 = 0;
+    var pw1 = 0;
+    var h2 = 0;
+    var v2 = 0;
+    var pw2 = 0;
     var y = 0;
     var x = 0;
     var o = 0;
-    while (y < h) {
-        x = 0;
-        while (x < w) {
-            o = (y * w + x) * 4;
-            _jpeg_ycc_to_rgb(load8(p0 + y * pw + x), load8(p1 + y * pw + x), load8(p2 + y * pw + x), rgba + o);
-            store8(rgba + o + 3, 255);
-            x = x + 1;
+    var yy = 0;
+    var cb = 0;
+    var cr = 0;
+    if (ncomp == 1) {
+        while (y < h) {
+            x = 0;
+            while (x < w) {
+                yy = load8(p0 + (y * v0 / max_v) * pw0 + (x * h0 / max_h));
+                o = (y * w + x) * 4;
+                store8(rgba + o + 0, yy);
+                store8(rgba + o + 1, yy);
+                store8(rgba + o + 2, yy);
+                store8(rgba + o + 3, 255);
+                x = x + 1;
+            }
+            y = y + 1;
         }
-        y = y + 1;
+    }
+    if (ncomp == 3) {
+        p1 = load64(&planes + 8);
+        p2 = load64(&planes + 16);
+        h1 = load64(&comph + 8);
+        v1 = load64(&compv + 8);
+        pw1 = load64(&comppw + 8);
+        h2 = load64(&comph + 16);
+        v2 = load64(&compv + 16);
+        pw2 = load64(&comppw + 16);
+        y = 0;
+        while (y < h) {
+            x = 0;
+            while (x < w) {
+                yy = load8(p0 + (y * v0 / max_v) * pw0 + (x * h0 / max_h));
+                cb = load8(p1 + (y * v1 / max_v) * pw1 + (x * h1 / max_h));
+                cr = load8(p2 + (y * v2 / max_v) * pw2 + (x * h2 / max_h));
+                o = (y * w + x) * 4;
+                _jpeg_ycc_to_rgb(yy, cb, cr, rgba + o);
+                store8(rgba + o + 3, 255);
+                x = x + 1;
+            }
+            y = y + 1;
+        }
     }
 
     var img = alloc(CHITRA_IMAGE_SIZE);
@@ -2801,7 +2844,7 @@ fn _jpeg_decode_color444(frame, src, len, entropy_start, err_out): i64 {
     store64(img + IMAGE_PIXELS_OFFSET, rgba);
     store64(img + IMAGE_CHANNELS_OFFSET, 4);
     store64(img + IMAGE_SEEN_IEND_OFFSET, 1);
-    store64(img + IMAGE_SRC_CTYPE_OFFSET, 256 + 3);   # JPEG YCbCr sentinel (0x103)
+    store64(img + IMAGE_SRC_CTYPE_OFFSET, 256 + ncomp);   # JPEG sentinel: 0x101 gray / 0x103 YCbCr
     return img;
 }
 
@@ -2817,14 +2860,5 @@ fn chitra_jpeg_decode(src, len, err_out): i64 {
     if (frame == 0) { return 0; }
     var entropy_start = _jpeg_parse_sos(frame, src, len, err_out);
     if (load64(err_out) != 0) { return 0; }
-    var ncomp = chitra_jpeg_frame_num_components(frame);
-    if (ncomp == 1) {
-        return _jpeg_decode_gray(frame, src, len, entropy_start, err_out);
-    }
-    if (chitra_jpeg_frame_max_h(frame) == 1 && chitra_jpeg_frame_max_v(frame) == 1) {
-        return _jpeg_decode_color444(frame, src, len, entropy_start, err_out);
-    }
-    # chroma subsampling (4:2:0 / 4:2:2 / general H,V) lands in bite 7.
-    store64(err_out, chitra_err(CHITRA_ERR_UNSUPPORTED));
-    return 0;
+    return _jpeg_decode_scan(frame, src, len, entropy_start, err_out);
 }

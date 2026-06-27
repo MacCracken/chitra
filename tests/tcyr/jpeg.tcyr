@@ -935,6 +935,216 @@ fn test_decode_color444() {
     return 0;
 }
 
+# ---- bite 7: chroma subsampling + restart markers ----
+
+# 8x8 baseline 4:2:0 JPEG (Y H/V = 2x2, chroma 1x1). One 16x16 MCU = 4 Y blocks
+# + 1 Cb + 1 Cr. Y(0,0) DC=+8 -> flat 129 over the output 8x8; remaining Y blocks
+# DC diff 0; neutral chroma. Entropy: B0 00 00 00.
+fn fx_jpeg_420_8x8(len_out): i64 {
+    var b = alloc(162);
+    var i = 0;
+    store8(b + 0, 0xFF);
+    store8(b + 1, 0xD8);
+    store8(b + 2, 0xFF);
+    store8(b + 3, 0xDB);
+    store8(b + 4, 0x00);
+    store8(b + 5, 0x43);
+    store8(b + 6, 0x00);
+    i = 0;
+    while (i < 64) { store8(b + 7 + i, 1); i = i + 1; }
+    store8(b + 71, 0xFF);
+    store8(b + 72, 0xC0);
+    store8(b + 73, 0x00);
+    store8(b + 74, 0x11);
+    store8(b + 75, 0x08);
+    store8(b + 76, 0x00);
+    store8(b + 77, 0x08);
+    store8(b + 78, 0x00);
+    store8(b + 79, 0x08);
+    store8(b + 80, 0x03);
+    store8(b + 81, 0x01);           # comp 1 (Y): id 1, H/V = 2x2, Tq 0
+    store8(b + 82, 0x22);
+    store8(b + 83, 0x00);
+    store8(b + 84, 0x02);           # comp 2 (Cb): 1x1
+    store8(b + 85, 0x11);
+    store8(b + 86, 0x00);
+    store8(b + 87, 0x03);           # comp 3 (Cr): 1x1
+    store8(b + 88, 0x11);
+    store8(b + 89, 0x00);
+    store8(b + 90, 0xFF);           # DHT (same as ycc)
+    store8(b + 91, 0xC4);
+    store8(b + 92, 0x00);
+    store8(b + 93, 0x32);
+    store8(b + 94, 0x00);
+    store8(b + 95, 0x00);
+    store8(b + 96, 0x01);
+    store8(b + 97, 0x05);
+    store8(b + 98, 0x01);
+    store8(b + 99, 0x01);
+    store8(b + 100, 0x01);
+    store8(b + 101, 0x01);
+    store8(b + 102, 0x01);
+    store8(b + 103, 0x01);
+    store8(b + 104, 0x00);
+    store8(b + 105, 0x00);
+    store8(b + 106, 0x00);
+    store8(b + 107, 0x00);
+    store8(b + 108, 0x00);
+    store8(b + 109, 0x00);
+    store8(b + 110, 0x00);
+    i = 0;
+    while (i < 12) { store8(b + 111 + i, i); i = i + 1; }
+    store8(b + 123, 0x10);
+    store8(b + 124, 0x00);
+    store8(b + 125, 0x02);
+    i = 0;
+    while (i < 14) { store8(b + 126 + i, 0); i = i + 1; }
+    store8(b + 140, 0x00);
+    store8(b + 141, 0x01);
+    store8(b + 142, 0xFF);           # SOS, 3 components
+    store8(b + 143, 0xDA);
+    store8(b + 144, 0x00);
+    store8(b + 145, 0x0C);
+    store8(b + 146, 0x03);
+    store8(b + 147, 0x01);
+    store8(b + 148, 0x00);
+    store8(b + 149, 0x02);
+    store8(b + 150, 0x00);
+    store8(b + 151, 0x03);
+    store8(b + 152, 0x00);
+    store8(b + 153, 0x00);
+    store8(b + 154, 0x3F);
+    store8(b + 155, 0x00);
+    store8(b + 156, 0xB0);           # entropy: Y(0,0)=DC+8, others 0; chroma 0
+    store8(b + 157, 0x00);
+    store8(b + 158, 0x00);
+    store8(b + 159, 0x00);
+    store8(b + 160, 0xFF);
+    store8(b + 161, 0xD9);
+    store64(len_out, 162);
+    return b;
+}
+
+# 16x8 baseline grayscale JPEG with a restart interval of 1 MCU. Two MCUs (one
+# 8x8 block each) separated by an RST0 marker; each MCU's DC=+8 -> flat 129.
+# Entropy: B0 00 (MCU0) FF D0 (RST0) B0 00 (MCU1).
+fn fx_jpeg_gray_restart(len_out): i64 {
+    var b = alloc(160);
+    var i = 0;
+    store8(b + 0, 0xFF);
+    store8(b + 1, 0xD8);
+    store8(b + 2, 0xFF);
+    store8(b + 3, 0xDB);
+    store8(b + 4, 0x00);
+    store8(b + 5, 0x43);
+    store8(b + 6, 0x00);
+    i = 0;
+    while (i < 64) { store8(b + 7 + i, 1); i = i + 1; }
+    store8(b + 71, 0xFF);
+    store8(b + 72, 0xC0);
+    store8(b + 73, 0x00);
+    store8(b + 74, 0x0B);
+    store8(b + 75, 0x08);
+    store8(b + 76, 0x00);
+    store8(b + 77, 0x08);            # Y = 8
+    store8(b + 78, 0x00);
+    store8(b + 79, 0x10);            # X = 16
+    store8(b + 80, 0x01);
+    store8(b + 81, 0x01);
+    store8(b + 82, 0x11);
+    store8(b + 83, 0x00);
+    store8(b + 84, 0xFF);            # DHT
+    store8(b + 85, 0xC4);
+    store8(b + 86, 0x00);
+    store8(b + 87, 0x32);
+    store8(b + 88, 0x00);
+    store8(b + 89, 0x00);
+    store8(b + 90, 0x01);
+    store8(b + 91, 0x05);
+    store8(b + 92, 0x01);
+    store8(b + 93, 0x01);
+    store8(b + 94, 0x01);
+    store8(b + 95, 0x01);
+    store8(b + 96, 0x01);
+    store8(b + 97, 0x01);
+    store8(b + 98, 0x00);
+    store8(b + 99, 0x00);
+    store8(b + 100, 0x00);
+    store8(b + 101, 0x00);
+    store8(b + 102, 0x00);
+    store8(b + 103, 0x00);
+    store8(b + 104, 0x00);
+    i = 0;
+    while (i < 12) { store8(b + 105 + i, i); i = i + 1; }
+    store8(b + 117, 0x10);
+    store8(b + 118, 0x00);
+    store8(b + 119, 0x02);
+    i = 0;
+    while (i < 14) { store8(b + 120 + i, 0); i = i + 1; }
+    store8(b + 134, 0x00);
+    store8(b + 135, 0x01);
+    store8(b + 136, 0xFF);           # DRI, interval = 1
+    store8(b + 137, 0xDD);
+    store8(b + 138, 0x00);
+    store8(b + 139, 0x04);
+    store8(b + 140, 0x00);
+    store8(b + 141, 0x01);
+    store8(b + 142, 0xFF);           # SOS
+    store8(b + 143, 0xDA);
+    store8(b + 144, 0x00);
+    store8(b + 145, 0x08);
+    store8(b + 146, 0x01);
+    store8(b + 147, 0x01);
+    store8(b + 148, 0x00);
+    store8(b + 149, 0x00);
+    store8(b + 150, 0x3F);
+    store8(b + 151, 0x00);
+    store8(b + 152, 0xB0);           # MCU0 entropy
+    store8(b + 153, 0x00);
+    store8(b + 154, 0xFF);           # RST0
+    store8(b + 155, 0xD0);
+    store8(b + 156, 0xB0);           # MCU1 entropy
+    store8(b + 157, 0x00);
+    store8(b + 158, 0xFF);
+    store8(b + 159, 0xD9);
+    store64(len_out, 160);
+    return b;
+}
+
+fn test_decode_420() {
+    var lo = 0;
+    var b = fx_jpeg_420_8x8(&lo);
+    var err = 0;
+    var img = chitra_jpeg_decode(b, lo, &err);
+    assert(img != 0, "4:2:0 decode returns an image");
+    assert_eq(err, 0, "no error");
+    assert_eq(chitra_image_width(img), 8, "width 8");
+    assert_eq(chitra_image_height(img), 8, "height 8");
+    var px = chitra_image_pixels(img);
+    assert_eq(load8(px + 0), 129, "pixel0 R = 129");
+    assert_eq(load8(px + 1), 129, "pixel0 G = 129");
+    assert_eq(load8(px + 2), 129, "pixel0 B = 129");
+    assert_eq(load8(px + 63 * 4 + 0), 129, "pixel63 R = 129");
+    assert_eq(chitra_image_source_color_type(img), 259, "src ctype = 0x103 (YCbCr)");
+    return 0;
+}
+
+fn test_decode_restart() {
+    var lo = 0;
+    var b = fx_jpeg_gray_restart(&lo);
+    var err = 0;
+    var img = chitra_jpeg_decode(b, lo, &err);
+    assert(img != 0, "restart decode returns an image");
+    assert_eq(err, 0, "no error");
+    assert_eq(chitra_image_width(img), 16, "width 16");
+    assert_eq(chitra_image_height(img), 8, "height 8");
+    var px = chitra_image_pixels(img);
+    assert_eq(load8(px + 0), 129, "MCU0 pixel(0,0) = 129");
+    assert_eq(load8(px + 8 * 4 + 0), 129, "MCU1 pixel(8,0) = 129");
+    assert_eq(load8(px + 15 * 4 + 0), 129, "MCU1 pixel(15,0) = 129");
+    return 0;
+}
+
 fn main() {
     test_cur_u16_be();
     test_signature();
@@ -959,6 +1169,8 @@ fn main() {
     test_decode_gray_crop();
     test_ycc_to_rgb();
     test_decode_color444();
+    test_decode_420();
+    test_decode_restart();
     test_reject_progressive();
     test_reject_arithmetic();
     test_reject_mode();

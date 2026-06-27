@@ -103,7 +103,13 @@ and their resolutions:
   decoded to pixels; suite 666 → 684). lint/fmt/vet clean. NOTE: the planned
   `jpeg_scan.cyr`/`jpeg_color.cyr` split was consolidated into `jpeg.cyr` — bite 7
   will refactor the grayscale + 4:4:4 paths into one subsampling-aware loop.
-- Bites 7–9: pending.
+- **Bite 7 — DONE (2026-06-26).** Unified `_jpeg_decode_scan` (replaces the
+  grayscale + 4:4:4 functions): arbitrary per-component Hi/Vi MCU loop, per-plane
+  subsampled decode + box upsampling (4:2:2 / 4:2:0 / general), and DRI/RST0–7
+  restart handling (`_jpeg_br_restart` byte-aligns + consumes the marker, DC
+  predictors reset). `jpeg.tcyr` +16 assertions — 4:2:0 8×8 + 16×8 restart across
+  two MCUs (suite 684 → 700). lint/fmt/vet clean.
+- Bites 8–9: pending.
 
 ## Scope
 

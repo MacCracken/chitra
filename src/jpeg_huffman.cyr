@@ -115,6 +115,26 @@ fn _jpeg_br_init(reader, base, len): i64 {
 fn _jpeg_br_marker(reader): i64 { return load64(reader + BR_MARKER); }
 fn _jpeg_br_pos(reader): i64    { return load64(reader + BR_POS); }
 
+# Resync at a restart-interval boundary (T.81 § F.2.1.3.1 / E.1.1): discard the
+# partial byte (byte-align), then consume the expected RSTn marker (FF D0..D7).
+# After decoding `restart_interval` MCUs the stream is byte-aligned at an RSTn;
+# BR_POS points at its 0xFF (whether or not the bit-reader auto-detected it).
+# Returns 0 on success, -1 if the restart marker is missing/malformed.
+fn _jpeg_br_restart(reader): i64 {
+    store64(reader + BR_CNT, 0);
+    var base = load64(reader + BR_BASE);
+    var pos = load64(reader + BR_POS);
+    var end = load64(reader + BR_END);
+    if (pos + 1 >= end) { return 0 - 1; }
+    if (load8(base + pos) != 0xFF) { return 0 - 1; }
+    var m = load8(base + pos + 1);
+    if (m < 0xD0) { return 0 - 1; }
+    if (m > 0xD7) { return 0 - 1; }
+    store64(reader + BR_POS, pos + 2);
+    store64(reader + BR_MARKER, 0);
+    return 0;
+}
+
 # Load one data byte (8 bits) into the buffer. Only called when CNT == 0. On a
 # stuffing pair (FF 00) the 0xFF is loaded and the 0x00 discarded. On a marker
 # (FF xx, xx != 0) or end-of-data, the marker is recorded (xx, or EOI for a

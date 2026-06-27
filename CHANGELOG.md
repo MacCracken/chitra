@@ -61,6 +61,14 @@ and [`docs/adr/0004-jpeg-decode-model.md`](docs/adr/0004-jpeg-decode-model.md).
   (libjpeg jdcolor constants) emits RGBA8. `source_color_type` = `0x103`.
   `jpeg.tcyr`: +18 assertions — direct YCbCr→RGB known-answers (incl. clamp) and
   a complete hand-built 8×8 4:4:4 JPEG decoded to pixels (suite total 684).
+- **JPEG chroma subsampling + restart markers (bite 7)** — the grayscale and
+  4:4:4 paths are unified into one subsampling-aware `_jpeg_decode_scan` handling
+  arbitrary per-component Hi/Vi: the MCU is max_h×max_v data units, each
+  component decodes Hi×Vi blocks into its own subsampled plane, then box-upsamples
+  to full resolution (so 4:2:2 / 4:2:0 / general sampling all work). DRI is parsed
+  and RST0–7 restart intervals reset the DC predictors and byte-align the entropy
+  stream (`_jpeg_br_restart`). `jpeg.tcyr`: +16 assertions — a 4:2:0 8×8 decode
+  and a 16×8 restart-interval decode across two MCUs (suite total 700).
 
 ## [0.2.1] — 2026-06-26
 

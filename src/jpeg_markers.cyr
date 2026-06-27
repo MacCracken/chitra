@@ -131,6 +131,7 @@ fn _jpeg_marker_action(m): i64 {
     if (m == 0xDA) { return 2; }                          # SOS — end of header scan
     if (m == 0xDB) { return 5; }                          # DQT — parse
     if (m == 0xC4) { return 6; }                          # DHT — parse
+    if (m == 0xDD) { return 7; }                          # DRI — parse restart interval
     if (m == 0xC2) { return CHITRA_ERR_JPEG_PROGRESSIVE; }
     if (m == 0xC9) { return CHITRA_ERR_JPEG_ARITHMETIC; } # SOF9 ext-seq arithmetic
     if (m == 0xCA) { return CHITRA_ERR_JPEG_ARITHMETIC; } # SOF10 progressive arithmetic
@@ -282,6 +283,19 @@ fn _jpeg_parse_dht(cur, frame): i64 {
         }
     }
     return rc;
+}
+
+# ================================================================
+# Parse a DRI segment (T.81 § B.2.4.4): Lr(2) Ri(2). Sets the restart interval
+# (number of MCUs between RSTn markers; 0 disables). Returns 0 or a CHITRA_ERR_*.
+# ================================================================
+fn _jpeg_parse_dri(cur, frame): i64 {
+    if (_cur_can_read(cur, 2) == 0) { return CHITRA_ERR_TRUNCATED; }
+    var seglen = _cur_u16_be(cur);
+    if (seglen != 4) { return CHITRA_ERR_JPEG_MARKER; }
+    if (_cur_can_read(cur, 2) == 0) { return CHITRA_ERR_TRUNCATED; }
+    store64(frame + JF_RESTART_INTERVAL, _cur_u16_be(cur));
+    return 0;
 }
 
 # ================================================================
@@ -460,6 +474,10 @@ fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
             }
             if (act == 6) {
                 rc = _jpeg_parse_dht(&cur, frame);
+                if (rc != 0) { done = 1; }
+            }
+            if (act == 7) {
+                rc = _jpeg_parse_dri(&cur, frame);
                 if (rc != 0) { done = 1; }
             }
             if (act == 2) {
