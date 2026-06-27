@@ -1,0 +1,85 @@
+# @internal — JPEG Huffman decode tables (0.3.0, bite 3).
+# jpeg_huffman.cyr — the canonical Huffman decode-table representation and its
+# construction from a DHT's BITS (code-length counts) + HUFFVAL (symbols). This
+# module is frame-independent table machinery, so it is included BEFORE
+# jpeg_markers.cyr (whose DHT parser drives the build into frame-owned storage).
+# The entropy bit-reader + the DECODE procedure land in bite 4.
+#
+# Construction follows ITU-T T.81 Annex C (HUFFSIZE/HUFFCODE generation) folded
+# into the Annex F figure F.15 decoder-table derivation (MINCODE/MAXCODE/VALPTR).
+# The DECODE procedure (Annex F.2.2.3) the next bite implements:
+#   code = nextbit(); L = 1
+#   while code > maxcode[L]: L += 1; code = (code << 1) | nextbit()
+#   value = huffval[ valptr[L] + code - mincode[L] ]
+# maxcode[L] == -1 marks "no codes of length L".
+
+# ================================================================
+# HuffTable record (i64 fields). One per table; 8 live in the frame (4 DC,
+# 4 AC). Codes are at most 16 bits; symbols at most 256 (T.81 § B.2.4.2).
+#   +0    mincode[0..16]   (17 i64) — smallest code of each length L
+#   +136  maxcode[0..16]   (17 i64) — largest code of each length L (-1 = none)
+#   +272  valptr[0..16]    (17 i64) — huffval index of first symbol of length L
+#   +408  count            (1 i64)  — number of symbols (Σ BITS)
+#   +416  huffval[0..255]  (256 i64)— symbol values, in DHT order
+# ================================================================
+var HT_MINCODE = 0;
+var HT_MAXCODE = 136;    # 17*8
+var HT_VALPTR  = 272;    # 34*8
+var HT_COUNT   = 408;    # 51*8
+var HT_HUFFVAL = 416;    # 52*8
+var HT_SIZE    = 2464;   # (52 + 256) * 8
+
+fn _jpeg_huff_mincode(t, L): i64 { return load64(t + HT_MINCODE + L * 8); }
+fn _jpeg_huff_maxcode(t, L): i64 { return load64(t + HT_MAXCODE + L * 8); }
+fn _jpeg_huff_valptr(t, L): i64  { return load64(t + HT_VALPTR + L * 8); }
+fn _jpeg_huff_count(t): i64      { return load64(t + HT_COUNT); }
+fn _jpeg_huff_val(t, i): i64     { return load64(t + HT_HUFFVAL + i * 8); }
+
+# ================================================================
+# Build the MINCODE/MAXCODE/VALPTR decode arrays from BITS. `table` already has
+# its HUFFVAL[] and COUNT filled by the caller; `bits` is a 17-i64 array with
+# bits[L] = number of codes of length L (L in 1..16; index 0 unused).
+#
+# Canonical codes are consecutive integers per length, the whole space shifting
+# left by one bit at each length step. Over-subscription (more codes than the
+# length can hold) is rejected — the security-critical check that stops a
+# malformed table from producing out-of-range code values. Returns 0 on success
+# or CHITRA_ERR_JPEG_DHT.
+# ================================================================
+fn _jpeg_huff_build(table, bits): i64 {
+    var z = 0;
+    while (z <= 16) {
+        store64(table + HT_MINCODE + z * 8, 0);
+        store64(table + HT_MAXCODE + z * 8, 0 - 1);
+        store64(table + HT_VALPTR + z * 8, 0);
+        z = z + 1;
+    }
+    var code = 0;
+    var j = 0;          # running symbol index into HUFFVAL
+    var L = 1;
+    var cnt = 0;
+    var rc = 0;
+    var done = 0;
+    while (done == 0) {
+        if (L > 16) { done = 1; }
+        if (done == 0) {
+            cnt = load64(bits + L * 8);
+            if (cnt > 0) {
+                store64(table + HT_VALPTR + L * 8, j);
+                store64(table + HT_MINCODE + L * 8, code);
+                code = code + cnt - 1;                    # largest code of length L
+                store64(table + HT_MAXCODE + L * 8, code);
+                if (code >= (1 << L)) { rc = CHITRA_ERR_JPEG_DHT; done = 1; }
+                if (done == 0) {
+                    code = code + 1;
+                    j = j + cnt;
+                }
+            }
+            if (done == 0) {
+                code = code << 1;
+                L = L + 1;
+            }
+        }
+    }
+    return rc;
+}

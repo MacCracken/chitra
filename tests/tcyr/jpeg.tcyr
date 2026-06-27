@@ -81,6 +81,106 @@ fn fx_jpeg_dqt_sof(len_out): i64 {
     return b;
 }
 
+# SOI + DHT(standard Annex K.3.3 DC-luminance table) + SOF0 + SOS.
+# BITS = 0,1,5,1,1,1,1,1,1,0,... ; HUFFVAL = 0..11 (12 symbols).
+fn fx_jpeg_dht_sof(len_out): i64 {
+    var b = alloc(56);
+    store8(b + 0, 0xFF);    # SOI
+    store8(b + 1, 0xD8);
+    store8(b + 2, 0xFF);    # DHT
+    store8(b + 3, 0xC4);
+    store8(b + 4, 0x00);    # Lh = 31 (2 + 1 + 16 + 12)
+    store8(b + 5, 0x1F);
+    store8(b + 6, 0x00);    # Tc=0 (DC) Th=0
+    store8(b + 7, 0x00);    # BITS L1 = 0
+    store8(b + 8, 0x01);    # L2 = 1
+    store8(b + 9, 0x05);    # L3 = 5
+    store8(b + 10, 0x01);   # L4 = 1
+    store8(b + 11, 0x01);   # L5 = 1
+    store8(b + 12, 0x01);   # L6 = 1
+    store8(b + 13, 0x01);   # L7 = 1
+    store8(b + 14, 0x01);   # L8 = 1
+    store8(b + 15, 0x01);   # L9 = 1
+    store8(b + 16, 0x00);   # L10 = 0
+    store8(b + 17, 0x00);   # L11
+    store8(b + 18, 0x00);   # L12
+    store8(b + 19, 0x00);   # L13
+    store8(b + 20, 0x00);   # L14
+    store8(b + 21, 0x00);   # L15
+    store8(b + 22, 0x00);   # L16
+    var k = 0;
+    while (k < 12) {
+        store8(b + 23 + k, k);   # HUFFVAL = 0..11
+        k = k + 1;
+    }
+    store8(b + 35, 0xFF);   # SOF0
+    store8(b + 36, 0xC0);
+    store8(b + 37, 0x00);   # Lf = 17
+    store8(b + 38, 0x11);
+    store8(b + 39, 0x08);   # P = 8
+    store8(b + 40, 0x00);   # Y = 8
+    store8(b + 41, 0x08);
+    store8(b + 42, 0x00);   # X = 8
+    store8(b + 43, 0x08);
+    store8(b + 44, 0x03);   # Nf = 3
+    store8(b + 45, 0x01);   # comp 1: id=1 H=2 V=2 Tq=0
+    store8(b + 46, 0x22);
+    store8(b + 47, 0x00);
+    store8(b + 48, 0x02);   # comp 2: id=2 H=1 V=1 Tq=1
+    store8(b + 49, 0x11);
+    store8(b + 50, 0x01);
+    store8(b + 51, 0x03);   # comp 3: id=3 H=1 V=1 Tq=1
+    store8(b + 52, 0x11);
+    store8(b + 53, 0x01);
+    store8(b + 54, 0xFF);   # SOS
+    store8(b + 55, 0xDA);
+    store64(len_out, 56);
+    return b;
+}
+
+# SOI + a single DHT table header with the given Tc/Th byte (BITS all zero).
+# Lh = 19 so the 17-byte minimum table header is present.
+fn fx_jpeg_dht_bad_class(len_out, tcth): i64 {
+    var b = alloc(23);
+    store8(b + 0, 0xFF);
+    store8(b + 1, 0xD8);
+    store8(b + 2, 0xFF);
+    store8(b + 3, 0xC4);
+    store8(b + 4, 0x00);
+    store8(b + 5, 0x13);   # Lh = 19
+    store8(b + 6, tcth);
+    var k = 0;
+    while (k < 16) {
+        store8(b + 7 + k, 0x00);
+        k = k + 1;
+    }
+    store64(len_out, 23);
+    return b;
+}
+
+# SOI + DHT with an over-subscribed table: 3 codes of length 1 (impossible).
+fn fx_jpeg_dht_oversub(len_out): i64 {
+    var b = alloc(26);
+    store8(b + 0, 0xFF);
+    store8(b + 1, 0xD8);
+    store8(b + 2, 0xFF);
+    store8(b + 3, 0xC4);
+    store8(b + 4, 0x00);
+    store8(b + 5, 0x16);   # Lh = 22 (2 + 1 + 16 + 3)
+    store8(b + 6, 0x00);   # Tc=0 Th=0
+    store8(b + 7, 0x03);   # L1 = 3 codes of length 1 -> over-subscribed
+    var k = 0;
+    while (k < 15) {
+        store8(b + 8 + k, 0x00);
+        k = k + 1;
+    }
+    store8(b + 23, 0x00);  # HUFFVAL 0,1,2
+    store8(b + 24, 0x01);
+    store8(b + 25, 0x02);
+    store64(len_out, 26);
+    return b;
+}
+
 # A 4-byte SOI + one marker stream, for cases that reject on the marker itself.
 fn fx_jpeg4(len_out, b0, b1, b2, b3): i64 {
     var b = alloc(4);
@@ -326,11 +426,73 @@ fn test_reject_eoi_before_sos() {
     return 0;
 }
 
+fn test_scan_dht() {
+    var lo = 0;
+    var b = fx_jpeg_dht_sof(&lo);
+    var err = 0;
+    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    assert(f != 0, "dht+sof scan returns a frame");
+    assert_eq(err, 0, "no error");
+    assert_eq(chitra_jpeg_frame_huff_present(f), 1, "DC table slot 0 present");
+    var t = chitra_jpeg_frame_huff(f, 0, 0);
+    assert_eq(_jpeg_huff_count(t), 12, "12 symbols");
+    # canonical codes for the Annex K.3.3 DC-luminance table
+    assert_eq(_jpeg_huff_maxcode(t, 1), 0 - 1, "L1 maxcode = -1 (no codes)");
+    assert_eq(_jpeg_huff_mincode(t, 2), 0, "L2 mincode = 0");
+    assert_eq(_jpeg_huff_maxcode(t, 2), 0, "L2 maxcode = 0");
+    assert_eq(_jpeg_huff_valptr(t, 2), 0, "L2 valptr = 0");
+    assert_eq(_jpeg_huff_mincode(t, 3), 2, "L3 mincode = 2 (0b010)");
+    assert_eq(_jpeg_huff_maxcode(t, 3), 6, "L3 maxcode = 6 (0b110)");
+    assert_eq(_jpeg_huff_valptr(t, 3), 1, "L3 valptr = 1");
+    assert_eq(_jpeg_huff_mincode(t, 4), 14, "L4 mincode = 14 (0b1110)");
+    assert_eq(_jpeg_huff_valptr(t, 4), 6, "L4 valptr = 6");
+    assert_eq(_jpeg_huff_mincode(t, 9), 510, "L9 mincode = 510");
+    assert_eq(_jpeg_huff_valptr(t, 9), 11, "L9 valptr = 11");
+    assert_eq(_jpeg_huff_val(t, 0), 0, "huffval[0] = 0");
+    assert_eq(_jpeg_huff_val(t, 11), 11, "huffval[11] = 11");
+    assert_eq(chitra_jpeg_frame_width(f), 8, "width 8 after dht");
+    return 0;
+}
+
+fn test_reject_dht_class() {
+    var lo = 0;
+    var b = fx_jpeg_dht_bad_class(&lo, 0x20);   # Tc=2 (only 0/1 valid)
+    var err = 0;
+    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    assert_eq(f, 0, "DHT class 2 rejected");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_DHT, "dht class err code");
+    return 0;
+}
+
+fn test_reject_dht_tableid() {
+    var lo = 0;
+    var b = fx_jpeg_dht_bad_class(&lo, 0x04);   # Th=4 (only 0..3 valid)
+    var err = 0;
+    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    assert_eq(f, 0, "DHT table id 4 rejected");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_DHT, "dht tableid err code");
+    return 0;
+}
+
+fn test_reject_dht_oversub() {
+    var lo = 0;
+    var b = fx_jpeg_dht_oversub(&lo);
+    var err = 0;
+    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    assert_eq(f, 0, "over-subscribed Huffman table rejected");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_DHT, "dht oversub err code");
+    return 0;
+}
+
 fn main() {
     test_cur_u16_be();
     test_signature();
     test_scan_baseline();
     test_scan_dqt();
+    test_scan_dht();
+    test_reject_dht_class();
+    test_reject_dht_tableid();
+    test_reject_dht_oversub();
     test_reject_progressive();
     test_reject_arithmetic();
     test_reject_mode();

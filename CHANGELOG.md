@@ -25,6 +25,13 @@ and [`docs/adr/0004-jpeg-decode-model.md`](docs/adr/0004-jpeg-decode-model.md).
   sampling factors clamped to 1..4 (rejecting 0 — the CVE-2018-11212
   divide-by-zero), duplicate component ids rejected, and ΣHi·Vi ≤ 10 enforced
   before any MCU geometry is derived. `jpeg.tcyr`: +27 assertions (suite total 580).
+- **JPEG Huffman tables (bite 3)** — new `src/jpeg_huffman.cyr`: the canonical
+  Huffman decode-table representation (`mincode`/`maxcode`/`valptr`/`huffval`)
+  and its construction from a DHT's BITS + HUFFVAL (ITU-T T.81 Annex C + F),
+  with over-subscription rejection. `jpeg_markers.cyr` parses DHT segments
+  (`Tc ∈ {0,1}`, `Th < 4`, Σcounts ≤ 256, in-bounds) and builds up to 4 DC + 4
+  AC tables into frame storage. `jpeg.tcyr`: +24 assertions verifying the built
+  table against the standard Annex K.3.3 DC-luminance codes (suite total 604).
 
 ## [0.2.1] — 2026-06-26
 

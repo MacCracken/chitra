@@ -1455,6 +1455,94 @@ fn chitra_version(): i64 {
     return 201;
 }
 
+# --- jpeg_huffman.cyr ---
+
+# @internal — JPEG Huffman decode tables (0.3.0, bite 3).
+# jpeg_huffman.cyr — the canonical Huffman decode-table representation and its
+# construction from a DHT's BITS (code-length counts) + HUFFVAL (symbols). This
+# module is frame-independent table machinery, so it is included BEFORE
+# jpeg_markers.cyr (whose DHT parser drives the build into frame-owned storage).
+# The entropy bit-reader + the DECODE procedure land in bite 4.
+#
+# Construction follows ITU-T T.81 Annex C (HUFFSIZE/HUFFCODE generation) folded
+# into the Annex F figure F.15 decoder-table derivation (MINCODE/MAXCODE/VALPTR).
+# The DECODE procedure (Annex F.2.2.3) the next bite implements:
+#   code = nextbit(); L = 1
+#   while code > maxcode[L]: L += 1; code = (code << 1) | nextbit()
+#   value = huffval[ valptr[L] + code - mincode[L] ]
+# maxcode[L] == -1 marks "no codes of length L".
+
+# ================================================================
+# HuffTable record (i64 fields). One per table; 8 live in the frame (4 DC,
+# 4 AC). Codes are at most 16 bits; symbols at most 256 (T.81 § B.2.4.2).
+#   +0    mincode[0..16]   (17 i64) — smallest code of each length L
+#   +136  maxcode[0..16]   (17 i64) — largest code of each length L (-1 = none)
+#   +272  valptr[0..16]    (17 i64) — huffval index of first symbol of length L
+#   +408  count            (1 i64)  — number of symbols (Σ BITS)
+#   +416  huffval[0..255]  (256 i64)— symbol values, in DHT order
+# ================================================================
+var HT_MINCODE = 0;
+var HT_MAXCODE = 136;    # 17*8
+var HT_VALPTR  = 272;    # 34*8
+var HT_COUNT   = 408;    # 51*8
+var HT_HUFFVAL = 416;    # 52*8
+var HT_SIZE    = 2464;   # (52 + 256) * 8
+
+fn _jpeg_huff_mincode(t, L): i64 { return load64(t + HT_MINCODE + L * 8); }
+fn _jpeg_huff_maxcode(t, L): i64 { return load64(t + HT_MAXCODE + L * 8); }
+fn _jpeg_huff_valptr(t, L): i64  { return load64(t + HT_VALPTR + L * 8); }
+fn _jpeg_huff_count(t): i64      { return load64(t + HT_COUNT); }
+fn _jpeg_huff_val(t, i): i64     { return load64(t + HT_HUFFVAL + i * 8); }
+
+# ================================================================
+# Build the MINCODE/MAXCODE/VALPTR decode arrays from BITS. `table` already has
+# its HUFFVAL[] and COUNT filled by the caller; `bits` is a 17-i64 array with
+# bits[L] = number of codes of length L (L in 1..16; index 0 unused).
+#
+# Canonical codes are consecutive integers per length, the whole space shifting
+# left by one bit at each length step. Over-subscription (more codes than the
+# length can hold) is rejected — the security-critical check that stops a
+# malformed table from producing out-of-range code values. Returns 0 on success
+# or CHITRA_ERR_JPEG_DHT.
+# ================================================================
+fn _jpeg_huff_build(table, bits): i64 {
+    var z = 0;
+    while (z <= 16) {
+        store64(table + HT_MINCODE + z * 8, 0);
+        store64(table + HT_MAXCODE + z * 8, 0 - 1);
+        store64(table + HT_VALPTR + z * 8, 0);
+        z = z + 1;
+    }
+    var code = 0;
+    var j = 0;          # running symbol index into HUFFVAL
+    var L = 1;
+    var cnt = 0;
+    var rc = 0;
+    var done = 0;
+    while (done == 0) {
+        if (L > 16) { done = 1; }
+        if (done == 0) {
+            cnt = load64(bits + L * 8);
+            if (cnt > 0) {
+                store64(table + HT_VALPTR + L * 8, j);
+                store64(table + HT_MINCODE + L * 8, code);
+                code = code + cnt - 1;                    # largest code of length L
+                store64(table + HT_MAXCODE + L * 8, code);
+                if (code >= (1 << L)) { rc = CHITRA_ERR_JPEG_DHT; done = 1; }
+                if (done == 0) {
+                    code = code + 1;
+                    j = j + cnt;
+                }
+            }
+            if (done == 0) {
+                code = code << 1;
+                L = L + 1;
+            }
+        }
+    }
+    return rc;
+}
+
 # --- jpeg_markers.cyr ---
 
 # @internal — JPEG (JFIF/EXIF) baseline marker + segment framing (0.3.0).
@@ -1468,10 +1556,12 @@ fn chitra_version(): i64 {
 #   bite 1 — signature (SOI 0xFFD8), the marker/segment walk up to SOS, reject
 #            every non-baseline mode with a distinct error.
 #   bite 2 — parse SOF0 component specs (id / H / V / quant-selector, max H/V)
-#            and DQT quantization tables into the frame, with the sampling-factor
-#            security guards (Hi,Vi in 1..4 — reject 0 per CVE-2018-11212
-#            divide-by-zero; reject duplicate component ids; ΣHi·Vi ≤ 10).
-# DHT / DRI / APPn / COM payloads are still skipped here; later bites parse them.
+#            and DQT quantization tables, with the sampling-factor security
+#            guards (Hi,Vi in 1..4 — reject 0 per CVE-2018-11212; reject
+#            duplicate component ids; ΣHi·Vi ≤ 10).
+#   bite 3 — parse DHT and build canonical Huffman decode tables (via
+#            jpeg_huffman.cyr) into frame storage (4 DC + 4 AC).
+# DRI / APPn / COM payloads are still skipped here; later bites parse them.
 # See docs/adr/0004-jpeg-decode-model.md + docs/proposals/jpeg-baseline-decoder.md.
 #
 # JPEG marker legend (the byte after a 0xFF; ITU-T T.81 Table B.1):
@@ -1487,10 +1577,11 @@ var CHITRA_MAX_COMPONENTS     = 4;    # baseline accepts 1 or 3; this caps the f
 var CHITRA_MAX_SAMP_FACTOR    = 4;    # Hi, Vi each in 1..4 (T.81 § B.2.2)
 var CHITRA_MAX_BLOCKS_PER_MCU = 10;   # ΣHi·Vi ≤ 10 data units per MCU (T.81 § A.2.2)
 var CHITRA_MAX_QUANT_TABLES   = 4;    # Tq in 0..3
+var CHITRA_MAX_HUFF_TABLES    = 4;    # Th in 0..3 (per class)
 
 # ================================================================
 # ChitraJpegFrame — the marker-walk handoff record (internal). Filled by the
-# scan; later bites (Huffman tables, restart interval) extend it.
+# scan; later bites (restart interval, scan selectors) extend it.
 # CHITRA_JPEG_FRAME_SIZE reserves room so the alloc size is stable as fields
 # are added across the 0.3.0 arc.
 #   +0   width            (i64 — pixels)
@@ -1504,6 +1595,8 @@ var CHITRA_MAX_QUANT_TABLES   = 4;    # Tq in 0..3
 #   +64  quant            (ptr — 4*64 i64 quant-table storage, zig-zag order)
 #   +72  quant_present    (i64 — bitmask of quant tables seen, bit Tq)
 #   +80  components       (4 × 32-byte specs: +0 id, +8 H, +16 V, +24 Tq)
+#   +208 huff             (ptr — 8 HuffTable records: slots 0..3 DC, 4..7 AC)
+#   +216 huff_present     (i64 — bitmask of Huffman tables seen, bit Tc*4+Th)
 # ================================================================
 var JF_WIDTH            = 0;
 var JF_HEIGHT           = 8;
@@ -1521,6 +1614,8 @@ var JF_COMP_ID          = 0;
 var JF_COMP_H           = 8;
 var JF_COMP_V           = 16;
 var JF_COMP_TQ          = 24;
+var JF_HUFF             = 208;
+var JF_HUFF_PRESENT     = 216;
 var CHITRA_JPEG_FRAME_SIZE = 256;
 
 fn chitra_jpeg_frame_width(f): i64          { return load64(f + JF_WIDTH); }
@@ -1532,6 +1627,7 @@ fn chitra_jpeg_frame_max_h(f): i64          { return load64(f + JF_MAX_H); }
 fn chitra_jpeg_frame_max_v(f): i64          { return load64(f + JF_MAX_V); }
 fn chitra_jpeg_frame_restart_interval(f): i64 { return load64(f + JF_RESTART_INTERVAL); }
 fn chitra_jpeg_frame_quant_present(f): i64  { return load64(f + JF_QUANT_PRESENT); }
+fn chitra_jpeg_frame_huff_present(f): i64   { return load64(f + JF_HUFF_PRESENT); }
 
 # Per-component accessors. `i` is the component index (0..num_components-1).
 fn chitra_jpeg_frame_comp_id(f, i): i64 { return load64(f + JF_COMP + i * JF_COMP_STRIDE + JF_COMP_ID); }
@@ -1543,6 +1639,12 @@ fn chitra_jpeg_frame_comp_tq(f, i): i64 { return load64(f + JF_COMP + i * JF_COM
 # dequant time (bite 5); this stores the raw spec order.
 fn chitra_jpeg_frame_quant(f, t, k): i64 {
     return load64(load64(f + JF_QUANT) + (t * 64 + k) * 8);
+}
+
+# HuffTable ptr for class (0=DC, 1=AC) and id (0..3). The HuffTable layout +
+# accessors (_jpeg_huff_*) live in jpeg_huffman.cyr.
+fn chitra_jpeg_frame_huff(f, class, id): i64 {
+    return load64(f + JF_HUFF) + (class * 4 + id) * HT_SIZE;
 }
 
 # Bump-allocator no-op (matches chitra_raw_free / chitra_image_free). Safe on 0.
@@ -1560,14 +1662,15 @@ fn chitra_jpeg_check_signature(src, len): i64 {
 
 # ================================================================
 # Marker classifier. Returns an ACTION (1=SOF0/parse, 2=SOS/stop,
-# 3=standalone/no-length, 4=length-bearing/skip, 5=DQT/parse) or a CHITRA_ERR_*
-# reject code (>=13) for any non-baseline mode. Action values 1..5 never collide
-# with the JPEG error codes (13..23).
+# 3=standalone/no-length, 4=length-bearing/skip, 5=DQT/parse, 6=DHT/parse) or a
+# CHITRA_ERR_* reject code (>=13) for any non-baseline mode. Action values 1..6
+# never collide with the JPEG error codes (13..23).
 # ================================================================
 fn _jpeg_marker_action(m): i64 {
     if (m == 0xC0) { return 1; }                          # SOF0 baseline — parse
     if (m == 0xDA) { return 2; }                          # SOS — end of header scan
     if (m == 0xDB) { return 5; }                          # DQT — parse
+    if (m == 0xC4) { return 6; }                          # DHT — parse
     if (m == 0xC2) { return CHITRA_ERR_JPEG_PROGRESSIVE; }
     if (m == 0xC9) { return CHITRA_ERR_JPEG_ARITHMETIC; } # SOF9 ext-seq arithmetic
     if (m == 0xCA) { return CHITRA_ERR_JPEG_ARITHMETIC; } # SOF10 progressive arithmetic
@@ -1584,7 +1687,7 @@ fn _jpeg_marker_action(m): i64 {
     if (m == 0xD9) { return CHITRA_ERR_JPEG_MARKER; }     # EOI before SOS — no scan present
     if (m >= 0xD0 && m <= 0xD7) { return 3; }             # RSTn standalone
     if (m == 0x01) { return 3; }                          # TEM standalone
-    return 4;   # APPn / COM / DHT / DRI / DNL / ... — length-bearing, skip for now
+    return 4;   # APPn / COM / DRI / DNL / ... — length-bearing, skip for now
 }
 
 # ================================================================
@@ -1633,6 +1736,88 @@ fn _jpeg_parse_dqt(cur, frame): i64 {
                 present = load64(frame + JF_QUANT_PRESENT);
                 present = present | (1 << tq);
                 store64(frame + JF_QUANT_PRESENT, present);
+            }
+        }
+    }
+    return rc;
+}
+
+# ================================================================
+# Parse a DHT segment (T.81 § B.2.4.2). Cursor is at the 2-byte length field.
+# A DHT may carry multiple tables; each is Tc/Th (class/id) + 16 BITS counts +
+# Σcounts symbol bytes. Validates Tc in {0,1}, Th < 4, Σcounts ≤ 256 and
+# in-bounds, then builds the canonical decode table (jpeg_huffman.cyr) into the
+# frame's storage (slot = Tc*4 + Th). Returns 0 on success or a CHITRA_ERR_* code.
+# ================================================================
+fn _jpeg_parse_dht(cur, frame): i64 {
+    if (_cur_can_read(cur, 2) == 0) { return CHITRA_ERR_TRUNCATED; }
+    var seglen = _cur_u16_be(cur);
+    if (seglen < 2) { return CHITRA_ERR_JPEG_DHT; }
+    var remaining = seglen - 2;
+    if (_cur_can_read(cur, remaining) == 0) { return CHITRA_ERR_TRUNCATED; }
+    var huff = load64(frame + JF_HUFF);
+    var bits[136];           # 17 i64 (index 1..16 = BITS counts)
+    var rc = 0;
+    var done = 0;
+    var tcth = 0;
+    var tc = 0;
+    var th = 0;
+    var total = 0;
+    var L = 0;
+    var cnt = 0;
+    var slot = 0;
+    var table = 0;
+    var i = 0;
+    var v = 0;
+    var present = 0;
+    while (done == 0) {
+        if (remaining <= 0) { done = 1; }
+        if (done == 0) {
+            # each table header is 1 (Tc/Th) + 16 (BITS) bytes minimum
+            if (remaining < 17) { rc = CHITRA_ERR_JPEG_DHT; done = 1; }
+        }
+        if (done == 0) {
+            tcth = _cur_u8(cur);
+            remaining = remaining - 1;
+            tc = (tcth >> 4) & 15;
+            th = tcth & 15;
+            if (tc > 1) { rc = CHITRA_ERR_JPEG_DHT; done = 1; }      # class 0=DC, 1=AC
+            if (done == 0) {
+                if (th >= CHITRA_MAX_HUFF_TABLES) { rc = CHITRA_ERR_JPEG_DHT; done = 1; }
+            }
+        }
+        if (done == 0) {
+            total = 0;
+            L = 1;
+            while (L <= 16) {
+                cnt = _cur_u8(cur);
+                store64(&bits + L * 8, cnt);
+                total = total + cnt;
+                L = L + 1;
+            }
+            remaining = remaining - 16;
+            if (total > 256) { rc = CHITRA_ERR_JPEG_DHT; done = 1; }
+        }
+        if (done == 0) {
+            if (remaining < total) { rc = CHITRA_ERR_JPEG_DHT; done = 1; }
+        }
+        if (done == 0) {
+            slot = tc * 4 + th;
+            table = huff + slot * HT_SIZE;
+            store64(table + HT_COUNT, total);
+            i = 0;
+            while (i < total) {
+                v = _cur_u8(cur);
+                store64(table + HT_HUFFVAL + i * 8, v);
+                i = i + 1;
+            }
+            remaining = remaining - total;
+            rc = _jpeg_huff_build(table, &bits);
+            if (rc != 0) { done = 1; }
+            if (done == 0) {
+                present = load64(frame + JF_HUFF_PRESENT);
+                present = present | (1 << slot);
+                store64(frame + JF_HUFF_PRESENT, present);
             }
         }
     }
@@ -1730,9 +1915,9 @@ fn _jpeg_parse_sof0(cur, frame): i64 {
 
 # ================================================================
 # chitra_jpeg_scan_markers — validate the JPEG marker structure from SOI up to
-# SOS, parsing DQT tables and the SOF0 frame header and rejecting non-baseline
-# modes. Returns a ChitraJpegFrame ptr (caller-owned) on success, or 0 with
-# *err_out set to a ChitraErr. Mirrors chitra_png_parse_raw's (ptr, err_out) split.
+# SOS, parsing DQT/DHT tables and the SOF0 frame header and rejecting
+# non-baseline modes. Returns a ChitraJpegFrame ptr (caller-owned) on success,
+# or 0 with *err_out set to a ChitraErr. Mirrors the (ptr, err_out) split.
 #
 # The walk always advances >= 2 bytes per iteration (the FF + marker code) or
 # terminates on the can_read(2) gate, so it cannot loop forever on bad input.
@@ -1754,6 +1939,7 @@ fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
     store64(frame + JF_MAX_V, 0);
     store64(frame + JF_RESTART_INTERVAL, 0);
     store64(frame + JF_QUANT_PRESENT, 0);
+    store64(frame + JF_HUFF_PRESENT, 0);
     var quant = alloc(CHITRA_MAX_QUANT_TABLES * 64 * 8);
     if (quant == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
     store64(frame + JF_QUANT, quant);
@@ -1762,6 +1948,9 @@ fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
         store64(quant + z * 8, 0);
         z = z + 1;
     }
+    var huff = alloc(8 * HT_SIZE);
+    if (huff == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
+    store64(frame + JF_HUFF, huff);
 
     var cur[24];
     _cur_init(&cur, src, len);
@@ -1806,6 +1995,10 @@ fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
             }
             if (act == 5) {
                 rc = _jpeg_parse_dqt(&cur, frame);
+                if (rc != 0) { done = 1; }
+            }
+            if (act == 6) {
+                rc = _jpeg_parse_dht(&cur, frame);
                 if (rc != 0) { done = 1; }
             }
             if (act == 2) {

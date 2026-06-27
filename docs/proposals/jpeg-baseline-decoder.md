@@ -71,7 +71,14 @@ and their resolutions:
   quant-selector, max H/V) and DQT quant-table parse into `ChitraJpegFrame`,
   with the sampling-factor security guards (1..4, no zero, no duplicate id,
   ΣHi·Vi ≤ 10). `jpeg.tcyr` +27 assertions (suite 553 → 580). lint/fmt/vet clean.
-- Bites 3–9: pending.
+- **Bite 3 — DONE (2026-06-26).** New `src/jpeg_huffman.cyr` (frame-independent
+  table machinery, included before `jpeg_markers.cyr`): canonical Huffman
+  decode-table build (`mincode`/`maxcode`/`valptr`, T.81 Annex C + F) with
+  over-subscription rejection. DHT parser in `jpeg_markers.cyr` validates
+  `Tc/Th`/counts and builds 4 DC + 4 AC tables into the frame. `jpeg.tcyr` +24
+  assertions checked against the Annex K.3.3 standard table (suite 580 → 604).
+  lint/fmt/vet clean.
+- Bites 4–9: pending.
 
 ## Scope
 
