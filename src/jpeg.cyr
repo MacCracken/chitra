@@ -72,6 +72,8 @@ fn _jpeg_parse_sos(frame, src, len, err_out): i64 {
     var ta = 0;
     var j = 0;
     var found = 0;
+    var dupcs = 0;
+    var seencs[32];
     while (done == 0) {
         if (i >= ns) { done = 1; }
         if (done == 0) {
@@ -79,7 +81,19 @@ fn _jpeg_parse_sos(frame, src, len, err_out): i64 {
             tdta = _cur_u8(&cur);
             td = (tdta >> 4) & 15;
             ta = tdta & 15;
-            if (td >= CHITRA_MAX_HUFF_TABLES) { rc = CHITRA_ERR_JPEG_SOS; done = 1; }
+            # duplicate component selector (Cs): each scan Cs must be distinct
+            # (T.81 § B.2.3).
+            dupcs = 0;
+            j = 0;
+            while (j < i) {
+                if (load64(&seencs + j * 8) == cs) { dupcs = 1; }
+                j = j + 1;
+            }
+            if (dupcs == 1) { rc = CHITRA_ERR_JPEG_SOS; done = 1; }
+            if (done == 0) { store64(&seencs + i * 8, cs); }
+            if (done == 0) {
+                if (td >= CHITRA_MAX_HUFF_TABLES) { rc = CHITRA_ERR_JPEG_SOS; done = 1; }
+            }
             if (done == 0) {
                 if (ta >= CHITRA_MAX_HUFF_TABLES) { rc = CHITRA_ERR_JPEG_SOS; done = 1; }
             }

@@ -1705,7 +1705,8 @@ fn _jpeg_decode_block(reader, dct, act, pred, zz_out, err_out): i64 {
 
     var t = _jpeg_decode(reader, dct);
     if (t < 0) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY)); return 0; }
-    if (t > 16) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY)); return 0; }
+    # DC magnitude category: 0..11 for 8-bit baseline (T.81 Table F.1).
+    if (t > 11) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY)); return 0; }
     var diff = 0;
     if (t > 0) { diff = _jpeg_extend(_jpeg_br_bits(reader, t), t); }
     var dc = pred + diff;
@@ -1724,6 +1725,11 @@ fn _jpeg_decode_block(reader, dct, act, pred, zz_out, err_out): i64 {
             if (done == 0) {
                 r = (rs >> 4) & 15;
                 s = rs & 15;
+                # AC magnitude category: 0..10 for 8-bit baseline (T.81 Table F.2);
+                # s==0 is EOB (r==0) or ZRL (r==15). s in 11..15 is out of spec.
+                if (s > 10) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY)); done = 1; }
+            }
+            if (done == 0) {
                 if (s == 0) {
                     if (r == 15) { k = k + 16; }   # ZRL: a run of 16 zeros
                     if (r != 15) { done = 1; }     # EOB: remaining coeffs are zero
@@ -1942,7 +1948,7 @@ fn _jpeg_idct_1d(inp, istep, outp, ostep, shift, do_ls): i64 {
 # _jpeg_idct_block — dequantize + de-zig-zag `zz` (64 i64, zig-zag order) with
 # `quant` (64 i64, zig-zag order) into a natural-order block, run the 2-D IDCT,
 # and write 64 level-shifted clamped samples (0..255) to `out` (64 i64,
-# row-major). The two arrays `zz`/`quant`/`out` are caller-owned.
+# row-major). The arrays `zz`/`quant`/`out` are caller-owned.
 # ================================================================
 fn _jpeg_idct_block(zz, quant, out): i64 {
     var zztab = _jpeg_zigzag_table();
@@ -1986,7 +1992,7 @@ fn _jpeg_idct_block(zz, quant, out): i64 {
 #            duplicate component ids; ΣHi·Vi ≤ 10).
 #   bite 3 — parse DHT and build canonical Huffman decode tables (via
 #            jpeg_huffman.cyr) into frame storage (4 DC + 4 AC).
-# DRI / APPn / COM payloads are still skipped here; later bites parse them.
+# APPn / COM / DNL payloads are skipped here; DRI sets the restart interval.
 # See docs/adr/0004-jpeg-decode-model.md + docs/proposals/jpeg-baseline-decoder.md.
 #
 # JPEG marker legend (the byte after a 0xFF; ITU-T T.81 Table B.1):
@@ -2019,9 +2025,11 @@ var CHITRA_MAX_HUFF_TABLES    = 4;    # Th in 0..3 (per class)
 #   +56  restart_interval (i64 — DRI MCUs between RSTn; 0 = none; bite 7)
 #   +64  quant            (ptr — 4*64 i64 quant-table storage, zig-zag order)
 #   +72  quant_present    (i64 — bitmask of quant tables seen, bit Tq)
-#   +80  components       (4 × 32-byte specs: +0 id, +8 H, +16 V, +24 Tq)
-#   +208 huff             (ptr — 8 HuffTable records: slots 0..3 DC, 4..7 AC)
-#   +216 huff_present     (i64 — bitmask of Huffman tables seen, bit Tc*4+Th)
+#   +80  sos_offset       (i64 — byte offset of the SOS length field)
+#   +88  huff             (ptr — 8 HuffTable records: slots 0..3 DC, 4..7 AC)
+#   +96  huff_present     (i64 — bitmask of Huffman tables seen, bit Tc*4+Th)
+#   +104 components       (4 × 48-byte specs: +0 id, +8 H, +16 V, +24 Tq,
+#                          +32 Td, +40 Ta [Td/Ta filled at SOS])
 # ================================================================
 var JF_WIDTH            = 0;
 var JF_HEIGHT           = 8;
@@ -2094,9 +2102,9 @@ fn chitra_jpeg_check_signature(src, len): i64 {
 
 # ================================================================
 # Marker classifier. Returns an ACTION (1=SOF0/parse, 2=SOS/stop,
-# 3=standalone/no-length, 4=length-bearing/skip, 5=DQT/parse, 6=DHT/parse) or a
-# CHITRA_ERR_* reject code (>=13) for any non-baseline mode. Action values 1..6
-# never collide with the JPEG error codes (13..23).
+# 3=standalone/no-length, 4=length-bearing/skip, 5=DQT/parse, 6=DHT/parse,
+# 7=DRI/parse) or a CHITRA_ERR_* reject code (>=13) for any non-baseline mode.
+# Action values 1..7 never collide with the JPEG error codes (13..23).
 # ================================================================
 fn _jpeg_marker_action(m): i64 {
     if (m == 0xC0) { return 1; }                          # SOF0 baseline — parse
@@ -2120,7 +2128,7 @@ fn _jpeg_marker_action(m): i64 {
     if (m == 0xD9) { return CHITRA_ERR_JPEG_MARKER; }     # EOI before SOS — no scan present
     if (m >= 0xD0 && m <= 0xD7) { return 3; }             # RSTn standalone
     if (m == 0x01) { return 3; }                          # TEM standalone
-    return 4;   # APPn / COM / DRI / DNL / ... — length-bearing, skip for now
+    return 4;   # APPn / COM / DNL / ... — length-bearing, skipped (not decoded)
 }
 
 # ================================================================
@@ -2555,6 +2563,8 @@ fn _jpeg_parse_sos(frame, src, len, err_out): i64 {
     var ta = 0;
     var j = 0;
     var found = 0;
+    var dupcs = 0;
+    var seencs[32];
     while (done == 0) {
         if (i >= ns) { done = 1; }
         if (done == 0) {
@@ -2562,7 +2572,19 @@ fn _jpeg_parse_sos(frame, src, len, err_out): i64 {
             tdta = _cur_u8(&cur);
             td = (tdta >> 4) & 15;
             ta = tdta & 15;
-            if (td >= CHITRA_MAX_HUFF_TABLES) { rc = CHITRA_ERR_JPEG_SOS; done = 1; }
+            # duplicate component selector (Cs): each scan Cs must be distinct
+            # (T.81 § B.2.3).
+            dupcs = 0;
+            j = 0;
+            while (j < i) {
+                if (load64(&seencs + j * 8) == cs) { dupcs = 1; }
+                j = j + 1;
+            }
+            if (dupcs == 1) { rc = CHITRA_ERR_JPEG_SOS; done = 1; }
+            if (done == 0) { store64(&seencs + i * 8, cs); }
+            if (done == 0) {
+                if (td >= CHITRA_MAX_HUFF_TABLES) { rc = CHITRA_ERR_JPEG_SOS; done = 1; }
+            }
             if (done == 0) {
                 if (ta >= CHITRA_MAX_HUFF_TABLES) { rc = CHITRA_ERR_JPEG_SOS; done = 1; }
             }

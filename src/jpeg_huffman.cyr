@@ -243,7 +243,8 @@ fn _jpeg_decode_block(reader, dct, act, pred, zz_out, err_out): i64 {
 
     var t = _jpeg_decode(reader, dct);
     if (t < 0) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY)); return 0; }
-    if (t > 16) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY)); return 0; }
+    # DC magnitude category: 0..11 for 8-bit baseline (T.81 Table F.1).
+    if (t > 11) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY)); return 0; }
     var diff = 0;
     if (t > 0) { diff = _jpeg_extend(_jpeg_br_bits(reader, t), t); }
     var dc = pred + diff;
@@ -262,6 +263,11 @@ fn _jpeg_decode_block(reader, dct, act, pred, zz_out, err_out): i64 {
             if (done == 0) {
                 r = (rs >> 4) & 15;
                 s = rs & 15;
+                # AC magnitude category: 0..10 for 8-bit baseline (T.81 Table F.2);
+                # s==0 is EOB (r==0) or ZRL (r==15). s in 11..15 is out of spec.
+                if (s > 10) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY)); done = 1; }
+            }
+            if (done == 0) {
                 if (s == 0) {
                     if (r == 15) { k = k + 16; }   # ZRL: a run of 16 zeros
                     if (r != 15) { done = 1; }     # EOB: remaining coeffs are zero

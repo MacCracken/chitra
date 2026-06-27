@@ -83,6 +83,22 @@ and [`docs/adr/0004-jpeg-decode-model.md`](docs/adr/0004-jpeg-decode-model.md).
   ImageMagick-encoded 16×16 baseline gradient decoded **byte-identical** to the
   reference (validates the real Annex K Huffman tables + AC entropy), the rgba8
   wrapper, and dispatch routing (suite total 724).
+- **Hardening (bite 9)** — DC magnitude category bounded to 0..11 and AC size
+  to 0..10 (8-bit baseline maxima); duplicate SOS component selector (`Cs`)
+  rejected; source doc-drift comments corrected. `jpeg.tcyr`: +4 assertions
+  (suite total 728).
+
+### Security
+- **First JPEG-decoder security audit**
+  ([`docs/audit/2026-06-27-audit.md`](docs/audit/2026-06-27-audit.md)) —
+  finder → adversarial-verify per module against the libjpeg / stb_image /
+  jpeg-decoder CVE corpus. Verdict: the baseline decoder is **memory-safe**
+  (no reachable out-of-bounds read/write, integer overflow, or
+  divide-by-zero); all 81 guards confirmed present; the CVE-class checklist is
+  fully covered (10 PRESENT, 2 N/A via baseline rejection). Two LOW
+  spec-laxity items were fixed in this cut (see Hardening above); truncation
+  detection and in-tree fuzz / benchmark harnesses are documented and deferred
+  to v1.0.
 
 ## [0.2.1] — 2026-06-26
 

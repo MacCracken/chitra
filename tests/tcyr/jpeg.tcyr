@@ -1396,6 +1396,86 @@ fn test_image_decode_dispatch() {
     return 0;
 }
 
+# ---- bite 9: hardening (DC/AC category bounds, duplicate Cs) ----
+
+# DC table whose single symbol is category 12 (out of 8-bit baseline range 0..11).
+fn fx_dc_table_cat12(): i64 {
+    var t = alloc(HT_SIZE);
+    var bits[136];
+    var i = 0;
+    while (i <= 16) { store64(&bits + i * 8, 0); i = i + 1; }
+    store64(&bits + 1 * 8, 1);
+    store64(t + HT_COUNT, 1);
+    store64(t + HT_HUFFVAL + 0 * 8, 12);
+    _jpeg_huff_build(t, &bits);
+    return t;
+}
+
+# DC table with a single size-0 symbol (code "0").
+fn fx_dc_table_size0(): i64 {
+    var t = alloc(HT_SIZE);
+    var bits[136];
+    var i = 0;
+    while (i <= 16) { store64(&bits + i * 8, 0); i = i + 1; }
+    store64(&bits + 1 * 8, 1);
+    store64(t + HT_COUNT, 1);
+    store64(t + HT_HUFFVAL + 0 * 8, 0);
+    _jpeg_huff_build(t, &bits);
+    return t;
+}
+
+# AC table whose single symbol is 0x0B (run 0, size 11 — out of baseline range).
+fn fx_ac_table_s11(): i64 {
+    var t = alloc(HT_SIZE);
+    var bits[136];
+    var i = 0;
+    while (i <= 16) { store64(&bits + i * 8, 0); i = i + 1; }
+    store64(&bits + 1 * 8, 1);
+    store64(t + HT_COUNT, 1);
+    store64(t + HT_HUFFVAL + 0 * 8, 0x0B);
+    _jpeg_huff_build(t, &bits);
+    return t;
+}
+
+fn test_reject_dc_oversize() {
+    var dct = fx_dc_table_cat12();
+    var act = fx_ac_table();
+    var buf[2];
+    store8(&buf + 0, 0x00);
+    var rdr[48];
+    _jpeg_br_init(&rdr, &buf, 2);
+    var zz = alloc(512);
+    var err = 0;
+    var dc = _jpeg_decode_block(&rdr, dct, act, 0, zz, &err);
+    assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_ENTROPY, "DC category 12 rejected");
+    return 0;
+}
+
+fn test_reject_ac_oversize() {
+    var dct = fx_dc_table_size0();
+    var act = fx_ac_table_s11();
+    var buf[2];
+    store8(&buf + 0, 0x00);
+    var rdr[48];
+    _jpeg_br_init(&rdr, &buf, 2);
+    var zz = alloc(512);
+    var err = 0;
+    var dc = _jpeg_decode_block(&rdr, dct, act, 0, zz, &err);
+    assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_ENTROPY, "AC size 11 rejected");
+    return 0;
+}
+
+fn test_reject_dup_cs() {
+    var lo = 0;
+    var b = fx_jpeg_ycc_8x8(&lo);
+    store8(b + 149, 0x01);   # SOS Cs2 = 1, duplicating Cs1
+    var err = 0;
+    var img = chitra_jpeg_decode(b, lo, &err);
+    assert_eq(img, 0, "duplicate SOS Cs rejected");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_SOS, "dup Cs -> SOS error");
+    return 0;
+}
+
 fn main() {
     test_cur_u16_be();
     test_signature();
@@ -1425,6 +1505,9 @@ fn main() {
     test_decode_real_gradient();
     test_jpeg_decode_rgba8();
     test_image_decode_dispatch();
+    test_reject_dc_oversize();
+    test_reject_ac_oversize();
+    test_reject_dup_cs();
     test_reject_progressive();
     test_reject_arithmetic();
     test_reject_mode();

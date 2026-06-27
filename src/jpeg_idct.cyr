@@ -195,7 +195,7 @@ fn _jpeg_idct_1d(inp, istep, outp, ostep, shift, do_ls): i64 {
 # _jpeg_idct_block — dequantize + de-zig-zag `zz` (64 i64, zig-zag order) with
 # `quant` (64 i64, zig-zag order) into a natural-order block, run the 2-D IDCT,
 # and write 64 level-shifted clamped samples (0..255) to `out` (64 i64,
-# row-major). The two arrays `zz`/`quant`/`out` are caller-owned.
+# row-major). The arrays `zz`/`quant`/`out` are caller-owned.
 # ================================================================
 fn _jpeg_idct_block(zz, quant, out): i64 {
     var zztab = _jpeg_zigzag_table();
