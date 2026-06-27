@@ -74,12 +74,26 @@ fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
     # width*height was capped <= CHITRA_MAX_PIXELS in parse_raw, so
     # out_size <= 64 Mi*4 = 256 Mi — within CHITRA_MAX_RAW_BYTES and far
     # below the i64-overflow boundary. Re-derive (don't trust a span).
+    # Re-assert the IHDR caps before the width/height multiplies — defense
+    # in depth so this @internal pass is safe even on a hand-built raw (the
+    # per-side cap first guarantees width*height cannot overflow i64).
+    if (width <= 0 || height <= 0) { store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS)); return 0; }
+    if (width > CHITRA_MAX_DIM || height > CHITRA_MAX_DIM) {
+        store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
+        return 0;
+    }
+    if (width * height > CHITRA_MAX_PIXELS) {
+        store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
+        return 0;
+    }
     var npix = width * height;
-    if (npix <= 0) { store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS)); return 0; }
     var out_size = npix * 4;
 
-    # The scanline buffer must hold channels*bps bytes per pixel.
-    if (scan_len < npix * channels * bps) {
+    # The scanline buffer must hold the dense, byte-padded rows parse_raw
+    # produced — height * ceil(width*channels*depth/8). (At depth >= 8 this
+    # equals npix*channels*bps; the row-padded form also covers sub-byte.)
+    var row_bytes = _chitra_row_bytes_for(width, channels, bit_depth);
+    if (scan_len < height * row_bytes) {
         store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
         return 0;
     }
@@ -99,6 +113,81 @@ fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
         }
         has_trns = 1;
         trns_ptr = src + trns_off;
+    }
+
+    # ---- sub-byte depths 1/2/4 (only color_type 0 grayscale + 3 palette
+    # per spec § 11.2.2). Samples are MSB-first packed with rows padded to
+    # a byte, so we walk (y, x) and bit-unpack rather than a linear index.
+    if (bit_depth < 8) {
+        if (color_type == 0) {
+            # grayscale: scale the d-bit sample to 8-bit (×255/85/17).
+            # tRNS keys on the raw (unscaled) sample value.
+            var scale = _chitra_gray_scale(bit_depth);
+            var key = 0 - 1;
+            if (has_trns == 1) {
+                if (trns_len != 2) { store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK)); return 0; }
+                key = load8(trns_ptr + 1);    # depth<8: keyed value in the low byte
+            }
+            var gy = 0;
+            while (gy < height) {
+                var growp = scan + gy * row_bytes;
+                var gx = 0;
+                while (gx < width) {
+                    var s = _chitra_get_subbyte(growp, gx, bit_depth);
+                    var g = s * scale;
+                    var ga = 255;
+                    if (s == key) { ga = 0; }
+                    var go = out + (gy * width + gx) * 4;
+                    store8(go + 0, g);
+                    store8(go + 1, g);
+                    store8(go + 2, g);
+                    store8(go + 3, ga);
+                    gx = gx + 1;
+                }
+                gy = gy + 1;
+            }
+            return out;
+        }
+        if (color_type == 3) {
+            # palette: the d-bit index selects a PLTE entry; per-entry tRNS
+            # alpha (same as the depth-8 palette path).
+            var plte_off = chitra_raw_plte_off(raw);
+            var plte_len = chitra_raw_plte_len(raw);
+            var entry_count = plte_len / 3;
+            if (entry_count <= 0) { store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK)); return 0; }
+            if (plte_off < 0 || plte_off + plte_len > len) {
+                store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
+                return 0;
+            }
+            var plte_ptr = src + plte_off;
+            if (has_trns == 1 && trns_len > entry_count) {
+                store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
+                return 0;
+            }
+            var py2 = 0;
+            while (py2 < height) {
+                var prowp = scan + py2 * row_bytes;
+                var px3 = 0;
+                while (px3 < width) {
+                    var idx = _chitra_get_subbyte(prowp, px3, bit_depth);
+                    if (idx >= entry_count) { store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK)); return 0; }
+                    var pe = plte_ptr + idx * 3;
+                    var pa = 255;
+                    if (has_trns == 1 && idx < trns_len) { pa = load8(trns_ptr + idx); }
+                    var po = out + (py2 * width + px3) * 4;
+                    store8(po + 0, load8(pe + 0));
+                    store8(po + 1, load8(pe + 1));
+                    store8(po + 2, load8(pe + 2));
+                    store8(po + 3, pa);
+                    px3 = px3 + 1;
+                }
+                py2 = py2 + 1;
+            }
+            return out;
+        }
+        # sub-byte is only valid for ct0/ct3 (parse_raw enforces); guard.
+        store64(err_out, chitra_err(CHITRA_ERR_UNSUPPORTED));
+        return 0;
     }
 
     # ---- grayscale (0): g -> (g,g,g,255); tRNS = one gray sample ----

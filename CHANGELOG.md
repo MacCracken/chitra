@@ -5,6 +5,53 @@ All notable changes to chitra are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] — 2026-06-26
+
+**Sub-byte bit depths 1/2/4 + Adam7 interlace** — completes the PNG
+bit-depth/interlace matrix (a direct continuation of the 0.2.0 depth-16
+work). chitra now decodes every depth × color-type × interlace combination
+the PNG spec permits. The depth-8/16 non-interlaced path is unchanged
+(byte-for-byte).
+
+### Added
+- **Sub-byte depths 1/2/4** for grayscale (ct0) and palette (ct3) — the
+  only color types the spec permits below depth 8 (§ 11.2.2 Table 11.1).
+  Samples are MSB-first packed with rows padded to a byte; grayscale scales
+  to 8-bit (×255/85/17), palette indexes the PLTE. The IHDR gate now
+  enforces the full validity table; ct2/4/6 at a sub-byte depth still
+  reject as `CHITRA_ERR_BIT_DEPTH`.
+- **Adam7 interlace** (§ 8) — the 7-pass reduced images are each filtered
+  independently and deinterlaced into the same dense, byte-padded buffer
+  the non-interlaced path produces, so the color pass is interlace-agnostic.
+  Works for every color type/depth, including the sub-byte bit-scatter case.
+- New unfilter stride is `ceil(channels*depth/8)` (≥1), and row size is
+  `ceil(width*channels*depth/8)` — correct for sub-byte packing.
+- Test suites split out: `tests/tcyr/subbyte.tcyr` (143 assertions —
+  gray/palette at 1/2/4, multi-row padding, ct2-depth4 reject) and
+  `tests/tcyr/interlace.tcyr` (35 — Adam7 cross-checked against the trusted
+  non-interlaced decode for 7 color/depth/odd-dimension cases). Fixtures
+  are ImageMagick-generated (independent reference codec) or python-packed
+  and cross-checked against ImageMagick. Also folded in the deferred
+  depth-16 ct4/ct6/ct0-tRNS fixtures from 0.2.0. Suite: **523 assertions**.
+
+### Changed
+- `chitra_version()` → 201. `ChitraPngRaw` widened 96→104B (internal —
+  adds an interlace slot; not the public `ChitraImage`).
+- `dist/chitra.cyr` regenerated.
+
+### Hardened (adversarial-review follow-ups, all low-severity)
+- IHDR **compression-method (byte 10) + filter-method (byte 11)** are now
+  validated — anything other than method 0 (the only spec-legal value)
+  rejects as `CHITRA_ERR_UNSUPPORTED` instead of silently mis-decoding.
+- The color pass re-asserts the dimension caps (`MAX_DIM`/`MAX_PIXELS`)
+  before its width×height multiplies — defense-in-depth so it is overflow-
+  safe even on a hand-built raw (unreachable via `chitra_png_decode`, which
+  caps in `parse_raw`).
+
+### Removed
+- The 0.1.0/0.2.0 `interlace`/`depth1` *rejection* tests (those inputs are
+  now decoded, not rejected).
+
 ## [0.2.0] — 2026-06-26
 
 **Bit depth 16 + kii guard-parity backport.** This is the release that

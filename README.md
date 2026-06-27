@@ -1,6 +1,6 @@
 # chitra
 
-Version: 0.2.0
+Version: 0.2.1
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder, a sibling AGNOS package in the mould of `sakshi` /
@@ -30,10 +30,15 @@ later without a rename.
   stream, 0 = tolerated IEND-less end) and `chitra_image_source_color_type`
   (the pre-normalization color_type). The struct widen is ABI-additive
   (width/height/pixels/channels keep their offsets — mabda-safe).
-- **Staged (tracked, not silently dropped):** sub-byte depths 1/2/4 and
-  Adam7 interlace → **0.2.1** (the rest of the bit-depth matrix, a direct
-  continuation of the depth-16 work); **JPEG** (Huffman + IDCT + chroma
-  upsample) → 0.3+.
+- **v0.2.1 — sub-byte depths 1/2/4 + Adam7 interlace.** Completes the PNG
+  depth × color-type × interlace matrix. Sub-byte (MSB-first, byte-padded)
+  for grayscale + palette (the only types the spec allows below depth 8);
+  Adam7's 7 passes are deinterlaced into the same dense buffer the
+  non-interlaced path yields, so the color pass is interlace-agnostic.
+  Verified against ImageMagick + an interlaced-vs-non-interlaced
+  cross-check (523-assertion suite).
+- **Staged (tracked, not silently dropped):** **JPEG** (Huffman + IDCT +
+  chroma upsample) → 0.3+. PNG is now feature-complete.
 
 ## Relationships
 

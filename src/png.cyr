@@ -5,12 +5,12 @@
 # color pass (chitra_png_color_to_rgba8: canonical-RGBA8 + tRNS) and
 # wraps the result in a ChitraImage.
 #
-# v0.1.0 scope: PNG signature + chunk parse (IHDR / IDAT-concat / IEND /
-# PLTE / tRNS), color types 0/2/3/4/6 at bit depth 8, sankoch IDAT
-# inflate, the five unfilter predictors, canonical-RGBA8 output, the kii
-# security guards. No Adam7 interlace (single-pass only). Bit depths
-# 1/2/4/16 + Adam7 are tracked for chitra 0.2 (the parse driver rejects
-# them loud via CHITRA_ERR_BIT_DEPTH / CHITRA_ERR_INTERLACE).
+# Scope (feature-complete for PNG as of v0.2.1): signature + chunk parse
+# (IHDR / IDAT-concat / IEND / PLTE / tRNS), color types 0/2/3/4/6 at every
+# spec-legal bit depth (1/2/4/8/16, validated per color_type — § 11.2.2
+# Table 11.1), Adam7 interlace, sankoch IDAT inflate, the five unfilter
+# predictors, canonical-RGBA8 output (16-bit truncates to the high byte;
+# sub-byte scales 255/85/17), and the kii security guards. JPEG is 0.3+.
 #
 # PLTE/tRNS wiring: chitra_png_parse_raw captures PLTE/tRNS only as
 # (offset-into-src, length) spans (no byte copy). The public decode
@@ -114,9 +114,9 @@ fn chitra_image_free(img): i64 {
 
 # ================================================================
 # Version probe — packed as major*10000 + minor*100 + patch.
-# 0.1.0 -> 100, 0.1.1 -> 101, 0.2.0 -> 200.
+# 0.1.0 -> 100, 0.1.1 -> 101, 0.2.0 -> 200, 0.2.1 -> 201.
 # ================================================================
 # @public
 fn chitra_version(): i64 {
-    return 200;
+    return 201;
 }

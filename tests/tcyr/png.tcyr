@@ -246,18 +246,8 @@ fn test_reject_crc() {
     return 0;
 }
 
-# ================================================================
-# Adversarial: interlaced (Adam7) -> reject loud
-# ================================================================
-fn test_reject_interlace() {
-    var lo = 0;
-    var bytes = fx_interlaced_2x2(&lo);
-    var err = 0;
-    var raw = chitra_png_parse_raw(bytes, lo, &err);
-    assert_eq(raw, 0, "interlace -> null");
-    assert_eq(chitra_err_code(err), CHITRA_ERR_INTERLACE, "err INTERLACE");
-    return 0;
-}
+# (test_reject_interlace removed at 0.2.1 — Adam7 is now decoded, not
+#  rejected; see the interlace decode tests in tests/tcyr/interlace.tcyr.)
 
 # ================================================================
 # Adversarial: decompression bomb — tiny input claiming 70000x70000.
@@ -523,16 +513,9 @@ fn test_reject_palette_depth16() {
     return 0;
 }
 
-# Sub-byte depths 1/2/4 are still rejected (chitra 0.2.1 scope).
-fn test_reject_depth1() {
-    var lo = 0;
-    var bytes = fx_gray_depth1_reject(&lo);
-    var err = 0;
-    var raw = chitra_png_parse_raw(bytes, lo, &err);
-    assert_eq(raw, 0, "depth1 -> null");
-    assert_eq(chitra_err_code(err), CHITRA_ERR_BIT_DEPTH, "depth1 -> BIT_DEPTH");
-    return 0;
-}
+# (test_reject_depth1 removed at 0.2.1 — sub-byte depths 1/2/4 for ct0/ct3
+#  are now decoded; see tests/tcyr/subbyte.tcyr. ct2/4/6 at sub-byte depth
+#  remain rejected — covered there.)
 
 # ================================================================
 # 0.2.0 hardening parity: NO_IDAT distinct code, IEND-length guard,
@@ -2249,6 +2232,350 @@ fn fx_iend_nonzero(len_out): i64 {
     return b;
 }
 
+fn test_decode_graya16() {
+    var lo = 0;
+    var bytes = fx_graya16_2x1(&lo);
+    var err = 0;
+    var img = chitra_png_decode(bytes, lo, &err);
+    assert(img != 0, "graya16 ok");
+    var px = chitra_image_pixels(img);
+    _assert_px(px, 0, 18, 18, 18, 171, "graya16 px0");
+    _assert_px(px, 1, 255, 255, 255, 0, "graya16 px1");
+    return 0;
+}
+
+fn test_decode_rgba16() {
+    var lo = 0;
+    var bytes = fx_rgba16_2x1(&lo);
+    var err = 0;
+    var img = chitra_png_decode(bytes, lo, &err);
+    assert(img != 0, "rgba16 ok");
+    var px = chitra_image_pixels(img);
+    _assert_px(px, 0, 18, 86, 154, 222, "rgba16 px0");
+    _assert_px(px, 1, 202, 186, 222, 190, "rgba16 px1");
+    return 0;
+}
+
+fn test_decode_gray16_trns() {
+    var lo = 0;
+    var bytes = fx_gray16_trns_2x1(&lo);
+    var err = 0;
+    var img = chitra_png_decode(bytes, lo, &err);
+    assert(img != 0, "gray16t ok");
+    var px = chitra_image_pixels(img);
+    _assert_px(px, 0, 18, 18, 18, 0, "gray16t px0 keyed");
+    _assert_px(px, 1, 255, 255, 255, 255, "gray16t px1");
+    return 0;
+}
+
+fn fx_graya16_2x1(len_out): i64 {
+    var b = alloc(74);
+    store64(len_out, 74);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 2);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 1);
+    store8(b + 24, 16);
+    store8(b + 25, 4);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 14);
+    store8(b + 30, 187);
+    store8(b + 31, 107);
+    store8(b + 32, 66);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 17);
+    store8(b + 37, 73);
+    store8(b + 38, 68);
+    store8(b + 39, 65);
+    store8(b + 40, 84);
+    store8(b + 41, 120);
+    store8(b + 42, 218);
+    store8(b + 43, 99);
+    store8(b + 44, 16);
+    store8(b + 45, 50);
+    store8(b + 46, 89);
+    store8(b + 47, 125);
+    store8(b + 48, 246);
+    store8(b + 49, 63);
+    store8(b + 50, 3);
+    store8(b + 51, 3);
+    store8(b + 52, 35);
+    store8(b + 53, 0);
+    store8(b + 54, 14);
+    store8(b + 55, 5);
+    store8(b + 56, 2);
+    store8(b + 57, 191);
+    store8(b + 58, 8);
+    store8(b + 59, 206);
+    store8(b + 60, 20);
+    store8(b + 61, 5);
+    store8(b + 62, 0);
+    store8(b + 63, 0);
+    store8(b + 64, 0);
+    store8(b + 65, 0);
+    store8(b + 66, 73);
+    store8(b + 67, 69);
+    store8(b + 68, 78);
+    store8(b + 69, 68);
+    store8(b + 70, 174);
+    store8(b + 71, 66);
+    store8(b + 72, 96);
+    store8(b + 73, 130);
+    return b;
+}
+
+fn fx_rgba16_2x1(len_out): i64 {
+    var b = alloc(83);
+    store64(len_out, 83);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 2);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 1);
+    store8(b + 24, 16);
+    store8(b + 25, 6);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 164);
+    store8(b + 30, 178);
+    store8(b + 31, 163);
+    store8(b + 32, 201);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 26);
+    store8(b + 37, 73);
+    store8(b + 38, 68);
+    store8(b + 39, 65);
+    store8(b + 40, 84);
+    store8(b + 41, 120);
+    store8(b + 42, 218);
+    store8(b + 43, 99);
+    store8(b + 44, 16);
+    store8(b + 45, 50);
+    store8(b + 46, 9);
+    store8(b + 47, 171);
+    store8(b + 48, 152);
+    store8(b + 49, 181);
+    store8(b + 50, 231);
+    store8(b + 51, 222);
+    store8(b + 52, 135);
+    store8(b + 53, 83);
+    store8(b + 54, 255);
+    store8(b + 55, 118);
+    store8(b + 56, 237);
+    store8(b + 57, 187);
+    store8(b + 58, 183);
+    store8(b + 59, 118);
+    store8(b + 60, 223);
+    store8(b + 61, 123);
+    store8(b + 62, 0);
+    store8(b + 63, 76);
+    store8(b + 64, 175);
+    store8(b + 65, 10);
+    store8(b + 66, 177);
+    store8(b + 67, 196);
+    store8(b + 68, 242);
+    store8(b + 69, 190);
+    store8(b + 70, 180);
+    store8(b + 71, 0);
+    store8(b + 72, 0);
+    store8(b + 73, 0);
+    store8(b + 74, 0);
+    store8(b + 75, 73);
+    store8(b + 76, 69);
+    store8(b + 77, 78);
+    store8(b + 78, 68);
+    store8(b + 79, 174);
+    store8(b + 80, 66);
+    store8(b + 81, 96);
+    store8(b + 82, 130);
+    return b;
+}
+
+fn fx_gray16_trns_2x1(len_out): i64 {
+    var b = alloc(84);
+    store64(len_out, 84);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 2);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 1);
+    store8(b + 24, 16);
+    store8(b + 25, 0);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 129);
+    store8(b + 30, 217);
+    store8(b + 31, 252);
+    store8(b + 32, 21);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 2);
+    store8(b + 37, 116);
+    store8(b + 38, 82);
+    store8(b + 39, 78);
+    store8(b + 40, 83);
+    store8(b + 41, 18);
+    store8(b + 42, 52);
+    store8(b + 43, 47);
+    store8(b + 44, 211);
+    store8(b + 45, 73);
+    store8(b + 46, 94);
+    store8(b + 47, 0);
+    store8(b + 48, 0);
+    store8(b + 49, 0);
+    store8(b + 50, 13);
+    store8(b + 51, 73);
+    store8(b + 52, 68);
+    store8(b + 53, 65);
+    store8(b + 54, 84);
+    store8(b + 55, 120);
+    store8(b + 56, 218);
+    store8(b + 57, 99);
+    store8(b + 58, 16);
+    store8(b + 59, 50);
+    store8(b + 60, 249);
+    store8(b + 61, 255);
+    store8(b + 62, 31);
+    store8(b + 63, 0);
+    store8(b + 64, 3);
+    store8(b + 65, 230);
+    store8(b + 66, 2);
+    store8(b + 67, 69);
+    store8(b + 68, 241);
+    store8(b + 69, 28);
+    store8(b + 70, 132);
+    store8(b + 71, 101);
+    store8(b + 72, 0);
+    store8(b + 73, 0);
+    store8(b + 74, 0);
+    store8(b + 75, 0);
+    store8(b + 76, 73);
+    store8(b + 77, 69);
+    store8(b + 78, 78);
+    store8(b + 79, 68);
+    store8(b + 80, 174);
+    store8(b + 81, 66);
+    store8(b + 82, 96);
+    store8(b + 83, 130);
+    return b;
+}
+
+fn test_reject_bad_filter_method() {
+    var lo = 0;
+    var bytes = fx_bad_filter_method(&lo);
+    var err = 0;
+    var raw = chitra_png_parse_raw(bytes, lo, &err);
+    assert_eq(raw, 0, "bad filter method -> null");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_UNSUPPORTED, "filter method != 0 -> UNSUPPORTED");
+    return 0;
+}
+
+fn fx_bad_filter_method(len_out): i64 {
+    var b = alloc(33);
+    store64(len_out, 33);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 2);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 2);
+    store8(b + 24, 8);
+    store8(b + 25, 2);
+    store8(b + 26, 0);
+    store8(b + 27, 1);
+    store8(b + 28, 0);
+    store8(b + 29, 228);
+    store8(b + 30, 207);
+    store8(b + 31, 171);
+    store8(b + 32, 50);
+    return b;
+}
+
 fn main() {
     test_cursor_bounds();
     test_signature();
@@ -2261,8 +2588,8 @@ fn main() {
     test_reject_bad_signature();
     test_reject_truncated();
     test_reject_crc();
-    test_reject_interlace();
     test_reject_bomb();
+    test_reject_bad_filter_method();
     test_decode_gray8();
     test_decode_gray8_trns();
     test_decode_rgb8();
@@ -2276,8 +2603,10 @@ fn main() {
     test_decode_rgb16();
     test_decode_rgb16_filtered();
     test_decode_gray16();
+    test_decode_graya16();
+    test_decode_rgba16();
+    test_decode_gray16_trns();
     test_reject_palette_depth16();
-    test_reject_depth1();
     test_reject_no_idat();
     test_reject_iend_nonzero();
     test_seen_iend();
