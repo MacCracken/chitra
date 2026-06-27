@@ -1,8 +1,8 @@
-# tests/tcyr/jpeg.tcyr — JPEG (JFIF baseline) marker framing + SOF0 parse +
-# non-baseline rejection (0.3.0, bite 1). Self-contained CPU suite (own main +
-# assert_summary), standalone like error.tcyr/png.tcyr: include the lib chain +
-# the assert harness. Fixtures are tiny hand-built JPEG marker streams embedded
-# as byte arrays (no file I/O).
+# tests/tcyr/jpeg.tcyr — JPEG (JFIF baseline) marker framing, SOF0 + DQT parse,
+# and non-baseline / malformed rejection (0.3.0, bites 1-2). Self-contained CPU
+# suite (own main + assert_summary), standalone like error.tcyr/png.tcyr:
+# include the lib chain + the assert harness. Fixtures are tiny hand-built JPEG
+# marker streams embedded as byte arrays (no file I/O).
 include "src/lib.cyr"
 include "lib/assert.cyr"
 
@@ -10,8 +10,8 @@ include "lib/assert.cyr"
 # Fixture builders
 # ================================================================
 
-# A minimal valid baseline header: SOI + SOF0(8x8, 8-bit, 3 components) + SOS.
-# The scan stops at SOS (bite 1 does not decode the entropy stream).
+# Minimal valid baseline header: SOI + SOF0(8x8, 8-bit, 3 comp, 4:2:0) + SOS.
+# No DQT (SOF parse does not require one). The scan stops at SOS.
 fn fx_jpeg_baseline(len_out): i64 {
     var b = alloc(23);
     store8(b + 0, 0xFF);    # SOI
@@ -35,14 +35,53 @@ fn fx_jpeg_baseline(len_out): i64 {
     store8(b + 18, 0x03);   # comp 3: id=3
     store8(b + 19, 0x11);   #         H=1 V=1
     store8(b + 20, 0x01);   #         Tq=1
-    store8(b + 21, 0xFF);   # SOS (scan boundary — bite 1 stops here)
+    store8(b + 21, 0xFF);   # SOS (scan boundary)
     store8(b + 22, 0xDA);
     store64(len_out, 23);
     return b;
 }
 
-# A 4-byte SOI + one marker stream, for the cases that reject on the marker
-# itself (before any segment body is read).
+# Baseline with a leading DQT (table 0, 8-bit, values k+1 for k in 0..63).
+fn fx_jpeg_dqt_sof(len_out): i64 {
+    var b = alloc(92);
+    store8(b + 0, 0xFF);    # SOI
+    store8(b + 1, 0xD8);
+    store8(b + 2, 0xFF);    # DQT
+    store8(b + 3, 0xDB);
+    store8(b + 4, 0x00);    # Lq = 67 (2 + 1 + 64)
+    store8(b + 5, 0x43);
+    store8(b + 6, 0x00);    # Pq=0 Tq=0
+    var k = 0;
+    while (k < 64) {
+        store8(b + 7 + k, k + 1);
+        k = k + 1;
+    }
+    store8(b + 71, 0xFF);   # SOF0
+    store8(b + 72, 0xC0);
+    store8(b + 73, 0x00);   # Lf = 17
+    store8(b + 74, 0x11);
+    store8(b + 75, 0x08);   # P = 8
+    store8(b + 76, 0x00);   # Y = 8
+    store8(b + 77, 0x08);
+    store8(b + 78, 0x00);   # X = 8
+    store8(b + 79, 0x08);
+    store8(b + 80, 0x03);   # Nf = 3
+    store8(b + 81, 0x01);   # comp 1: id=1 H=2 V=2 Tq=0
+    store8(b + 82, 0x22);
+    store8(b + 83, 0x00);
+    store8(b + 84, 0x02);   # comp 2: id=2 H=1 V=1 Tq=1
+    store8(b + 85, 0x11);
+    store8(b + 86, 0x01);
+    store8(b + 87, 0x03);   # comp 3: id=3 H=1 V=1 Tq=1
+    store8(b + 88, 0x11);
+    store8(b + 89, 0x01);
+    store8(b + 90, 0xFF);   # SOS
+    store8(b + 91, 0xDA);
+    store64(len_out, 92);
+    return b;
+}
+
+# A 4-byte SOI + one marker stream, for cases that reject on the marker itself.
 fn fx_jpeg4(len_out, b0, b1, b2, b3): i64 {
     var b = alloc(4);
     store8(b + 0, b0);
@@ -50,6 +89,20 @@ fn fx_jpeg4(len_out, b0, b1, b2, b3): i64 {
     store8(b + 2, b2);
     store8(b + 3, b3);
     store64(len_out, 4);
+    return b;
+}
+
+# SOI + a single bad DQT table header byte (PqTq), Lq=3, no table body needed.
+fn fx_jpeg_dqt_bad(len_out, pqtq): i64 {
+    var b = alloc(7);
+    store8(b + 0, 0xFF);
+    store8(b + 1, 0xD8);
+    store8(b + 2, 0xFF);
+    store8(b + 3, 0xDB);
+    store8(b + 4, 0x00);
+    store8(b + 5, 0x03);
+    store8(b + 6, pqtq);
+    store64(len_out, 7);
     return b;
 }
 
@@ -82,7 +135,7 @@ fn test_signature() {
 }
 
 # ================================================================
-# Baseline header scan fills the frame
+# Baseline header scan fills frame header + component sampling factors
 # ================================================================
 fn test_scan_baseline() {
     var lo = 0;
@@ -96,6 +149,36 @@ fn test_scan_baseline() {
     assert_eq(chitra_jpeg_frame_precision(f), 8, "precision 8");
     assert_eq(chitra_jpeg_frame_num_components(f), 3, "3 components");
     assert_eq(chitra_jpeg_frame_seen_sof(f), 1, "seen sof");
+    # component sampling factors (4:2:0 — comp 0 is 2x2, chroma 1x1)
+    assert_eq(chitra_jpeg_frame_max_h(f), 2, "max_h 2");
+    assert_eq(chitra_jpeg_frame_max_v(f), 2, "max_v 2");
+    assert_eq(chitra_jpeg_frame_comp_id(f, 0), 1, "comp0 id 1");
+    assert_eq(chitra_jpeg_frame_comp_h(f, 0), 2, "comp0 H 2");
+    assert_eq(chitra_jpeg_frame_comp_v(f, 0), 2, "comp0 V 2");
+    assert_eq(chitra_jpeg_frame_comp_tq(f, 0), 0, "comp0 Tq 0");
+    assert_eq(chitra_jpeg_frame_comp_id(f, 1), 2, "comp1 id 2");
+    assert_eq(chitra_jpeg_frame_comp_h(f, 1), 1, "comp1 H 1");
+    assert_eq(chitra_jpeg_frame_comp_tq(f, 1), 1, "comp1 Tq 1");
+    assert_eq(chitra_jpeg_frame_comp_id(f, 2), 3, "comp2 id 3");
+    return 0;
+}
+
+# ================================================================
+# DQT parse: quant table present + values stored in spec (zig-zag) order
+# ================================================================
+fn test_scan_dqt() {
+    var lo = 0;
+    var b = fx_jpeg_dqt_sof(&lo);
+    var err = 0;
+    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    assert(f != 0, "dqt+sof scan returns a frame");
+    assert_eq(err, 0, "no error");
+    assert_eq(chitra_jpeg_frame_quant_present(f), 1, "quant table 0 present (bit 0)");
+    assert_eq(chitra_jpeg_frame_quant(f, 0, 0), 1, "quant[0][0] = 1");
+    assert_eq(chitra_jpeg_frame_quant(f, 0, 63), 64, "quant[0][63] = 64");
+    # SOF still parsed after the DQT
+    assert_eq(chitra_jpeg_frame_width(f), 8, "width 8 after dqt");
+    assert_eq(chitra_jpeg_frame_max_h(f), 2, "max_h 2 after dqt");
     return 0;
 }
 
@@ -146,15 +229,69 @@ fn test_reject_precision12() {
 fn test_reject_components() {
     var lo = 0;
     var b = fx_jpeg_baseline(&lo);
-    # Force a 4-component header: Nf=4 and grow Lf to 8+3*4=20, but only the
-    # Nf byte and the precision-check ordering matter — components check fires
-    # on Nf not in {1,3}. Set Nf=4 (and Lf to match so the length check passes
-    # only after the components reject; components is checked first).
     store8(b + 11, 0x04);   # Nf = 4
     var err = 0;
     var f = chitra_jpeg_scan_markers(b, lo, &err);
     assert_eq(f, 0, "4-component rejected");
     assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_COMPONENTS, "components err code");
+    return 0;
+}
+
+# Sampling factor 0 — the CVE-2018-11212 divide-by-zero guard.
+fn test_reject_sampling_zero() {
+    var lo = 0;
+    var b = fx_jpeg_baseline(&lo);
+    store8(b + 13, 0x02);   # comp 1 H/V = 0x02 -> H=0, V=2
+    var err = 0;
+    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    assert_eq(f, 0, "H=0 sampling factor rejected");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_SOF, "zero-factor err code");
+    return 0;
+}
+
+# Sampling factor > 4.
+fn test_reject_sampling_big() {
+    var lo = 0;
+    var b = fx_jpeg_baseline(&lo);
+    store8(b + 13, 0x52);   # comp 1 H/V = 0x52 -> H=5, V=2
+    var err = 0;
+    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    assert_eq(f, 0, "H=5 sampling factor rejected");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_SOF, "big-factor err code");
+    return 0;
+}
+
+# Duplicate component id.
+fn test_reject_dup_component_id() {
+    var lo = 0;
+    var b = fx_jpeg_baseline(&lo);
+    store8(b + 15, 0x01);   # comp 2 id = 1 (duplicates comp 1)
+    var err = 0;
+    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    assert_eq(f, 0, "duplicate component id rejected");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_SOF, "dup-id err code");
+    return 0;
+}
+
+# DQT with 16-bit precision (Pq=1) — baseline is 8-bit only.
+fn test_reject_dqt_precision() {
+    var lo = 0;
+    var b = fx_jpeg_dqt_bad(&lo, 0x10);   # Pq=1 Tq=0
+    var err = 0;
+    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    assert_eq(f, 0, "16-bit DQT rejected");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_DQT, "dqt precision err code");
+    return 0;
+}
+
+# DQT with table id >= 4.
+fn test_reject_dqt_tableid() {
+    var lo = 0;
+    var b = fx_jpeg_dqt_bad(&lo, 0x04);   # Pq=0 Tq=4
+    var err = 0;
+    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    assert_eq(f, 0, "DQT table id 4 rejected");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_DQT, "dqt tableid err code");
     return 0;
 }
 
@@ -193,11 +330,17 @@ fn main() {
     test_cur_u16_be();
     test_signature();
     test_scan_baseline();
+    test_scan_dqt();
     test_reject_progressive();
     test_reject_arithmetic();
     test_reject_mode();
     test_reject_precision12();
     test_reject_components();
+    test_reject_sampling_zero();
+    test_reject_sampling_big();
+    test_reject_dup_component_id();
+    test_reject_dqt_precision();
+    test_reject_dqt_tableid();
     test_reject_bad_signature();
     test_reject_truncated();
     test_reject_eoi_before_sos();

@@ -67,7 +67,11 @@ and their resolutions:
   modes with distinct error codes. 11 JPEG error codes (13–23) appended to
   `error.cyr`. Wired into `lib.cyr` + `cyrius.cyml`. `tests/tcyr/jpeg.tcyr`
   +28 assertions (suite 525 → 553); lint/fmt/vet clean; dist regenerated.
-- Bites 2–9: pending.
+- **Bite 2 — DONE (2026-06-26).** SOF0 per-component parse (id / Hi / Vi /
+  quant-selector, max H/V) and DQT quant-table parse into `ChitraJpegFrame`,
+  with the sampling-factor security guards (1..4, no zero, no duplicate id,
+  ΣHi·Vi ≤ 10). `jpeg.tcyr` +27 assertions (suite 553 → 580). lint/fmt/vet clean.
+- Bites 3–9: pending.
 
 ## Scope
 

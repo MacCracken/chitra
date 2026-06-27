@@ -19,6 +19,12 @@ and [`docs/adr/0004-jpeg-decode-model.md`](docs/adr/0004-jpeg-decode-model.md).
   hierarchical/lossless, 4-component CMYK) are rejected with distinct error
   codes — the defer-don't-half-implement posture. 11 new `CHITRA_ERR_JPEG_*`
   codes (13–23). `tests/tcyr/jpeg.tcyr`: +28 assertions (suite total 553).
+- **JPEG SOF0 components + DQT (bite 2)** — the marker scan now parses the SOF0
+  per-component sampling factors (Hi/Vi, quant-table selector, max H/V) and DQT
+  quantization tables into `ChitraJpegFrame`, with the baseline security guards:
+  sampling factors clamped to 1..4 (rejecting 0 — the CVE-2018-11212
+  divide-by-zero), duplicate component ids rejected, and ΣHi·Vi ≤ 10 enforced
+  before any MCU geometry is derived. `jpeg.tcyr`: +27 assertions (suite total 580).
 
 ## [0.2.1] — 2026-06-26
 
