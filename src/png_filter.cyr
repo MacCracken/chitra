@@ -162,9 +162,13 @@ fn _chitra_parse_ihdr(cur, raw): i64 {
     # Adam7 interlace is single-pass-only territory (tracked: chitra
     # 0.2). Reject before any size math.
     if (interlace != 0) { return chitra_err(CHITRA_ERR_INTERLACE); }
-    # Bit depths 1/2/4/16 need bit-unpacking / 16-bit handling — that
-    # is AL.P0d / chitra 0.2 scope. Depth-8 only here.
-    if (bit_depth != 8) { return chitra_err(CHITRA_ERR_BIT_DEPTH); }
+    # Bit depths 8 and 16 are supported (16-bit decodes via the high byte
+    # of each big-endian sample — see the color pass). Sub-byte depths
+    # 1/2/4 need bit-unpacking and are chitra 0.2.1 scope; reject loud.
+    if (bit_depth != 8 && bit_depth != 16) { return chitra_err(CHITRA_ERR_BIT_DEPTH); }
+    # color_type 3 (palette) is legal only at bit depth 1/2/4/8 (spec
+    # § 11.2.2 Table 11.1) — a 16-bit palette index is spec-illegal.
+    if (color_type == 3 && bit_depth == 16) { return chitra_err(CHITRA_ERR_BIT_DEPTH); }
 
     var channels = chitra_png_color_channels(color_type);
     if (channels < 0) { return chitra_err(CHITRA_ERR_UNSUPPORTED); }
@@ -305,6 +309,12 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
                     store64(raw + RAW_TRNS_LEN_OFFSET, chunk_len);
                 }
                 if (is_iend == 1) {
+                    # IEND carries no data (spec § 11.2.5) — a non-zero
+                    # length is a malformed stream, reject loud.
+                    if (chunk_len != 0) {
+                        store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
+                        return 0;
+                    }
                     seen_iend = 1;
                     walking = 0;
                 }
@@ -312,11 +322,17 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
             } }
     }
 
+    # Surface whether an IEND closed the stream (vs a tolerated clean
+    # IEND-less end) so the public image can carry it to the caller.
+    store64(raw + RAW_SEEN_IEND_OFFSET, seen_iend);
+
     # ---- derive sizes (validated dims from IHDR) ----
     var width = load64(raw + RAW_WIDTH_OFFSET);
     var height = load64(raw + RAW_HEIGHT_OFFSET);
     var channels = load64(raw + RAW_CHANNELS_OFFSET);
-    var bpp = channels;                    # depth-8 => 1 byte per channel
+    var bit_depth = load64(raw + RAW_BIT_DEPTH_OFFSET);
+    var bps = bit_depth / 8;               # bytes per sample: 1 (depth 8) or 2 (depth 16)
+    var bpp = channels * bps;              # bytes per pixel across all channels
     var row_bytes = width * bpp;
     var inflated_size = height * (1 + row_bytes);    # 1 filter byte per row
     var pixel_size = height * row_bytes;
@@ -325,10 +341,11 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
         return 0;
     }
 
-    # No IDAT at all — structurally valid but no pixels. A lying IHDR
-    # claiming huge dims with no/zero IDAT is caught here too.
+    # No IDAT at all — structurally valid but no pixels. Distinct from a
+    # lying-IHDR dimension failure (those trip the caps above) so callers
+    # can report "no pixel data" specifically.
     if (idat_total == 0) {
-        store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
+        store64(err_out, chitra_err(CHITRA_ERR_NO_IDAT));
         return 0;
     }
     # Decompression-bomb ratio cap (kii finding 3): inflated/idat above

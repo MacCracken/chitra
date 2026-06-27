@@ -14,6 +14,8 @@ fn test_error_codes_unique() {
     assert(CHITRA_ERR_BAD_CHUNK  != CHITRA_ERR_UNSUPPORTED, "bad chunk != unsupported");
     assert(CHITRA_ERR_UNSUPPORTED != CHITRA_ERR_INFLATE,   "unsupported != inflate");
     assert(CHITRA_ERR_INFLATE    != CHITRA_ERR_OOM,        "inflate != oom");
+    assert(CHITRA_ERR_FILTER     != CHITRA_ERR_NO_IDAT,    "filter != no_idat");
+    assert(CHITRA_ERR_NO_IDAT    != CHITRA_ERR_OTHER,      "no_idat != other");
     assert(CHITRA_ERR_OOM        != CHITRA_ERR_OTHER,      "oom != other");
     return 0;
 }
@@ -45,16 +47,17 @@ fn test_chitra_err_name() {
     assert(streq(chitra_err_name(CHITRA_ERR_SIGNATURE), "bad PNG signature"),
     "signature name");
     assert(streq(chitra_err_name(CHITRA_ERR_OOM), "out of memory"), "oom name");
+    assert(streq(chitra_err_name(CHITRA_ERR_NO_IDAT), "no IDAT chunks"), "no_idat name");
     # Unknown code → the non-null fallback, never a null deref.
     assert(streq(chitra_err_name(12345), "unknown error"), "unknown fallback");
     return 0;
 }
 
 # ================================================================
-# chitra_version() — 0.1.0 packed
+# chitra_version() — major*10000 + minor*100 + patch
 # ================================================================
 fn test_chitra_version() {
-    assert_eq(chitra_version(), 100, "version 0.1.0 packs to 100");
+    assert_eq(chitra_version(), 200, "version 0.2.0 packs to 200");
     return 0;
 }
 

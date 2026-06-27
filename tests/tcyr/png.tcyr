@@ -461,6 +461,137 @@ fn test_image_free() {
 }
 
 # ================================================================
+# 0.2.0 — bit depth 16: each big-endian sample truncates to its HIGH
+# byte (the same 16->8 reduction kii's terminal path used).
+# ================================================================
+fn test_decode_rgb16() {
+    var lo = 0;
+    var bytes = fx_rgb16_2x2(&lo);
+    var err = 0;
+    var img = chitra_png_decode(bytes, lo, &err);
+    assert(img != 0, "rgb16 decode ok");
+    assert_eq(err, 0, "rgb16 no err");
+    assert_eq(chitra_image_width(img), 2, "rgb16 w=2");
+    assert_eq(chitra_image_height(img), 2, "rgb16 h=2");
+    assert_eq(chitra_image_channels(img), 4, "rgb16 channels=4");
+    var px = chitra_image_pixels(img);
+    _assert_px(px, 0, 18, 86, 154, 255, "rgb16 px0 high bytes");
+    _assert_px(px, 1, 255, 0, 128, 255, "rgb16 px1 high bytes");
+    _assert_px(px, 2, 1, 3, 5, 255, "rgb16 px2 high bytes");
+    _assert_px(px, 3, 202, 186, 222, 255, "rgb16 px3 high bytes");
+    return 0;
+}
+
+# Sub(row0)+Up(row1) filters at bpp=6 — proves the unfilter predictors
+# thread the 16-bit byte-stride correctly (reconstruct fx_rgb16_2x2).
+fn test_decode_rgb16_filtered() {
+    var lo = 0;
+    var bytes = fx_rgb16_2x2_filtered(&lo);
+    var err = 0;
+    var img = chitra_png_decode(bytes, lo, &err);
+    assert(img != 0, "rgb16 filtered decode ok");
+    var px = chitra_image_pixels(img);
+    _assert_px(px, 0, 18, 86, 154, 255, "rgb16f px0");
+    _assert_px(px, 1, 255, 0, 128, 255, "rgb16f px1");
+    _assert_px(px, 2, 1, 3, 5, 255, "rgb16f px2");
+    _assert_px(px, 3, 202, 186, 222, 255, "rgb16f px3");
+    return 0;
+}
+
+fn test_decode_gray16() {
+    var lo = 0;
+    var bytes = fx_gray16_2x2(&lo);
+    var err = 0;
+    var img = chitra_png_decode(bytes, lo, &err);
+    assert(img != 0, "gray16 decode ok");
+    var px = chitra_image_pixels(img);
+    _assert_px(px, 0, 18, 18, 18, 255, "gray16 px0");
+    _assert_px(px, 1, 171, 171, 171, 255, "gray16 px1");
+    _assert_px(px, 2, 0, 0, 0, 255, "gray16 px2");
+    _assert_px(px, 3, 255, 255, 255, 255, "gray16 px3");
+    return 0;
+}
+
+# color_type 3 @ depth 16 is spec-illegal -> reject loud.
+fn test_reject_palette_depth16() {
+    var lo = 0;
+    var bytes = fx_palette_depth16_reject(&lo);
+    var err = 0;
+    var raw = chitra_png_parse_raw(bytes, lo, &err);
+    assert_eq(raw, 0, "ct3+depth16 -> null");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_BIT_DEPTH, "ct3+depth16 -> BIT_DEPTH");
+    return 0;
+}
+
+# Sub-byte depths 1/2/4 are still rejected (chitra 0.2.1 scope).
+fn test_reject_depth1() {
+    var lo = 0;
+    var bytes = fx_gray_depth1_reject(&lo);
+    var err = 0;
+    var raw = chitra_png_parse_raw(bytes, lo, &err);
+    assert_eq(raw, 0, "depth1 -> null");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_BIT_DEPTH, "depth1 -> BIT_DEPTH");
+    return 0;
+}
+
+# ================================================================
+# 0.2.0 hardening parity: NO_IDAT distinct code, IEND-length guard,
+# seen_iend signal, source_color_type accessor.
+# ================================================================
+fn test_reject_no_idat() {
+    var lo = 0;
+    var bytes = fx_no_idat(&lo);
+    var err = 0;
+    var raw = chitra_png_parse_raw(bytes, lo, &err);
+    assert_eq(raw, 0, "no idat -> null");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_NO_IDAT, "no idat -> NO_IDAT");
+    return 0;
+}
+
+fn test_reject_iend_nonzero() {
+    var lo = 0;
+    var bytes = fx_iend_nonzero(&lo);
+    var err = 0;
+    var raw = chitra_png_parse_raw(bytes, lo, &err);
+    assert_eq(raw, 0, "iend nonzero -> null");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_BAD_CHUNK, "iend nonzero len -> BAD_CHUNK");
+    return 0;
+}
+
+fn test_seen_iend() {
+    # Normal stream: IEND present -> seen_iend == 1.
+    var lo = 0;
+    var bytes = fx_rgb8_2x2(&lo);
+    var err = 0;
+    var img = chitra_png_decode(bytes, lo, &err);
+    assert(img != 0, "seen_iend decode ok");
+    assert_eq(chitra_image_seen_iend(img), 1, "iend present -> seen_iend=1");
+    # Clean IEND-less end: truncate exactly before the trailing 12-byte
+    # IEND chunk. Spec § 5.3 tolerance — still decodes, seen_iend == 0.
+    var err2 = 0;
+    var img2 = chitra_png_decode(bytes, lo - 12, &err2);
+    assert(img2 != 0, "iend-less still decodes");
+    assert_eq(chitra_image_seen_iend(img2), 0, "iend-less -> seen_iend=0");
+    return 0;
+}
+
+fn test_source_color_type() {
+    var lo = 0;
+    var err = 0;
+    var g = fx_gray8_2x2(&lo);
+    var img_g = chitra_png_decode(g, lo, &err);
+    assert_eq(chitra_image_source_color_type(img_g), 0, "src ctype grayscale=0");
+    var lo2 = 0;
+    var r = fx_rgb8_2x2(&lo2);
+    var img_r = chitra_png_decode(r, lo2, &err);
+    assert_eq(chitra_image_source_color_type(img_r), 2, "src ctype rgb=2");
+    # Pixels are normalized to RGBA8 (channels=4) but the source
+    # color_type is still reported faithfully.
+    assert_eq(chitra_image_channels(img_r), 4, "normalized channels=4");
+    return 0;
+}
+
+# ================================================================
 # Embedded PNG fixtures (generated; see header).
 # ================================================================
 # Returns an alloc'd buffer of the 77-byte fixture; sets *len_out.
@@ -1608,6 +1739,516 @@ fn fx_graya8_2x2(len_out): i64 {
     return b;
 }
 
+# Truecolor RGB (2) 2x2 @ bit depth 16, filter None. Decode truncates to high byte:
+# px0 (18,86,154) px1 (255,0,128) px2 (1,3,5) px3 (202,186,222), all a=255.
+# Returns an alloc'd buffer of the 92-byte fixture; sets *len_out.
+fn fx_rgb16_2x2(len_out): i64 {
+    var b = alloc(92);
+    store64(len_out, 92);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 2);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 2);
+    store8(b + 24, 16);
+    store8(b + 25, 2);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 173);
+    store8(b + 30, 68);
+    store8(b + 31, 70);
+    store8(b + 32, 48);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 35);
+    store8(b + 37, 73);
+    store8(b + 38, 68);
+    store8(b + 39, 65);
+    store8(b + 40, 84);
+    store8(b + 41, 120);
+    store8(b + 42, 218);
+    store8(b + 43, 99);
+    store8(b + 44, 16);
+    store8(b + 45, 50);
+    store8(b + 46, 9);
+    store8(b + 47, 171);
+    store8(b + 48, 152);
+    store8(b + 49, 181);
+    store8(b + 50, 231);
+    store8(b + 51, 63);
+    store8(b + 52, 3);
+    store8(b + 53, 195);
+    store8(b + 54, 255);
+    store8(b + 55, 6);
+    store8(b + 56, 7);
+    store8(b + 57, 6);
+    store8(b + 58, 70);
+    store8(b + 59, 38);
+    store8(b + 60, 102);
+    store8(b + 61, 22);
+    store8(b + 62, 86);
+    store8(b + 63, 182);
+    store8(b + 64, 83);
+    store8(b + 65, 255);
+    store8(b + 66, 118);
+    store8(b + 67, 237);
+    store8(b + 68, 187);
+    store8(b + 69, 183);
+    store8(b + 70, 22);
+    store8(b + 71, 0);
+    store8(b + 72, 115);
+    store8(b + 73, 232);
+    store8(b + 74, 10);
+    store8(b + 75, 9);
+    store8(b + 76, 58);
+    store8(b + 77, 47);
+    store8(b + 78, 123);
+    store8(b + 79, 25);
+    store8(b + 80, 0);
+    store8(b + 81, 0);
+    store8(b + 82, 0);
+    store8(b + 83, 0);
+    store8(b + 84, 73);
+    store8(b + 85, 69);
+    store8(b + 86, 78);
+    store8(b + 87, 68);
+    store8(b + 88, 174);
+    store8(b + 89, 66);
+    store8(b + 90, 96);
+    store8(b + 91, 130);
+    return b;
+}
+
+# Truecolor RGB (2) 2x2 @ bit depth 16, Sub(row0)+Up(row1) filters (bpp=6).
+# Reconstructs to the same pixels as fx_rgb16_2x2 — proves depth-16 unfilter.
+# Returns an alloc'd buffer of the 92-byte fixture; sets *len_out.
+fn fx_rgb16_2x2_filtered(len_out): i64 {
+    var b = alloc(92);
+    store64(len_out, 92);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 2);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 2);
+    store8(b + 24, 16);
+    store8(b + 25, 2);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 173);
+    store8(b + 30, 68);
+    store8(b + 31, 70);
+    store8(b + 32, 48);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 35);
+    store8(b + 37, 73);
+    store8(b + 38, 68);
+    store8(b + 39, 65);
+    store8(b + 40, 84);
+    store8(b + 41, 120);
+    store8(b + 42, 218);
+    store8(b + 43, 99);
+    store8(b + 44, 20);
+    store8(b + 45, 50);
+    store8(b + 46, 9);
+    store8(b + 47, 171);
+    store8(b + 48, 152);
+    store8(b + 49, 181);
+    store8(b + 50, 231);
+    store8(b + 51, 237);
+    store8(b + 52, 153);
+    store8(b + 53, 85);
+    store8(b + 54, 237);
+    store8(b + 55, 207);
+    store8(b + 56, 90);
+    store8(b + 57, 152);
+    store8(b + 58, 222);
+    store8(b + 59, 159);
+    store8(b + 60, 91);
+    store8(b + 61, 219);
+    store8(b + 62, 147);
+    store8(b + 63, 237);
+    store8(b + 64, 117);
+    store8(b + 65, 250);
+    store8(b + 66, 223);
+    store8(b + 67, 174);
+    store8(b + 68, 253);
+    store8(b + 69, 113);
+    store8(b + 70, 185);
+    store8(b + 71, 0);
+    store8(b + 72, 177);
+    store8(b + 73, 199);
+    store8(b + 74, 14);
+    store8(b + 75, 122);
+    store8(b + 76, 77);
+    store8(b + 77, 149);
+    store8(b + 78, 107);
+    store8(b + 79, 153);
+    store8(b + 80, 0);
+    store8(b + 81, 0);
+    store8(b + 82, 0);
+    store8(b + 83, 0);
+    store8(b + 84, 73);
+    store8(b + 85, 69);
+    store8(b + 86, 78);
+    store8(b + 87, 68);
+    store8(b + 88, 174);
+    store8(b + 89, 66);
+    store8(b + 90, 96);
+    store8(b + 91, 130);
+    return b;
+}
+
+# Grayscale (0) 2x2 @ bit depth 16, filter None. High-byte decode:
+# px0 g=18 px1 g=171 px2 g=0 px3 g=255 (each -> (g,g,g,255)).
+# Returns an alloc'd buffer of the 75-byte fixture; sets *len_out.
+fn fx_gray16_2x2(len_out): i64 {
+    var b = alloc(75);
+    store64(len_out, 75);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 2);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 2);
+    store8(b + 24, 16);
+    store8(b + 25, 0);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 7);
+    store8(b + 30, 77);
+    store8(b + 31, 142);
+    store8(b + 32, 187);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 18);
+    store8(b + 37, 73);
+    store8(b + 38, 68);
+    store8(b + 39, 65);
+    store8(b + 40, 84);
+    store8(b + 41, 120);
+    store8(b + 42, 218);
+    store8(b + 43, 99);
+    store8(b + 44, 16);
+    store8(b + 45, 50);
+    store8(b + 46, 89);
+    store8(b + 47, 125);
+    store8(b + 48, 150);
+    store8(b + 49, 129);
+    store8(b + 50, 225);
+    store8(b + 51, 255);
+    store8(b + 52, 255);
+    store8(b + 53, 255);
+    store8(b + 54, 0);
+    store8(b + 55, 17);
+    store8(b + 56, 193);
+    store8(b + 57, 4);
+    store8(b + 58, 188);
+    store8(b + 59, 96);
+    store8(b + 60, 108);
+    store8(b + 61, 76);
+    store8(b + 62, 85);
+    store8(b + 63, 0);
+    store8(b + 64, 0);
+    store8(b + 65, 0);
+    store8(b + 66, 0);
+    store8(b + 67, 73);
+    store8(b + 68, 69);
+    store8(b + 69, 78);
+    store8(b + 70, 68);
+    store8(b + 71, 174);
+    store8(b + 72, 66);
+    store8(b + 73, 96);
+    store8(b + 74, 130);
+    return b;
+}
+
+# color_type 3 (palette) @ bit depth 16 — spec-illegal (PNG 11.2.2).
+# sig + IHDR only; parse rejects at the IHDR gate -> CHITRA_ERR_BIT_DEPTH.
+# Returns an alloc'd buffer of the 33-byte fixture; sets *len_out.
+fn fx_palette_depth16_reject(len_out): i64 {
+    var b = alloc(33);
+    store64(len_out, 33);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 2);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 2);
+    store8(b + 24, 16);
+    store8(b + 25, 3);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 21);
+    store8(b + 30, 248);
+    store8(b + 31, 33);
+    store8(b + 32, 85);
+    return b;
+}
+
+# Grayscale (0) @ bit depth 1 — sub-byte depth, chitra 0.2.1 scope.
+# sig + IHDR only; parse rejects at the IHDR gate -> CHITRA_ERR_BIT_DEPTH.
+# Returns an alloc'd buffer of the 33-byte fixture; sets *len_out.
+fn fx_gray_depth1_reject(len_out): i64 {
+    var b = alloc(33);
+    store64(len_out, 33);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 8);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 1);
+    store8(b + 24, 1);
+    store8(b + 25, 0);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 203);
+    store8(b + 30, 123);
+    store8(b + 31, 210);
+    store8(b + 32, 238);
+    return b;
+}
+
+# Structurally valid PNG (ct2 depth8) with IHDR + IEND but ZERO IDAT.
+# parse -> CHITRA_ERR_NO_IDAT (distinct from a dimension failure).
+# Returns an alloc'd buffer of the 45-byte fixture; sets *len_out.
+fn fx_no_idat(len_out): i64 {
+    var b = alloc(45);
+    store64(len_out, 45);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 2);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 2);
+    store8(b + 24, 8);
+    store8(b + 25, 2);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 253);
+    store8(b + 30, 212);
+    store8(b + 31, 154);
+    store8(b + 32, 115);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 0);
+    store8(b + 37, 73);
+    store8(b + 38, 69);
+    store8(b + 39, 78);
+    store8(b + 40, 68);
+    store8(b + 41, 174);
+    store8(b + 42, 66);
+    store8(b + 43, 96);
+    store8(b + 44, 130);
+    return b;
+}
+
+# Valid rgb8 2x2 but IEND carries a 1-byte payload (spec 11.2.5 forbids).
+# CRC is valid; parse must reject the non-zero IEND length -> CHITRA_ERR_BAD_CHUNK.
+# Returns an alloc'd buffer of the 77-byte fixture; sets *len_out.
+fn fx_iend_nonzero(len_out): i64 {
+    var b = alloc(77);
+    store64(len_out, 77);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 2);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 2);
+    store8(b + 24, 8);
+    store8(b + 25, 2);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 253);
+    store8(b + 30, 212);
+    store8(b + 31, 154);
+    store8(b + 32, 115);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 19);
+    store8(b + 37, 73);
+    store8(b + 38, 68);
+    store8(b + 39, 65);
+    store8(b + 40, 84);
+    store8(b + 41, 120);
+    store8(b + 42, 218);
+    store8(b + 43, 99);
+    store8(b + 44, 248);
+    store8(b + 45, 207);
+    store8(b + 46, 192);
+    store8(b + 47, 192);
+    store8(b + 48, 0);
+    store8(b + 49, 194);
+    store8(b + 50, 12);
+    store8(b + 51, 255);
+    store8(b + 52, 185);
+    store8(b + 53, 68);
+    store8(b + 54, 228);
+    store8(b + 55, 0);
+    store8(b + 56, 26);
+    store8(b + 57, 88);
+    store8(b + 58, 3);
+    store8(b + 59, 58);
+    store8(b + 60, 226);
+    store8(b + 61, 146);
+    store8(b + 62, 110);
+    store8(b + 63, 217);
+    store8(b + 64, 0);
+    store8(b + 65, 0);
+    store8(b + 66, 0);
+    store8(b + 67, 1);
+    store8(b + 68, 73);
+    store8(b + 69, 69);
+    store8(b + 70, 78);
+    store8(b + 71, 68);
+    store8(b + 72, 0);
+    store8(b + 73, 209);
+    store8(b + 74, 26);
+    store8(b + 75, 79);
+    store8(b + 76, 225);
+    return b;
+}
+
 fn main() {
     test_cursor_bounds();
     test_signature();
@@ -1632,6 +2273,15 @@ fn main() {
     test_decode_rgba8_convenience();
     test_reject_palette_oob();
     test_image_free();
+    test_decode_rgb16();
+    test_decode_rgb16_filtered();
+    test_decode_gray16();
+    test_reject_palette_depth16();
+    test_reject_depth1();
+    test_reject_no_idat();
+    test_reject_iend_nonzero();
+    test_seen_iend();
+    test_source_color_type();
     return assert_summary();
 }
 

@@ -61,7 +61,9 @@ var CHITRA_MAX_INFLATE_RATIO = 1100;
 #   +64  plte_len     (i64 — PLTE data length, 0 if none)
 #   +72  trns_off     (i64 — byte offset of tRNS data within src, 0 if none)
 #   +80  trns_len     (i64 — tRNS data length, 0 if none)
-#   +88  (reserved)
+#   +88  seen_iend    (i64 — 1 if an IEND chunk closed the stream, else 0;
+#                      0 = clean IEND-less end, spec § 5.3 tolerance —
+#                      surfaced so consumers can warn while still decoding)
 # ================================================================
 var RAW_WIDTH_OFFSET        = 0;
 var RAW_HEIGHT_OFFSET       = 8;
@@ -74,6 +76,7 @@ var RAW_PLTE_OFF_OFFSET     = 56;
 var RAW_PLTE_LEN_OFFSET     = 64;
 var RAW_TRNS_OFF_OFFSET     = 72;
 var RAW_TRNS_LEN_OFFSET     = 80;
+var RAW_SEEN_IEND_OFFSET    = 88;
 var CHITRA_PNG_RAW_SIZE     = 96;
 
 # ---- ChitraPngRaw accessors -------------------------------------
@@ -88,6 +91,7 @@ fn chitra_raw_plte_off(raw): i64    { return load64(raw + RAW_PLTE_OFF_OFFSET); 
 fn chitra_raw_plte_len(raw): i64    { return load64(raw + RAW_PLTE_LEN_OFFSET); }
 fn chitra_raw_trns_off(raw): i64    { return load64(raw + RAW_TRNS_OFF_OFFSET); }
 fn chitra_raw_trns_len(raw): i64    { return load64(raw + RAW_TRNS_LEN_OFFSET); }
+fn chitra_raw_seen_iend(raw): i64   { return load64(raw + RAW_SEEN_IEND_OFFSET); }
 
 # Release a ChitraPngRaw. The stdlib `alloc` is a bump allocator with no
 # per-block free, so this is a no-op kept for API symmetry / a future

@@ -1,6 +1,6 @@
 # chitra
 
-Version: 0.1.0
+Version: 0.2.0
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder, a sibling AGNOS package in the mould of `sakshi` /
@@ -21,9 +21,19 @@ later without a rename.
   only). The decoder is complete and fuzz-corpus-tested — the public
   entry points are `chitra_png_decode` (→ an owned RGBA8 `ChitraImage`)
   and the `chitra_png_decode_rgba8` convenience wrapper.
-- **Staged (tracked, not silently dropped):** bit depths 1/2/4/16 and
-  Adam7 interlace → 0.2; **JPEG** (Huffman + IDCT + chroma upsample) →
-  0.3+.
+- **v0.2.0 — bit depth 16 + hardening parity.** Adds 16-bit decode for
+  color types 0/2/4/6 (each big-endian sample truncates to its high byte;
+  color_type 3 + depth 16 stays rejected per spec § 11.2.2). Plus the kii
+  guard-parity backport: an IEND-must-be-zero-length check, a distinct
+  `CHITRA_ERR_NO_IDAT` code (split out of `_DIMENSIONS`), and two additive
+  `ChitraImage` fields — `chitra_image_seen_iend` (1 = IEND closed the
+  stream, 0 = tolerated IEND-less end) and `chitra_image_source_color_type`
+  (the pre-normalization color_type). The struct widen is ABI-additive
+  (width/height/pixels/channels keep their offsets — mabda-safe).
+- **Staged (tracked, not silently dropped):** sub-byte depths 1/2/4 and
+  Adam7 interlace → **0.2.1** (the rest of the bit-depth matrix, a direct
+  continuation of the depth-16 work); **JPEG** (Huffman + IDCT + chroma
+  upsample) → 0.3+.
 
 ## Relationships
 
@@ -46,7 +56,7 @@ later without a rename.
   Resolved by `cyrius deps` into `lib/`.
 
 All deps are pinned in `cyrius.cyml`; the toolchain pin is
-`cyrius = "6.2.23"`.
+`cyrius = "6.2.44"`.
 
 ## Quick Start
 

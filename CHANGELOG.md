@@ -5,6 +5,71 @@ All notable changes to chitra are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] — 2026-06-26
+
+**Bit depth 16 + kii guard-parity backport.** This is the release that
+makes chitra a strict superset of kii's native PNG decoder, so kii can
+adopt chitra (the "PNG re-fold") with zero capability loss. No change to
+the depth-8 path — every existing decode is byte-for-byte identical.
+
+### Added
+- **16-bit decode** for color types 0/2/4/6. Each big-endian 16-bit
+  sample truncates to its **high byte** on the way to canonical RGBA8 —
+  the same lossy 16→8 reduction kii's terminal path used, so rendered
+  output is unchanged. The IHDR gate now accepts `bit_depth ∈ {8,16}`;
+  `bps = bit_depth/8` threads through the size math, the five unfilter
+  predictors (`bpp = channels*bps`), and the color pass.
+- `chitra_image_seen_iend(img)` — 1 if an IEND chunk closed the stream,
+  0 for a tolerated clean IEND-less end (spec § 5.3). Lets a consumer
+  warn while still using the pixels. Backed by a new `RAW_SEEN_IEND`
+  slot on `ChitraPngRaw`.
+- `chitra_image_source_color_type(img)` — the pre-normalization PNG
+  color_type (0/2/3/4/6), so a consumer can report the original format
+  even though pixels are normalized to RGBA8.
+- `CHITRA_ERR_NO_IDAT` (12) — a structurally valid PNG with zero IDAT
+  now reports this distinct code instead of collapsing into
+  `CHITRA_ERR_DIMENSIONS`.
+- Test fixtures + assertions for all of the above (depth-16 RGB None and
+  Sub/Up-filtered, depth-16 grayscale, ct3+depth16 rejection, depth-1
+  rejection, NO_IDAT, non-zero IEND, seen_iend both directions, source
+  color_type). Suite: error 17→20, png 232→302.
+
+### Changed / Hardened
+- **IEND-must-be-zero-length** guard: an IEND chunk with a non-zero
+  length is now rejected as `CHITRA_ERR_BAD_CHUNK` (spec § 11.2.5) —
+  backported from kii (its M8 chunk-ordering FSM).
+- `ChitraImage` widened 32B → 48B (seen_iend at +32, source color_type
+  at +40). **ABI-additive**: width/height/pixels/channels keep their
+  0.1.x offsets, so mabda's accessors are unaffected.
+- `chitra_version()` re-based to `major*10000 + minor*100 + patch`
+  (0.2.0 → 200); the prior comment's arithmetic was self-inconsistent.
+- `dist/chitra.cyr` regenerated via `cyrius distlib`.
+
+### Deferred (tracked)
+- **0.2.1** — sub-byte depths 1/2/4 and Adam7 interlace (the remainder
+  of the bit-depth matrix; a direct continuation of this depth-16 work).
+  Both still reject loud today.
+- **0.3+** — JPEG.
+
+## [0.1.1] — 2026-06-26
+
+Toolchain + dependency refresh. **No functional change to the decoder** —
+the PNG → canonical RGBA8 path, security guards, and public API
+(`chitra_png_decode` / `chitra_png_decode_rgba8`) are byte-for-byte the
+same as 0.1.0; only the toolchain pin and vendored stdlib snapshot move.
+
+### Changed
+- Toolchain pin bumped `cyrius = "6.2.23"` → `"6.2.44"` in `cyrius.cyml`.
+- `lib/` re-vendored from the 6.2.44 stdlib snapshot via `cyrius deps`.
+  The snapshot is byte-identical to 6.2.23's for chitra's dep set, so
+  `sankoch` stays at **2.4.4** (zlib inflate + CRC32) and `thread` is
+  unchanged.
+- `dist/chitra.cyr` regenerated via `cyrius distlib` (bundle header now
+  reads Version 0.1.1).
+- `VERSION`, `README.md`, and `CHANGELOG.md` synced to 0.1.1.
+- All gates green: smoke link-check, the CPU test suites under
+  `tests/tcyr/`, and `version-check`.
+
 ## [0.1.0] — 2026-06-19
 
 First release. **chitra decodes PNG to canonical RGBA8** — a pure-Cyrius

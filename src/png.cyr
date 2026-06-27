@@ -18,23 +18,37 @@
 # color pass, which resolves the spans (see png_color.cyr's header).
 
 # ================================================================
-# ChitraImage — the public decode result (32 bytes).
-#   +0:  width    (i64 — pixels)
-#   +8:  height   (i64 — pixels)
-#   +16: pixels   (ptr — owned RGBA8, width*height*4 bytes)
-#   +24: channels (i64 — always 4 in 0.1.0)
+# ChitraImage — the public decode result (48 bytes).
+#   +0:  width       (i64 — pixels)
+#   +8:  height      (i64 — pixels)
+#   +16: pixels      (ptr — owned RGBA8, width*height*4 bytes)
+#   +24: channels    (i64 — always 4)
+#   +32: seen_iend   (i64 — 1 if IEND closed the stream, 0 = clean IEND-less)
+#   +40: src_ctype   (i64 — pre-normalization PNG color_type: 0/2/3/4/6)
+#
+# The +32/+40 fields are ADDITIVE — width/height/pixels/channels keep
+# their 0.1.x offsets, so mabda's accessors are unaffected by the widen.
 # ================================================================
-var IMAGE_WIDTH_OFFSET    = 0;
-var IMAGE_HEIGHT_OFFSET   = 8;
-var IMAGE_PIXELS_OFFSET   = 16;
-var IMAGE_CHANNELS_OFFSET = 24;
-var CHITRA_IMAGE_SIZE     = 32;
+var IMAGE_WIDTH_OFFSET       = 0;
+var IMAGE_HEIGHT_OFFSET      = 8;
+var IMAGE_PIXELS_OFFSET      = 16;
+var IMAGE_CHANNELS_OFFSET    = 24;
+var IMAGE_SEEN_IEND_OFFSET   = 32;
+var IMAGE_SRC_CTYPE_OFFSET   = 40;
+var CHITRA_IMAGE_SIZE        = 48;
 
 # ---- ChitraImage accessors --------------------------------------
 fn chitra_image_width(img): i64    { return load64(img + IMAGE_WIDTH_OFFSET); }
 fn chitra_image_height(img): i64   { return load64(img + IMAGE_HEIGHT_OFFSET); }
 fn chitra_image_pixels(img): i64   { return load64(img + IMAGE_PIXELS_OFFSET); }
 fn chitra_image_channels(img): i64 { return load64(img + IMAGE_CHANNELS_OFFSET); }
+# 1 if an IEND chunk closed the stream; 0 if the stream ended cleanly
+# without one (spec § 5.3 tolerance) — a consumer can warn yet still use
+# the pixels.
+fn chitra_image_seen_iend(img): i64 { return load64(img + IMAGE_SEEN_IEND_OFFSET); }
+# The source PNG color_type (0/2/3/4/6) before RGBA8 normalization — lets
+# a consumer report the original format even though pixels are canonical.
+fn chitra_image_source_color_type(img): i64 { return load64(img + IMAGE_SRC_CTYPE_OFFSET); }
 
 # ================================================================
 # chitra_png_decode — the top-level public decode. Parse (src, len) PNG
@@ -63,6 +77,8 @@ fn chitra_png_decode(src, len, err_out): i64 {
     store64(img + IMAGE_HEIGHT_OFFSET, chitra_raw_height(raw));
     store64(img + IMAGE_PIXELS_OFFSET, rgba);
     store64(img + IMAGE_CHANNELS_OFFSET, 4);
+    store64(img + IMAGE_SEEN_IEND_OFFSET, chitra_raw_seen_iend(raw));
+    store64(img + IMAGE_SRC_CTYPE_OFFSET, chitra_raw_color_type(raw));
     return img;
 }
 
@@ -97,10 +113,10 @@ fn chitra_image_free(img): i64 {
 }
 
 # ================================================================
-# Version probe — 0.1.0 packed as major*100 + minor*10 + patch =
-# 1*100 + 0*10 + 0 = 100.
+# Version probe — packed as major*10000 + minor*100 + patch.
+# 0.1.0 -> 100, 0.1.1 -> 101, 0.2.0 -> 200.
 # ================================================================
 # @public
 fn chitra_version(): i64 {
-    return 100;
+    return 200;
 }

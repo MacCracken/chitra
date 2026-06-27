@@ -63,6 +63,14 @@ fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
     var scan = chitra_raw_scanlines(raw);
     var scan_len = chitra_raw_scanlines_len(raw);
 
+    # Bytes per sample: 1 at depth 8, 2 at depth 16. At depth 16 each
+    # big-endian sample is truncated to its HIGH byte (offset +0 of the
+    # 2-byte pair) — the same lossy 16->8 reduction kii's terminal path
+    # used, keeping rendered output byte-identical. Sub-byte depths never
+    # reach here (parse_raw rejects 1/2/4), so bps is always 1 or 2.
+    var bit_depth = chitra_raw_bit_depth(raw);
+    var bps = bit_depth / 8;
+
     # width*height was capped <= CHITRA_MAX_PIXELS in parse_raw, so
     # out_size <= 64 Mi*4 = 256 Mi — within CHITRA_MAX_RAW_BYTES and far
     # below the i64-overflow boundary. Re-derive (don't trust a span).
@@ -70,8 +78,8 @@ fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
     if (npix <= 0) { store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS)); return 0; }
     var out_size = npix * 4;
 
-    # The scanline buffer must hold the channels parse_raw promised.
-    if (scan_len < npix * channels) {
+    # The scanline buffer must hold channels*bps bytes per pixel.
+    if (scan_len < npix * channels * bps) {
         store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
         return 0;
     }
@@ -95,19 +103,24 @@ fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
 
     # ---- grayscale (0): g -> (g,g,g,255); tRNS = one gray sample ----
     if (color_type == 0) {
-        # tRNS for grayscale is a 2-byte big-endian sample; at depth 8
-        # the keyed value is the low byte (high byte is 0).
+        # tRNS for grayscale is a 2-byte big-endian sample. Key on the
+        # same 8-bit value the pixel reduces to: the low byte at depth 8
+        # (high byte is 0), the high byte at depth 16 (the truncation).
         var key_g = 0 - 1;     # -1 == no key
         if (has_trns == 1) {
             if (trns_len != 2) {
                 store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
                 return 0;
             }
-            key_g = load8(trns_ptr + 1);
+            if (bps == 2) {
+                key_g = load8(trns_ptr + 0);
+            } else {
+                key_g = load8(trns_ptr + 1);
+            }
         }
         var i = 0;
         while (i < npix) {
-            var g = load8(scan + i);
+            var g = load8(scan + i * bps);
             var a = 255;
             if (g == key_g) { a = 0; }
             var o = out + i * 4;
@@ -126,22 +139,29 @@ fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
         var key_g2 = 0;
         var key_b = 0;
         if (has_trns == 1) {
-            # tRNS is three 2-byte big-endian samples (R,G,B); depth 8
-            # keyed value is each low byte.
+            # tRNS is three 2-byte big-endian samples (R,G,B). Key on the
+            # high byte at depth 16, the low byte at depth 8 — matching the
+            # per-channel pixel truncation below.
             if (trns_len != 6) {
                 store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
                 return 0;
             }
-            key_r = load8(trns_ptr + 1);
-            key_g2 = load8(trns_ptr + 3);
-            key_b = load8(trns_ptr + 5);
+            if (bps == 2) {
+                key_r = load8(trns_ptr + 0);
+                key_g2 = load8(trns_ptr + 2);
+                key_b = load8(trns_ptr + 4);
+            } else {
+                key_r = load8(trns_ptr + 1);
+                key_g2 = load8(trns_ptr + 3);
+                key_b = load8(trns_ptr + 5);
+            }
         }
         var i = 0;
         while (i < npix) {
-            var s = scan + i * 3;
+            var s = scan + i * 3 * bps;
             var r = load8(s + 0);
-            var g = load8(s + 1);
-            var b = load8(s + 2);
+            var g = load8(s + 1 * bps);
+            var b = load8(s + 2 * bps);
             var a = 255;
             if (r == key_r && g == key_g2 && b == key_b) { a = 0; }
             var o = out + i * 4;
@@ -201,9 +221,9 @@ fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
     if (color_type == 4) {
         var i = 0;
         while (i < npix) {
-            var s = scan + i * 2;
+            var s = scan + i * 2 * bps;
             var g = load8(s + 0);
-            var a = load8(s + 1);
+            var a = load8(s + 1 * bps);
             var o = out + i * 4;
             store8(o + 0, g);
             store8(o + 1, g);
@@ -214,16 +234,16 @@ fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
         return out;
     }
 
-    # ---- truecolor+alpha (6): (r,g,b,a) passthrough ----------------
+    # ---- truecolor+alpha (6): (r,g,b,a) -> high byte per channel ----
     if (color_type == 6) {
         var i = 0;
         while (i < npix) {
-            var s = scan + i * 4;
+            var s = scan + i * 4 * bps;
             var o = out + i * 4;
             store8(o + 0, load8(s + 0));
-            store8(o + 1, load8(s + 1));
-            store8(o + 2, load8(s + 2));
-            store8(o + 3, load8(s + 3));
+            store8(o + 1, load8(s + 1 * bps));
+            store8(o + 2, load8(s + 2 * bps));
+            store8(o + 3, load8(s + 3 * bps));
             i = i + 1;
         }
         return out;

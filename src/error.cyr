@@ -27,6 +27,7 @@ enum ChitraErrCode {
     CHITRA_ERR_BIT_DEPTH  = 9;   # bit_depth != 8 — 1/2/4/16 are chitra 0.2 / AL.P0d scope
     CHITRA_ERR_DIMENSIONS = 10;  # width/height vs data: lying-IHDR / overflow / bomb caps
     CHITRA_ERR_FILTER     = 11;  # per-row filter byte not in {0,1,2,3,4} (spec § 9)
+    CHITRA_ERR_NO_IDAT    = 12;  # structurally valid PNG with zero IDAT (no pixel data)
     CHITRA_ERR_OTHER      = 99;  # catch-all
 }
 
@@ -74,6 +75,7 @@ fn chitra_err_name(code): i64 {
     if (code == CHITRA_ERR_BIT_DEPTH)  { return "bit depth unsupported"; }
     if (code == CHITRA_ERR_DIMENSIONS) { return "bad dimensions"; }
     if (code == CHITRA_ERR_FILTER)     { return "bad filter byte"; }
+    if (code == CHITRA_ERR_NO_IDAT)    { return "no IDAT chunks"; }
     if (code == CHITRA_ERR_OTHER)      { return "other error"; }
     return "unknown error";
 }

@@ -1,11 +1,11 @@
 [package]
 name = "chitra"
 version = "${file:VERSION}"
-description = "chitra (चित्र — image / picture) — pure-Cyrius CPU raster decoder for AGNOS (PNG → canonical RGBA8 at v0.1.0; JPEG later)"
+description = "chitra (चित्र — image / picture) — pure-Cyrius CPU raster decoder for AGNOS (PNG → canonical RGBA8, bit depths 8/16 at v0.2.0; sub-byte 1/2/4 + Adam7 at 0.2.1; JPEG later)"
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/chitra"
 language = "cyrius"
-cyrius = "6.2.23"
+cyrius = "6.2.44"
 
 # chitra is a library — no CLI binary. `cyrius build` targets a smoke
 # program that links the full include chain to prove lib.cyr parses clean.
