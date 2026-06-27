@@ -60,10 +60,10 @@ order:
 
 | Module | Lines | Owns |
 |---|---|---|
-| [`../../src/jpeg_huffman.cyr`](../../src/jpeg_huffman.cyr) | 282 | `HuffTable` record (MINCODE/MAXCODE/VALPTR/COUNT/HUFFVAL); `_jpeg_huff_build` (Annex C/F table derivation + over-subscription reject); the entropy bit-reader (`_jpeg_br_*`) with byte-stuffing + marker/restart handling; `_jpeg_decode` (DECODE), `_jpeg_br_bits` (RECEIVE), `_jpeg_extend` (EXTEND); `_jpeg_decode_block` (one 8×8 block: DC diff + AC run/size) |
+| [`../../src/jpeg_huffman.cyr`](../../src/jpeg_huffman.cyr) | 288 | `HuffTable` record (MINCODE/MAXCODE/VALPTR/COUNT/HUFFVAL); `_jpeg_huff_build` (Annex C/F table derivation + over-subscription reject); the entropy bit-reader (`_jpeg_br_*`) with byte-stuffing + marker/restart handling; `_jpeg_decode` (DECODE), `_jpeg_br_bits` (RECEIVE), `_jpeg_extend` (EXTEND); `_jpeg_decode_block` (one 8×8 block: DC diff + AC run/size) |
 | [`../../src/jpeg_idct.cyr`](../../src/jpeg_idct.cyr) | 222 | The zig-zag→natural index map; `_jpeg_descale` (signed round-to-nearest); the libjpeg `jpeg_idct_islow` integer IDCT; `_jpeg_idct_block` (dequant + de-zig-zag + 2-D IDCT + level-shift+clamp) |
-| [`../../src/jpeg_markers.cyr`](../../src/jpeg_markers.cyr) | 508 | `ChitraJpegFrame` record + accessors; the baseline ceilings; `chitra_jpeg_check_signature`; the SOI→SOS marker walk `chitra_jpeg_scan_markers`; `_jpeg_parse_{sof0,dqt,dht,dri}`; `_jpeg_marker_action` (the non-baseline reject table) |
-| [`../../src/jpeg.cyr`](../../src/jpeg.cyr) | 420 | Public API: `chitra_jpeg_decode`, `chitra_jpeg_decode_rgba8`, `chitra_image_decode` (PNG/JPEG signature router); `_jpeg_parse_sos`; `_jpeg_decode_scan` (the MCU loop + plane placement + box upsample + BT.601 YCbCr→RGB) |
+| [`../../src/jpeg_markers.cyr`](../../src/jpeg_markers.cyr) | 510 | `ChitraJpegFrame` record + accessors; the baseline ceilings; `chitra_jpeg_check_signature`; the SOI→SOS marker walk `chitra_jpeg_scan_markers`; `_jpeg_parse_{sof0,dqt,dht,dri}`; `_jpeg_marker_action` (the non-baseline reject table) |
+| [`../../src/jpeg.cyr`](../../src/jpeg.cyr) | 434 | Public API: `chitra_jpeg_decode`, `chitra_jpeg_decode_rgba8`, `chitra_image_decode` (PNG/JPEG signature router); `_jpeg_parse_sos`; `_jpeg_decode_scan` (the MCU loop + plane placement + box upsample + BT.601 YCbCr→RGB) |
 
 ## Why huffman + idct precede markers in the include chain
 
@@ -236,7 +236,7 @@ lines 398–443).
 but the JPEG byte-buffer / entropy surface has **not been fuzzed in-tree**: there
 is no in-tree fuzz harness and no benchmark harness yet. Both are v1.0 gates. The
 byte-identical ImageMagick cross-check is correctness evidence, not fuzz
-coverage. The 199 assertions in `jpeg.tcyr` (of 724 total across the 5 suites,
+coverage. The 203 assertions in `jpeg.tcyr` (of 728 total across the 5 suites,
 `make test`) exercise the marker walk, table builds, entropy decode, IDCT, and
 color, but are hand-authored, not generated.
 

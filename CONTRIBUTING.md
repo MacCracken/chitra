@@ -42,8 +42,8 @@ bit depth (1/2/4/8/16 per PNG § 11.2.2 Table 11.1), Adam7 interlace, the five
 § 9 unfilter predictors, canonical-RGBA8 normalization, and the kii-inherited
 security guards.
 
-JPEG / GIF / BMP and friends are post-0.2 work (JPEG → 0.3+). The format-agnostic
-name exists precisely so they can join without a rename. Before writing a new
+GIF / BMP and friends are post-0.3 work; JPEG baseline shipped in 0.3.0. The
+format-agnostic name exists precisely so they can join without a rename. Before writing a new
 decoder, **open an issue to confirm sequencing** — a large format lands as small
 bites (e.g. JPEG: Huffman, then IDCT, then chroma upsample), each verified
 against a real reference (ImageMagick output) before the next.
@@ -67,9 +67,10 @@ are non-negotiable — see
   and any widen bumps `CHITRA_IMAGE_SIZE`. Never insert a field in the middle.
 
 Any change to the `@public` surface
-(`chitra_png_decode`, `chitra_png_decode_rgba8`, the `chitra_image_*` accessors,
-the error API, the `ChitraErrCode` enum) requires a `Breaking` CHANGELOG entry
-and an ADR.
+(`chitra_png_decode`, `chitra_png_decode_rgba8`, `chitra_jpeg_decode`,
+`chitra_jpeg_decode_rgba8`, `chitra_image_decode`, the `chitra_image_*`
+accessors, the error API, the `ChitraErrCode` enum) requires a `Breaking`
+CHANGELOG entry and an ADR.
 
 ## Dependencies
 
@@ -95,17 +96,20 @@ Every behavior change needs at least:
   bit-depth × color-type cell, etc.) asserting the right `ChitraErrCode`
 
 Place each in the matching `tests/tcyr/` suite — `error.tcyr` (error paths),
-`interlace.tcyr` (Adam7), `png.tcyr` (the core decode matrix), or
-`subbyte.tcyr` (1/2/4-bit grayscale/palette). The suites are globbed by
-`make test`; each is a standalone `main()`. The current baseline is **525
-assertions across 4 suites** — PRs that lower coverage will be asked to add it.
+`interlace.tcyr` (Adam7), `jpeg.tcyr` (baseline JPEG decode + reject paths),
+`png.tcyr` (the core PNG decode matrix), or `subbyte.tcyr` (1/2/4-bit
+grayscale/palette). The suites are globbed by `make test`; each is a standalone
+`main()`. The current baseline is **728 assertions across 5 suites** — PRs that
+lower coverage will be asked to add it.
 Confirm the count with `make count-assertions`.
 
 > **Wanted contribution:** there is no fuzz harness and no benchmark harness
-> in-tree yet. The decoder is "fuzz-corpus-tested" by lineage (its kii origin),
-> but chitra itself ships neither file. A `.fcyr` fuzz harness over the
-> byte-buffer entry points and a `.bcyr` bench over the unfilter/normalization
-> hot paths are both welcome — open an issue first to agree on shape.
+> in-tree yet (both are v1.0 gates). The PNG decoder is "fuzz-corpus-tested" by
+> lineage (its kii origin); the JPEG entropy decoder is from-scratch chitra code
+> and has never been fuzzed in-tree. A `.fcyr` fuzz harness over the byte-buffer
+> entry points (`chitra_image_decode` / the PNG + JPEG decoders) and a `.bcyr`
+> bench over the decode hot paths are both welcome — open an issue first to agree
+> on shape.
 
 ## Modules and the dist bundle
 
@@ -114,7 +118,8 @@ Confirm the count with `make count-assertions`.
   strip-concatenate them into a compile-clean `dist/chitra.cyr`. Adding a stdlib
   include to a domain module breaks the bundle.
 - **`[lib].modules` order in `cyrius.cyml` is dependency order:** `error.cyr` →
-  `png_chunks.cyr` → `png_filter.cyr` → `png_color.cyr` → `png.cyr`. Don't
+  `png_chunks.cyr` → `png_filter.cyr` → `png_color.cyr` → `png.cyr` →
+  `jpeg_huffman.cyr` → `jpeg_idct.cyr` → `jpeg_markers.cyr` → `jpeg.cyr`. Don't
   reorder casually.
 - **Re-run `make dist` after touching module order or any domain module**, and
   confirm `dist/chitra.cyr` still compiles. The rationale lives in

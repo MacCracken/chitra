@@ -15,7 +15,7 @@ DRI/RST restart markers — normalizing to the **same canonical RGBA8**
 entry point. Decoder output is verified **byte-identical to ImageMagick** on
 a real 16×16 baseline gradient JPEG (real Annex K Huffman tables + AC
 entropy). The PNG decode path is unchanged. `chitra_version()` → **300**.
-**724 assertions** across 5 suites. See [`CHANGELOG.md`](../../CHANGELOG.md).
+**728 assertions** across 5 suites. See [`CHANGELOG.md`](../../CHANGELOG.md).
 
 Released tags: 0.1.0, 0.2.0, 0.2.1 (SemVer; pre-1.0, the public surface is
 still moving — no API freeze until v1.0). **0.3.0 is being cut now and is
@@ -192,7 +192,7 @@ PNG + shared:
 
 JPEG (0.3.0):
 
-- `jpeg_huffman.cyr` (282 L) — frame-independent Huffman machinery: the
+- `jpeg_huffman.cyr` (288 L) — frame-independent Huffman machinery: the
   canonical decode-table representation (`mincode`/`maxcode`/`valptr`/
   `huffval`) built from DHT BITS + HUFFVAL (T.81 Annex C + F) with
   over-subscription rejection; the entropy bit-reader (MSB-first, `0xFF00`
@@ -204,7 +204,7 @@ JPEG (0.3.0):
   the libjpeg `jpeg_idct_islow` integer fixed-point 8×8 inverse DCT, the
   `+128` level-shift with `[0,255]` clamp, and `_jpeg_descale` (signed
   round-to-nearest division, since Cyrius `>>` is logical).
-- `jpeg_markers.cyr` (508 L) — `chitra_jpeg_check_signature`,
+- `jpeg_markers.cyr` (510 L) — `chitra_jpeg_check_signature`,
   `chitra_jpeg_scan_markers` (SOI → segment walk → SOS, parsing SOF0 frame
   header / DQT / DHT / DRI and **rejecting** non-baseline modes), the
   `ChitraJpegFrame` storage, and the JPEG security guards: sampling factors
@@ -212,7 +212,7 @@ JPEG (0.3.0):
   component ids rejected, ΣHi·Vi ≤ `MAX_BLOCKS_PER_MCU` (10) enforced before
   MCU geometry, `MAX_DIM`/`MAX_PIXELS` re-checked, plus `MAX_COMPONENTS`=4,
   `MAX_SAMP_FACTOR`=4, `MAX_QUANT_TABLES`=4, `MAX_HUFF_TABLES`=4.
-- `jpeg.cyr` (420 L) — the public JPEG decode API (`chitra_jpeg_decode` /
+- `jpeg.cyr` (434 L) — the public JPEG decode API (`chitra_jpeg_decode` /
   `chitra_jpeg_decode_rgba8`) and the format-sniffing `chitra_image_decode`
   router; `_jpeg_parse_sos` (scan header — Td/Ta selectors, baseline
   Ss=0/Se=63/Ah=Al=0), the subsampling-aware `_jpeg_decode_scan` MCU loop
@@ -226,21 +226,21 @@ Include chain: `lib.cyr` (64 L) pulls the stdlib set then
 
 ## Sizes
 
-- `dist/chitra.cyr` — **~121 KB** (123,601 bytes / 2,903 lines), regenerated
+- `dist/chitra.cyr` — **~122 KB** (124,630 bytes / 2,925 lines), regenerated
   by `cyrius distlib` (= `make dist`). This is the artifact consumers link.
-- `build/chitra_smoke` — **~377 KB**, built from `programs/smoke.cyr` via
+- `build/chitra_smoke` — **~378 KB** (386,480 bytes), built from `programs/smoke.cyr` via
   `make build`. It only proves the include chain compiles + links clean —
   chitra is a library, there is no real CLI behind it.
 
 ## Tests + bench
 
 - `make test` (globs `tests/tcyr/*.tcyr`; each is a standalone `main()`) →
-  **724 assertions, all pass** across 5 suites:
+  **728 assertions, all pass** across 5 suites:
   - `error.tcyr` — **20** (error codes, `chitra_err_*` accessors, name
     round-trips, `chitra_version`).
   - `interlace.tcyr` — **35** (Adam7 cross-checked against the trusted
     non-interlaced decode for 7 color/depth/odd-dimension cases).
-  - `jpeg.tcyr` — **199** (marker scan + non-baseline rejection, SOF0
+  - `jpeg.tcyr` — **203** (marker scan + non-baseline rejection, SOF0
     components + DQT, Huffman table build vs Annex K.3.3, entropy block
     decode, zig-zag + IDCT + dequant known-answers, end-to-end grayscale /
     YCbCr 4:4:4 / 4:2:0 / restart-interval decodes, and a real

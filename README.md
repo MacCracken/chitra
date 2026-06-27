@@ -7,8 +7,8 @@ raster image decoder, a sibling AGNOS package in the mould of `sakshi` /
 `patra` / `samvada`. It turns encoded image bytes into canonical RGBA8
 pixels with no GPU, no C shim, and no external binaries.
 
-The name is deliberately format-agnostic so JPEG / GIF / BMP can join
-later without a rename.
+The name is deliberately format-agnostic — PNG and JPEG already share it,
+and GIF / BMP can join later without a rename.
 
 ## Scope
 

@@ -32,12 +32,23 @@ The realistic threats:
   - CRC mismatches accepted as valid (a validation-gate bypass).
   - Palette-index out-of-bounds reads (a color-type-3 index pointing past the
     PLTE table).
+- **Malformed JPEG** — a crafted baseline JFIF that tries to trigger decoder bugs:
+  - Out-of-bounds reads on truncated markers/segments or a runaway entropy stream.
+  - Integer overflow in MCU / dimension / component-count math.
+  - Divide-by-zero from a zero sampling factor (the CVE-2018-11212 class).
+  - Malformed Huffman tables (over-subscribed codes) or out-of-range
+    DC/AC magnitude categories and run lengths.
+  - Chroma-upsample out-of-bounds on mismatched component dimensions.
+  - Non-baseline modes (progressive, arithmetic, 12-bit, hierarchical / lossless,
+    CMYK) used as an attack surface — chitra rejects all of these outright.
 - **Pathologically large output** — a small input declaring extreme dimensions,
   producing an output frame that exhausts the consumer's memory.
 
-DEFLATE decompression itself is **not** chitra's code — it is `sankoch`'s job
-(RFC 1950 / 1951 `zlib_decompress`). chitra owns the framing, the bounds
-discipline around the inflate call, and the post-inflate exact-size check.
+For PNG, DEFLATE decompression itself is **not** chitra's code — it is
+`sankoch`'s job (RFC 1950 / 1951 `zlib_decompress`); chitra owns the framing, the
+bounds discipline around the inflate call, and the post-inflate exact-size check.
+For JPEG, the Huffman/entropy decode **is** chitra's own code — its bounds are
+the subject of the 2026-06-27 audit.
 
 ## Mitigations in code (✅ shipped)
 
@@ -156,19 +167,26 @@ We will:
 - Coordinate disclosure — default **90 days** from acknowledgment, or whenever a
   fix lands and propagates to consumers (mabda, kii), whichever is sooner.
 
-For format-specific issues (e.g. a known libpng/lodepng/stb_image
+For format-specific issues (e.g. a known libpng / lodepng / stb_image / libjpeg
 vulnerability), please cite the CVE ID. If chitra inherits an issue by faithfully
-implementing the PNG spec, the fix may involve hardening chitra's parser beyond
-spec.
+implementing the PNG or JPEG spec, the fix may involve hardening chitra's parser
+beyond spec.
 
 ## Audit history
 
-- [`docs/audit/2026-06-26-audit.md`](docs/audit/2026-06-26-audit.md) — first
-  full security audit of the chitra decode path
+- [`docs/audit/2026-06-26-audit.md`](docs/audit/2026-06-26-audit.md) — the PNG
+  decode-path audit
   ([`src/png_chunks.cyr`](src/png_chunks.cyr),
   [`src/png_filter.cyr`](src/png_filter.cyr),
   [`src/png_color.cyr`](src/png_color.cyr),
   [`src/png.cyr`](src/png.cyr), [`src/error.cyr`](src/error.cyr)).
+- [`docs/audit/2026-06-27-audit.md`](docs/audit/2026-06-27-audit.md) — the
+  baseline JPEG decode-path audit
+  ([`src/jpeg_huffman.cyr`](src/jpeg_huffman.cyr),
+  [`src/jpeg_idct.cyr`](src/jpeg_idct.cyr),
+  [`src/jpeg_markers.cyr`](src/jpeg_markers.cyr),
+  [`src/jpeg.cyr`](src/jpeg.cyr)); verdict: memory-safe — no reachable
+  out-of-bounds, overflow, or divide-by-zero.
 
 > Coverage gap to be transparent about: chitra ships **no in-tree fuzz harness
 > and no benchmark harness** yet. The defensive guards above are exercised by

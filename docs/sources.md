@@ -1,6 +1,6 @@
 # chitra — Sources
 
-> Last Updated: 2026-06-26
+> Last Updated: 2026-06-27
 
 The citation index for chitra's algorithmic and domain content. AGNOS
 math/domain crates carry a sources file so every nontrivial algorithm is
@@ -18,7 +18,7 @@ within each, by the module/function that consumes them.
 > implemented in `src/jpeg_idct.cyr`. Where a citation is the spec
 > definition (T.81) it is authoritative; where it is an implementation
 > reference (libjpeg source) it is a guide, marked as such. The JPEG
-> decode path is landing bite-by-bite across the 0.3.0 arc.
+> decode path shipped in the 0.3.0 cut.
 >
 > Cyrius note: `>>` is a logical shift, so `src/jpeg_idct.cyr` rounds via
 > signed division (`_jpeg_descale`, round-to-nearest, symmetric about 0)
@@ -27,7 +27,7 @@ within each, by the module/function that consumes them.
 > deterministic; it can differ from libjpeg by ≤1 LSB on negative
 > intermediates.
 
-## JPEG (0.3.0, forthcoming)
+## JPEG (shipped, 0.3.0)
 
 ### Format syntax and entropy decode
 
@@ -104,8 +104,8 @@ The JPEG-specific vulnerability classes the 0.3.0 hardening checklist
 defends against. Referenced, not duplicated — the full mapping of each
 class to its chitra guard lives in
 [`proposals/jpeg-baseline-decoder.md`](proposals/jpeg-baseline-decoder.md)
-(Security hardening checklist) and will be re-verified in the bite-9 JPEG
-audit (mirroring [`audit/2026-06-26-audit.md`](audit/2026-06-26-audit.md)).
+(Security hardening checklist) and was verified in the 2026-06-27 JPEG
+audit ([`audit/2026-06-27-audit.md`](audit/2026-06-27-audit.md)).
 
 - **CVE-2022-28041** — stb_image baseline DC-coefficient integer overflow
   (also the progressive DC-accumulation class). <https://nvd.nist.gov/vuln/detail/CVE-2022-28041>

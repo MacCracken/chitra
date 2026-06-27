@@ -13,27 +13,33 @@ out memory by advancing a cursor; it has **no per-block reclamation**. There is
 no `free()` counterpart in chitra's call graph — grep the source and the only
 allocation primitive in use is `alloc()`:
 
-- `src/png_filter.cyr` — the parse path: the concatenated IDAT buffer, the
-  inflated scanline buffer, the reconstructed pixel buffer, the Paeth/Up
-  filter work rows, and the `ChitraPngRaw` record itself.
-- `src/png_color.cyr:101` — the canonical-RGBA8 output buffer.
-- `src/png.cyr:74` — the 48-byte `ChitraImage` record.
-- `src/error.cyr:40` — the 16-byte `ChitraErr` record.
+- `src/png_filter.cyr` — the PNG parse path: the concatenated IDAT buffer, the
+  inflated scanline buffer, the reconstructed pixel buffer, the Paeth/Up filter
+  work rows, and the `ChitraPngRaw` record itself.
+- `src/png_color.cyr` — the canonical-RGBA8 output buffer.
+- `src/jpeg_markers.cyr` — the `ChitraJpegFrame` record plus its quant-table and
+  Huffman-table side allocations.
+- `src/jpeg.cyr` — the per-component MCU planes, the zig-zag/IDCT scratch, and the
+  RGBA8 output buffer.
+- `src/png.cyr` — the 48-byte `ChitraImage` record (shared by both decoders).
+- `src/error.cyr` — the 16-byte `ChitraErr` record.
 
 None of these are ever returned to the allocator during a decode.
 
 ## The `*_free` no-ops
 
-Two `@public` "free" functions exist purely for API symmetry, and both are
+Three `@public` "free" functions exist purely for API symmetry, and all are
 verified no-ops that return `0`:
 
-- `chitra_image_free(img)` — `src/png.cyr:111`. Body is `return 0;`. The header
-  (lines 105–108) states it plainly: *"The stdlib `alloc` is a bump allocator
-  with no per-block free, so this is a documented no-op kept for API symmetry
-  (matches `chitra_raw_free`) and a future arena-backed allocator. Safe on a 0
-  ptr."*
-- `chitra_raw_free(raw)` — `src/png_chunks.cyr:103`. Body is `return 0;`. Same
-  rationale (lines 99–102).
+- `chitra_image_free(img)` — `src/png.cyr`. Body is `return 0;`. The header
+  states it plainly: *"The stdlib `alloc` is a bump allocator with no per-block
+  free, so this is a documented no-op kept for API symmetry (matches
+  `chitra_raw_free`) and a future arena-backed allocator. Safe on a 0 ptr."*
+- `chitra_raw_free(raw)` — `src/png_chunks.cyr`. Body is `return 0;`. Same
+  rationale.
+- `chitra_jpeg_frame_free(f)` — `src/jpeg_markers.cyr`. Body is `return 0;`. The
+  `ChitraJpegFrame` and its side allocations (quant / Huffman storage, the MCU
+  planes) live in the same bump arena; same no-op rationale, safe on a 0 ptr.
 
 Because the bodies ignore their argument entirely, **both are safe to call on a
 `0` pointer** — calling `chitra_image_free(0)` after a failed decode is a no-op,
@@ -71,8 +77,8 @@ per-image free:
   process should drive the lifetime at the arena boundary (reset the region
   between batches) rather than expecting `chitra_image_free` to give memory back.
 
-Do **not** treat `chitra_image_free` / `chitra_raw_free` as memory pressure
-relief. They are markers, not collectors.
+Do **not** treat `chitra_image_free` / `chitra_raw_free` / `chitra_jpeg_frame_free`
+as memory-pressure relief. They are markers, not collectors.
 
 ## See also
 

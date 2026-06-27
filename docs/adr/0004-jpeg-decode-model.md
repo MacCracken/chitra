@@ -43,7 +43,7 @@ Three constraints shape the decision:
    is where that discipline pays its largest dividend, because the
    deferred surface is both large and dangerous.
 
-The full implementation plan — pipeline stages, six `src/jpeg_*.cyr`
+The full implementation plan — pipeline stages, four `src/jpeg_*.cyr`
 modules, the eleven new error codes, the nine-bite sequence, the security
 hardening checklist, the math summary, and the test plan — lives in the
 proposal ([`../proposals/jpeg-baseline-decoder.md`](../proposals/jpeg-baseline-decoder.md)).

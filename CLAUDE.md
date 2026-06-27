@@ -12,8 +12,8 @@
 
 **chitra** (चित्र — Sanskrit: *image / picture*) — a pure-Cyrius CPU raster
 image decoder. Encoded image bytes → canonical RGBA8 pixels. No GPU, no C shim,
-no external binaries. The name is format-agnostic so JPEG / GIF / BMP can join
-without a rename.
+no external binaries. The name is format-agnostic — PNG and JPEG already share
+it, and GIF / BMP can join later without a rename.
 
 - **Type**: Shared library (no CLI binary — consumers link `dist/chitra.cyr`)
 - **License**: GPL-3.0-only
@@ -26,8 +26,9 @@ without a rename.
 
 Own **CPU-side raster image decode** for AGNOS. Turn encoded image bytes into
 canonical RGBA8 with zero GPU dependency and no C shim — the pure-Cyrius answer
-to "load this PNG into a texture." PNG is feature-complete; JPEG and other
-formats land later without breaking the byte-buffer → RGBA8 contract.
+to "load this image into a texture." PNG and baseline JPEG are feature-complete;
+further formats (GIF, BMP) land later without breaking the byte-buffer → RGBA8
+contract.
 
 ## Current State
 
@@ -65,7 +66,7 @@ make count-assertions                                # NUL-safe assertion total 
 - **Validate against a real reference** — every decode-matrix claim is checked against ImageMagick output, plus an interlaced-vs-non-interlaced cross-check. Numbers/images or it didn't happen.
 - **Spec-cite the hard cells** — bit-depth × color-type legality follows PNG § 11.2.2 Table 11.1; the five unfilter predictors follow § 9. Cite the section in the code.
 - Every buffer declaration is a contract: `var buf[N]` = N **bytes**, not N entries.
-- **Trust no input byte** — a PNG is untrusted external data. Bounds-check every chunk length, reject lying IHDR, cap decompression bombs.
+- **Trust no input byte** — an encoded image (PNG or JPEG) is untrusted external data. Bounds-check every length, reject lying headers, cap decompression bombs, bound every entropy/Huffman loop.
 
 ## Rules (Hard Constraints)
 
@@ -74,7 +75,7 @@ make count-assertions                                # NUL-safe assertion total 
 - **NEVER use `gh` CLI** — use `curl` to the GitHub API if needed
 - **`lib/` must be a real directory populated by `cyrius deps`** — never a symlink to a cyrius checkout (an agent editing `lib/*.cyr` would corrupt the toolchain repo). `make` targets guard this via `check-lib-wiring`; if it trips: `rm lib && mkdir lib && cyrius deps`.
 - **Stdlib includes live ONLY in `src/lib.cyr`** — domain modules (`src/*.cyr`) are flat (no stdlib includes). This is what lets `cyrius distlib` strip-concatenate into a compile-clean `dist/chitra.cyr`. Adding a stdlib include to a domain module breaks the dist bundle.
-- **`[lib].modules` order in `cyrius.cyml` is dependency order** — `error.cyr` (dep-free) → `png_chunks.cyr` → `png_filter.cyr` → `png_color.cyr` → `png.cyr`. Don't reorder without re-running `cyrius distlib` and verifying the bundle still compiles.
+- **`[lib].modules` order in `cyrius.cyml` is dependency order** — `error.cyr` (dep-free) → `png_chunks.cyr` → `png_filter.cyr` → `png_color.cyr` → `png.cyr` → `jpeg_huffman.cyr` → `jpeg_idct.cyr` → `jpeg_markers.cyr` → `jpeg.cyr` (the frame-independent JPEG leaves precede the frame-builder — see [architecture/004](docs/architecture/004-jpeg-decode-pipeline.md)). Don't reorder without re-running `cyrius distlib` and verifying the bundle still compiles.
 - **`ChitraErr` stays a 16-byte record** (`+0` code, `+8` detail ptr) — layout-compatible with mabda's `GpuErr` so a decode failure maps cleanly onto `GPU_ERR_IMAGE_DECODE`. Don't widen it.
 - **`ChitraImage` field additions are append-only** — `width`/`height`/`pixels`/`channels` keep their 0.1.x offsets (mabda's accessors depend on them). New fields go at the end (`seen_iend` @ +32, `src_ctype` @ +40), and any widen bumps `CHITRA_IMAGE_SIZE`.
 - Do not add unnecessary dependencies (current set: stdlib + `sankoch` + `thread`).
@@ -108,7 +109,10 @@ CHANGELOG entry and an ADR:
 
 - `chitra_png_decode(src, len, err_out)` → owned RGBA8 `ChitraImage`, or `0` with `*err_out` set
 - `chitra_png_decode_rgba8(src, len, w_out, h_out)` → RGBA8 ptr directly (no detailed error)
-- `chitra_image_{width,height,pixels,channels,seen_iend,source_color_type}` accessors
+- `chitra_jpeg_decode(src, len, err_out)` / `chitra_jpeg_decode_rgba8(src, len, w_out, h_out)` — the JPEG pair, mirroring the PNG ones
+- `chitra_image_decode(src, len, err_out)` → the **format-sniffing router** (PNG magic vs JPEG SOI); the entry to reach for when the format isn't known up front
+- `chitra_png_check_signature` / `chitra_jpeg_check_signature` — signature predicates
+- `chitra_image_{width,height,pixels,channels,seen_iend,source_color_type}` accessors (`source_color_type`: PNG color_type 0/2/3/4/6, or `0x100 | ncomp` for JPEG — 0x101 grayscale, 0x103 YCbCr)
 - `chitra_image_free` (no-op under the bump allocator; kept for symmetry)
 - `chitra_version()` (packed `major*10000 + minor*100 + patch`)
 - error API: `chitra_err_new` / `chitra_err` / `chitra_err_code` / `chitra_err_detail` / `chitra_err_name` / `chitra_err_print_name` + the `ChitraErrCode` enum
@@ -130,8 +134,10 @@ CHANGELOG entry and an ADR:
 
 ### Security Hardening (before every release)
 
-A PNG is untrusted external data. The kii-inherited guards are non-negotiable —
-re-verify each before tagging:
+An encoded image is untrusted external data. The guards below are
+non-negotiable — re-verify each before tagging.
+
+**PNG** (the kii-inherited guards):
 
 1. **Decompression-bomb caps** — IDAT inflate output is capped; over-cap → `CHITRA_ERR_OOM`
 2. **Lying-IHDR rejection** — declared dimensions cross-checked against actual data → `CHITRA_ERR_DIMENSIONS`
@@ -140,6 +146,15 @@ re-verify each before tagging:
 5. **Bounds on every read** — truncated input → `CHITRA_ERR_TRUNCATED`, never an OOB read
 6. **Filter-byte validation** — per-row filter ∈ {0,1,2,3,4} → else `CHITRA_ERR_FILTER`
 7. **Spec-legal matrix only** — illegal bit-depth × color-type combos rejected, not guessed
+
+**JPEG** (baseline; see [docs/audit/2026-06-27-audit.md](docs/audit/2026-06-27-audit.md)):
+
+1. **Non-baseline rejection** — progressive / arithmetic / 12-bit / hierarchical-lossless / CMYK rejected at the marker classifier with distinct codes (attack-surface reduction)
+2. **Marker/segment bounds** — every 16-bit segment length validated against the input span
+3. **Sampling-factor guards** — `Hi/Vi ∈ 1..4` (reject 0 → div-by-zero), no duplicate component ids, `ΣHi·Vi ≤ 10`
+4. **Table bounds** — DQT/DHT precision/id checked; Huffman build rejects over-subscription; DECODE rejects out-of-range symbol indices
+5. **Entropy bounds** — DC category ≤ 11, AC size ≤ 10, coefficient index ≤ 63; restart markers resync deterministically
+6. **Plane/dimension caps** — every allocation bounded by `CHITRA_MAX_RAW_BYTES`; upsample indices stay within plane bounds
 
 File findings in `docs/audit/YYYY-MM-DD-audit.md`. Severity: CRITICAL / HIGH / MEDIUM / LOW.
 
@@ -171,15 +186,10 @@ File findings in `docs/audit/YYYY-MM-DD-audit.md`. Severity: CRITICAL / HIGH / M
 
 ## Docs
 
-> chitra does not yet carry a `docs/` tree. Per first-party standards it should
-> grow one as it matures — at minimum `docs/development/roadmap.md` and
-> `docs/development/state.md`, plus `docs/audit/` for the pre-release security
-> passes. Create entries when earned; don't scaffold empty directories.
-
 - [`docs/adr/`](docs/adr/) — architecture decision records. *Why X over Y?* (e.g. "fork kii's png.cyr vs. shared dep")
 - [`docs/architecture/`](docs/architecture/) — non-obvious constraints. *What can't I derive from the code alone?* (e.g. the `lib/`-must-not-be-a-symlink quirk, the flat-domain-module + distlib invariant)
 - [`docs/guides/`](docs/guides/) — task-oriented how-tos (e.g. "consuming chitra from mabda")
-- [`docs/development/roadmap.md`](docs/development/roadmap.md) — completed, backlog (JPEG → 0.3+), v1.0 criteria
+- [`docs/development/roadmap.md`](docs/development/roadmap.md) — completed (PNG, baseline JPEG), backlog (GIF, BMP), v1.0 criteria
 - [`docs/development/state.md`](docs/development/state.md) — live state snapshot, refreshed every release
 - [`docs/audit/`](docs/audit/) — security audit reports (`YYYY-MM-DD-audit.md`)
 - [`CHANGELOG.md`](CHANGELOG.md) — source of truth for all changes (Keep a Changelog; perf claims carry numbers; breaking changes get a Breaking section)
