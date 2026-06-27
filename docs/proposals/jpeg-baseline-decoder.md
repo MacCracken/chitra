@@ -109,7 +109,13 @@ and their resolutions:
   restart handling (`_jpeg_br_restart` byte-aligns + consumes the marker, DC
   predictors reset). `jpeg.tcyr` +16 assertions — 4:2:0 8×8 + 16×8 restart across
   two MCUs (suite 684 → 700). lint/fmt/vet clean.
-- Bites 8–9: pending.
+- **Bite 8 — DONE (2026-06-27).** Public `chitra_jpeg_decode_rgba8` +
+  `chitra_image_decode` (PNG/JPEG signature router); `chitra_version()` → 300,
+  `VERSION` → 0.3.0, manifest description + `png.cyr` src_ctype sentinel doc.
+  **Real-image e2e**: an ImageMagick-encoded 16×16 baseline gradient decodes
+  byte-identical to the reference (validates real Annex K Huffman + AC entropy).
+  `jpeg.tcyr` +24 (suite 700 → 724); CHANGELOG cut to [0.3.0]; README updated.
+- Bite 9 (hardening pass + audit doc): pending.
 
 ## Scope
 

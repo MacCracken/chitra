@@ -46,8 +46,11 @@ fn chitra_image_channels(img): i64 { return load64(img + IMAGE_CHANNELS_OFFSET);
 # without one (spec § 5.3 tolerance) — a consumer can warn yet still use
 # the pixels.
 fn chitra_image_seen_iend(img): i64 { return load64(img + IMAGE_SEEN_IEND_OFFSET); }
-# The source PNG color_type (0/2/3/4/6) before RGBA8 normalization — lets
-# a consumer report the original format even though pixels are canonical.
+# The source color type before RGBA8 normalization — lets a consumer report the
+# original format even though pixels are canonical. For PNG this is the PNG
+# color_type (0/2/3/4/6). For JPEG (chitra 0.3.0) it is an out-of-PNG-range
+# sentinel `0x100 | num_components` (0x101 grayscale, 0x103 YCbCr) so a consumer
+# switching on PNG's 0/2/3/4/6 never aliases a JPEG value (see ADR 0003).
 fn chitra_image_source_color_type(img): i64 { return load64(img + IMAGE_SRC_CTYPE_OFFSET); }
 
 # ================================================================
@@ -114,9 +117,9 @@ fn chitra_image_free(img): i64 {
 
 # ================================================================
 # Version probe — packed as major*10000 + minor*100 + patch.
-# 0.1.0 -> 100, 0.1.1 -> 101, 0.2.0 -> 200, 0.2.1 -> 201.
+# 0.1.0 -> 100, 0.1.1 -> 101, 0.2.0 -> 200, 0.2.1 -> 201, 0.3.0 -> 300.
 # ================================================================
 # @public
 fn chitra_version(): i64 {
-    return 201;
+    return 300;
 }

@@ -382,3 +382,39 @@ fn chitra_jpeg_decode(src, len, err_out): i64 {
     if (load64(err_out) != 0) { return 0; }
     return _jpeg_decode_scan(frame, src, len, entropy_start, err_out);
 }
+
+# ================================================================
+# chitra_jpeg_decode_rgba8 — convenience wrapper. Decode (src, len) and return
+# the RGBA8 pixel pointer directly, writing width/height through w_out / h_out
+# (>=8-byte slots). Returns 0 on any failure. Mirrors chitra_png_decode_rgba8.
+# ================================================================
+# @public
+fn chitra_jpeg_decode_rgba8(src, len, w_out, h_out): i64 {
+    store64(w_out, 0);
+    store64(h_out, 0);
+    var err = 0;
+    var img = chitra_jpeg_decode(src, len, &err);
+    if (img == 0) { return 0; }
+    store64(w_out, chitra_image_width(img));
+    store64(h_out, chitra_image_height(img));
+    return chitra_image_pixels(img);
+}
+
+# ================================================================
+# chitra_image_decode — format-sniffing top-level decode. Routes to the PNG or
+# JPEG decoder by signature (PNG 8-byte magic, or JPEG SOI 0xFFD8) — the
+# format-agnostic entry the "chitra" name was chosen for. Returns a ChitraImage
+# ptr, or 0 with *err_out set (CHITRA_ERR_SIGNATURE for an unrecognized format).
+# ================================================================
+# @public
+fn chitra_image_decode(src, len, err_out): i64 {
+    store64(err_out, 0);
+    if (chitra_png_check_signature(src, len) == 1) {
+        return chitra_png_decode(src, len, err_out);
+    }
+    if (chitra_jpeg_check_signature(src, len) == 1) {
+        return chitra_jpeg_decode(src, len, err_out);
+    }
+    store64(err_out, chitra_err(CHITRA_ERR_SIGNATURE));
+    return 0;
+}

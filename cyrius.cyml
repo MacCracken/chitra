@@ -1,7 +1,7 @@
 [package]
 name = "chitra"
 version = "${file:VERSION}"
-description = "chitra (चित्र — image / picture) — pure-Cyrius CPU raster decoder for AGNOS (PNG → canonical RGBA8, feature-complete at v0.2.1: all bit depths 1/2/4/8/16 + Adam7 interlace; JPEG later)"
+description = "chitra (चित्र — image / picture) — pure-Cyrius CPU raster decoder for AGNOS (PNG + JPEG → canonical RGBA8; PNG: all bit depths 1/2/4/8/16 + Adam7; JPEG v0.3.0: JFIF baseline, grayscale + YCbCr, 4:4:4/4:2:2/4:2:0 + restart markers)"
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/chitra"
 language = "cyrius"

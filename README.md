@@ -1,6 +1,6 @@
 # chitra
 
-Version: 0.2.1
+Version: 0.3.0
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder, a sibling AGNOS package in the mould of `sakshi` /
@@ -38,8 +38,19 @@ later without a rename.
   non-interlaced path yields, so the color pass is interlace-agnostic.
   Verified against ImageMagick + an interlaced-vs-non-interlaced
   cross-check (525-assertion suite).
-- **Staged (tracked, not silently dropped):** **JPEG** (Huffman + IDCT +
-  chroma upsample) → 0.3+. PNG is now feature-complete.
+- **v0.3.0 — JFIF baseline JPEG.** Adds a baseline (SOF0) JPEG decoder:
+  grayscale + YCbCr, all chroma subsampling (4:4:4 / 4:2:2 / 4:2:0), and
+  restart markers — Huffman entropy decode, the integer `jpeg_idct_islow`
+  inverse DCT, dequant/zig-zag, and full-range BT.601 YCbCr→RGB, all
+  normalizing to the same canonical RGBA8 `ChitraImage`. Public entries
+  `chitra_jpeg_decode` / `chitra_jpeg_decode_rgba8`, plus the
+  format-sniffing `chitra_image_decode` (PNG-or-JPEG router). Output is
+  verified **byte-identical to ImageMagick** on a real baseline JPEG.
+  Non-baseline modes (progressive, arithmetic, 12-bit, hierarchical /
+  lossless, CMYK) are cleanly rejected with distinct error codes.
+- **Staged (tracked, not silently dropped):** **GIF / BMP** → after JPEG;
+  an in-tree fuzz + benchmark harness (a v1.0 gate). PNG and baseline JPEG
+  are feature-complete.
 
 ## Relationships
 

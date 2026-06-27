@@ -5,9 +5,15 @@ All notable changes to chitra are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.3.0] — 2026-06-27
 
-The 0.3.0 JFIF-baseline JPEG arc — in progress, bite by bite. See
+**JFIF baseline JPEG decode.** chitra gains a full baseline JPEG decoder —
+grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0 chroma subsampling, and restart
+markers — normalizing to the same canonical RGBA8 surface PNG produces, plus a
+format-sniffing `chitra_image_decode` entry. Decoder output is verified
+**byte-identical to ImageMagick** on a real baseline JPEG with AC content.
+Non-baseline modes (progressive, arithmetic, 12-bit, hierarchical/lossless,
+CMYK) are cleanly rejected with distinct error codes. See
 [`docs/proposals/jpeg-baseline-decoder.md`](docs/proposals/jpeg-baseline-decoder.md)
 and [`docs/adr/0004-jpeg-decode-model.md`](docs/adr/0004-jpeg-decode-model.md).
 
@@ -69,6 +75,14 @@ and [`docs/adr/0004-jpeg-decode-model.md`](docs/adr/0004-jpeg-decode-model.md).
   and RST0–7 restart intervals reset the DC predictors and byte-align the entropy
   stream (`_jpeg_br_restart`). `jpeg.tcyr`: +16 assertions — a 4:2:0 8×8 decode
   and a 16×8 restart-interval decode across two MCUs (suite total 700).
+- **JPEG public API + format dispatch + real-image e2e (bite 8)** — public
+  `chitra_jpeg_decode_rgba8` convenience wrapper and `chitra_image_decode`
+  (signature-sniffing PNG-vs-JPEG router). `chitra_version()` → 300, `VERSION` →
+  0.3.0, manifest description updated, and the JPEG `src_ctype` sentinel
+  documented in `png.cyr`. `jpeg.tcyr`: +24 assertions including a real
+  ImageMagick-encoded 16×16 baseline gradient decoded **byte-identical** to the
+  reference (validates the real Annex K Huffman tables + AC entropy), the rgba8
+  wrapper, and dispatch routing (suite total 724).
 
 ## [0.2.1] — 2026-06-26
 
