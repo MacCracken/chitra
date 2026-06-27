@@ -686,6 +686,129 @@ fn test_dequant() {
     return 0;
 }
 
+# ---- bite 6a: end-to-end grayscale decode ----
+
+# A complete 8x8 baseline grayscale JPEG. Quant table all 1s; Annex K.3.3 DC
+# luminance Huffman table + a 2-symbol AC table; one entropy block encoding
+# DC size 4 = +8 (-> flat round(8/8)+128 = 129) then EOB. EOI closes the stream.
+fn fx_jpeg_gray_8x8(len_out): i64 {
+    var b = alloc(150);
+    var i = 0;
+    # SOI
+    store8(b + 0, 0xFF);
+    store8(b + 1, 0xD8);
+    # DQT: table 0, 64 ones
+    store8(b + 2, 0xFF);
+    store8(b + 3, 0xDB);
+    store8(b + 4, 0x00);
+    store8(b + 5, 0x43);
+    store8(b + 6, 0x00);
+    i = 0;
+    while (i < 64) { store8(b + 7 + i, 1); i = i + 1; }
+    # SOF0: 8x8, 1 component (id 1, H/V 1, Tq 0)
+    store8(b + 71, 0xFF);
+    store8(b + 72, 0xC0);
+    store8(b + 73, 0x00);
+    store8(b + 74, 0x0B);
+    store8(b + 75, 0x08);
+    store8(b + 76, 0x00);
+    store8(b + 77, 0x08);
+    store8(b + 78, 0x00);
+    store8(b + 79, 0x08);
+    store8(b + 80, 0x01);
+    store8(b + 81, 0x01);
+    store8(b + 82, 0x11);
+    store8(b + 83, 0x00);
+    # DHT: DC table 0 (Annex K) + AC table 0 (2 symbols)
+    store8(b + 84, 0xFF);
+    store8(b + 85, 0xC4);
+    store8(b + 86, 0x00);
+    store8(b + 87, 0x32);
+    store8(b + 88, 0x00);                # DC Tc/Th
+    store8(b + 89, 0x00);                # DC BITS L1..L16
+    store8(b + 90, 0x01);
+    store8(b + 91, 0x05);
+    store8(b + 92, 0x01);
+    store8(b + 93, 0x01);
+    store8(b + 94, 0x01);
+    store8(b + 95, 0x01);
+    store8(b + 96, 0x01);
+    store8(b + 97, 0x01);
+    store8(b + 98, 0x00);
+    store8(b + 99, 0x00);
+    store8(b + 100, 0x00);
+    store8(b + 101, 0x00);
+    store8(b + 102, 0x00);
+    store8(b + 103, 0x00);
+    store8(b + 104, 0x00);
+    i = 0;
+    while (i < 12) { store8(b + 105 + i, i); i = i + 1; }   # DC huffval 0..11
+    store8(b + 117, 0x10);               # AC Tc/Th = 0x10
+    store8(b + 118, 0x00);               # AC BITS: L2 = 2, rest 0
+    store8(b + 119, 0x02);
+    i = 0;
+    while (i < 14) { store8(b + 120 + i, 0); i = i + 1; }
+    store8(b + 134, 0x00);               # AC huffval 0x00 (EOB), 0x01
+    store8(b + 135, 0x01);
+    # SOS: 1 component (Cs 1, Td/Ta 0), Ss 0 Se 63 Ah/Al 0
+    store8(b + 136, 0xFF);
+    store8(b + 137, 0xDA);
+    store8(b + 138, 0x00);
+    store8(b + 139, 0x08);
+    store8(b + 140, 0x01);
+    store8(b + 141, 0x01);
+    store8(b + 142, 0x00);
+    store8(b + 143, 0x00);
+    store8(b + 144, 0x3F);
+    store8(b + 145, 0x00);
+    # entropy: "101"(DC size 4) + "1000"(=8) + "00"(EOB) -> 0xB0 0x00
+    store8(b + 146, 0xB0);
+    store8(b + 147, 0x00);
+    # EOI
+    store8(b + 148, 0xFF);
+    store8(b + 149, 0xD9);
+    store64(len_out, 150);
+    return b;
+}
+
+fn test_decode_gray() {
+    var lo = 0;
+    var b = fx_jpeg_gray_8x8(&lo);
+    var err = 0;
+    var img = chitra_jpeg_decode(b, lo, &err);
+    assert(img != 0, "grayscale decode returns an image");
+    assert_eq(err, 0, "no error");
+    assert_eq(chitra_image_width(img), 8, "width 8");
+    assert_eq(chitra_image_height(img), 8, "height 8");
+    assert_eq(chitra_image_channels(img), 4, "4 channels");
+    var px = chitra_image_pixels(img);
+    assert_eq(load8(px + 0), 129, "pixel0 R = 129 (flat DC=8)");
+    assert_eq(load8(px + 1), 129, "pixel0 G = 129");
+    assert_eq(load8(px + 2), 129, "pixel0 B = 129");
+    assert_eq(load8(px + 3), 255, "pixel0 A = 255");
+    assert_eq(load8(px + 63 * 4 + 0), 129, "pixel63 R = 129 (flat)");
+    assert_eq(load8(px + 63 * 4 + 3), 255, "pixel63 A = 255");
+    assert_eq(chitra_image_source_color_type(img), 257, "src ctype = 0x101 (JPEG gray)");
+    return 0;
+}
+
+fn test_decode_gray_crop() {
+    # Same stream, SOF dimensions patched to 5x5 -> still 1 MCU, cropped output.
+    var lo = 0;
+    var b = fx_jpeg_gray_8x8(&lo);
+    store8(b + 77, 0x05);   # Y = 5
+    store8(b + 79, 0x05);   # X = 5
+    var err = 0;
+    var img = chitra_jpeg_decode(b, lo, &err);
+    assert(img != 0, "5x5 decode returns an image");
+    assert_eq(chitra_image_width(img), 5, "width 5");
+    assert_eq(chitra_image_height(img), 5, "height 5");
+    var px = chitra_image_pixels(img);
+    assert_eq(load8(px + 0), 129, "5x5 pixel0 = 129");
+    assert_eq(load8(px + 24 * 4 + 0), 129, "5x5 last pixel = 129");
+    return 0;
+}
+
 fn main() {
     test_cur_u16_be();
     test_signature();
@@ -706,6 +829,8 @@ fn main() {
     test_idct_zero();
     test_idct_dc();
     test_dequant();
+    test_decode_gray();
+    test_decode_gray_crop();
     test_reject_progressive();
     test_reject_arithmetic();
     test_reject_mode();

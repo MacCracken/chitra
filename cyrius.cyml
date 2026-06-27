@@ -29,6 +29,7 @@ modules = [
     "src/jpeg_huffman.cyr",
     "src/jpeg_idct.cyr",
     "src/jpeg_markers.cyr",
+    "src/jpeg.cyr",
 ]
 
 [deps]

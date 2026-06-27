@@ -90,7 +90,14 @@ and their resolutions:
   division (Cyrius `>>` is logical); `sources.md` IDCT citation promoted from
   provisional to committed. `jpeg.tcyr` +18 assertions — zig-zag table, DC-only
   known-answers with clamps, dequant scaling (suite 631 → 649). lint/fmt/vet clean.
-- Bites 6–9: pending.
+- **Bite 6a — DONE (2026-06-26).** New `src/jpeg.cyr`: public
+  `chitra_jpeg_decode -> ChitraImage`. SOS scan-header parse + single-component
+  grayscale MCU loop + plane assembly + crop + RGBA8 emit (R=G=B, A=255);
+  `source_color_type` = `0x100 | ncomp`. Frame extended with per-component Td/Ta
+  + SOS offset. `jpeg.tcyr` +17 assertions decoding a full hand-built 8×8 and
+  5×5 grayscale JPEG to pixels (suite 649 → 666). lint/fmt/vet clean. (3-component
+  YCbCr returns CHITRA_ERR_UNSUPPORTED until bite 6b.)
+- Bites 6b–9: pending.
 
 ## Scope
 

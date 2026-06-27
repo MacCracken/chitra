@@ -61,15 +61,18 @@ var JF_MAX_V            = 48;
 var JF_RESTART_INTERVAL = 56;
 var JF_QUANT            = 64;
 var JF_QUANT_PRESENT    = 72;
-var JF_COMP             = 80;
-var JF_COMP_STRIDE      = 32;
-var JF_COMP_ID          = 0;
+var JF_SOS_OFFSET       = 80;    # byte offset of the SOS length field (set at SOS)
+var JF_HUFF             = 88;    # ptr to 8 HuffTable records (slots 0..3 DC, 4..7 AC)
+var JF_HUFF_PRESENT     = 96;    # bitmask of Huffman tables seen (bit = class*4 + id)
+var JF_COMP             = 104;   # 4 × 48-byte component specs
+var JF_COMP_STRIDE      = 48;
+var JF_COMP_ID          = 0;     # SOF fields
 var JF_COMP_H           = 8;
 var JF_COMP_V           = 16;
 var JF_COMP_TQ          = 24;
-var JF_HUFF             = 208;
-var JF_HUFF_PRESENT     = 216;
-var CHITRA_JPEG_FRAME_SIZE = 256;
+var JF_COMP_TD          = 32;    # SOS scan fields: DC Huffman table selector
+var JF_COMP_TA          = 40;    #                  AC Huffman table selector
+var CHITRA_JPEG_FRAME_SIZE = 320;
 
 fn chitra_jpeg_frame_width(f): i64          { return load64(f + JF_WIDTH); }
 fn chitra_jpeg_frame_height(f): i64         { return load64(f + JF_HEIGHT); }
@@ -87,6 +90,10 @@ fn chitra_jpeg_frame_comp_id(f, i): i64 { return load64(f + JF_COMP + i * JF_COM
 fn chitra_jpeg_frame_comp_h(f, i): i64  { return load64(f + JF_COMP + i * JF_COMP_STRIDE + JF_COMP_H); }
 fn chitra_jpeg_frame_comp_v(f, i): i64  { return load64(f + JF_COMP + i * JF_COMP_STRIDE + JF_COMP_V); }
 fn chitra_jpeg_frame_comp_tq(f, i): i64 { return load64(f + JF_COMP + i * JF_COMP_STRIDE + JF_COMP_TQ); }
+# Scan (SOS) table selectors, filled by _jpeg_parse_sos.
+fn chitra_jpeg_frame_comp_td(f, i): i64 { return load64(f + JF_COMP + i * JF_COMP_STRIDE + JF_COMP_TD); }
+fn chitra_jpeg_frame_comp_ta(f, i): i64 { return load64(f + JF_COMP + i * JF_COMP_STRIDE + JF_COMP_TA); }
+fn chitra_jpeg_frame_sos_offset(f): i64  { return load64(f + JF_SOS_OFFSET); }
 
 # Quant-table entry t (0..3), zig-zag position k (0..63). De-zig-zag happens at
 # dequant time (bite 5); this stores the raw spec order.
@@ -393,6 +400,7 @@ fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
     store64(frame + JF_RESTART_INTERVAL, 0);
     store64(frame + JF_QUANT_PRESENT, 0);
     store64(frame + JF_HUFF_PRESENT, 0);
+    store64(frame + JF_SOS_OFFSET, 0);
     var quant = alloc(CHITRA_MAX_QUANT_TABLES * 64 * 8);
     if (quant == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
     store64(frame + JF_QUANT, quant);
@@ -456,7 +464,8 @@ fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
             }
             if (act == 2) {
                 if (load64(frame + JF_SEEN_SOF) == 0) { rc = CHITRA_ERR_JPEG_SOF; }
-                done = 1;
+                if (rc == 0) { store64(frame + JF_SOS_OFFSET, _cur_pos(&cur)); }
+                done = 1;   # SOS reached; entropy data follows (decoded by jpeg.cyr)
             }
             if (act == 4) {
                 if (_cur_can_read(&cur, 2) == 0) { rc = CHITRA_ERR_TRUNCATED; done = 1; }

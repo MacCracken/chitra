@@ -46,6 +46,14 @@ and [`docs/adr/0004-jpeg-decode-model.md`](docs/adr/0004-jpeg-decode-model.md).
   `>>` is logical, not arithmetic). `jpeg.tcyr`: +18 assertions — zig-zag table,
   DC-only known-answers (`round(D/8)+128` with high/low clamps), and dequant
   scaling (suite total 649).
+- **JPEG grayscale decode, end-to-end (bite 6a)** — new `src/jpeg.cyr` with the
+  public `chitra_jpeg_decode(src, len, err_out) -> ChitraImage`. Parses the SOS
+  scan header (component Td/Ta selectors; baseline Ss=0/Se=63/Ah=Al=0), runs the
+  MCU loop for a single-component grayscale image (1 data unit per MCU), places
+  IDCT'd 8×8 blocks into the component plane, crops to the image dimensions, and
+  emits canonical RGBA8 (R=G=B=gray, A=255). `source_color_type` carries the
+  JPEG sentinel `0x100 | num_components`. `jpeg.tcyr`: +17 assertions decoding a
+  complete hand-built 8×8 (and cropped 5×5) grayscale JPEG to pixels (suite 666).
 
 ## [0.2.1] — 2026-06-26
 
