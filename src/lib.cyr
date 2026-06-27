@@ -50,3 +50,10 @@ include "src/png_chunks.cyr"
 include "src/png_filter.cyr"
 include "src/png_color.cyr"
 include "src/png.cyr"
+
+# ================================================================
+# chitra JPEG domain modules (0.3.0 — JFIF baseline). Flat, dependency
+# order; jpeg_markers.cyr reuses png_chunks.cyr's byte cursor + error.cyr
+# codes. More jpeg_*.cyr modules join here as the 0.3.0 bites land.
+# ================================================================
+include "src/jpeg_markers.cyr"

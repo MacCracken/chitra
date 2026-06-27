@@ -28,6 +28,18 @@ enum ChitraErrCode {
     CHITRA_ERR_DIMENSIONS = 10;  # width/height vs data: lying-IHDR / overflow / bomb caps
     CHITRA_ERR_FILTER     = 11;  # per-row filter byte not in {0,1,2,3,4} (spec § 9)
     CHITRA_ERR_NO_IDAT    = 12;  # structurally valid PNG with zero IDAT (no pixel data)
+    # ---- JPEG (chitra 0.3.0, JFIF baseline) ----
+    CHITRA_ERR_JPEG_MARKER      = 13;  # malformed/misplaced JPEG marker or bad 16-bit segment length
+    CHITRA_ERR_JPEG_SOF         = 14;  # invalid SOF0 frame header (precision/components/sampling/dims)
+    CHITRA_ERR_JPEG_DQT         = 15;  # malformed DQT quantization table
+    CHITRA_ERR_JPEG_DHT         = 16;  # malformed DHT / Huffman-table build failure
+    CHITRA_ERR_JPEG_SOS         = 17;  # malformed SOS scan header (selectors / table refs)
+    CHITRA_ERR_JPEG_ENTROPY     = 18;  # corrupt entropy stream (undecodable code / bit overrun / bad RSTn)
+    CHITRA_ERR_JPEG_PROGRESSIVE = 19;  # deferred: progressive DCT (SOF2) — baseline-only in 0.3.0
+    CHITRA_ERR_JPEG_ARITHMETIC  = 20;  # deferred: arithmetic coding (SOF9/10/11, DAC) — Huffman-only
+    CHITRA_ERR_JPEG_PRECISION   = 21;  # deferred: sample precision != 8 (12-bit) — 8-bit-only in 0.3.0
+    CHITRA_ERR_JPEG_MODE        = 22;  # deferred: hierarchical/lossless/differential SOF modes
+    CHITRA_ERR_JPEG_COMPONENTS  = 23;  # deferred: unsupported component count (CMYK/YCCK 4-component)
     CHITRA_ERR_OTHER      = 99;  # catch-all
 }
 
@@ -76,6 +88,17 @@ fn chitra_err_name(code): i64 {
     if (code == CHITRA_ERR_DIMENSIONS) { return "bad dimensions"; }
     if (code == CHITRA_ERR_FILTER)     { return "bad filter byte"; }
     if (code == CHITRA_ERR_NO_IDAT)    { return "no IDAT chunks"; }
+    if (code == CHITRA_ERR_JPEG_MARKER)      { return "bad JPEG marker"; }
+    if (code == CHITRA_ERR_JPEG_SOF)         { return "bad JPEG frame header"; }
+    if (code == CHITRA_ERR_JPEG_DQT)         { return "bad JPEG quant table"; }
+    if (code == CHITRA_ERR_JPEG_DHT)         { return "bad JPEG Huffman table"; }
+    if (code == CHITRA_ERR_JPEG_SOS)         { return "bad JPEG scan header"; }
+    if (code == CHITRA_ERR_JPEG_ENTROPY)     { return "corrupt JPEG entropy stream"; }
+    if (code == CHITRA_ERR_JPEG_PROGRESSIVE) { return "progressive JPEG unsupported"; }
+    if (code == CHITRA_ERR_JPEG_ARITHMETIC)  { return "arithmetic JPEG unsupported"; }
+    if (code == CHITRA_ERR_JPEG_PRECISION)   { return "JPEG sample precision unsupported"; }
+    if (code == CHITRA_ERR_JPEG_MODE)        { return "JPEG mode unsupported"; }
+    if (code == CHITRA_ERR_JPEG_COMPONENTS)  { return "JPEG component count unsupported"; }
     if (code == CHITRA_ERR_OTHER)      { return "other error"; }
     return "unknown error";
 }

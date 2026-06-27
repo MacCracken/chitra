@@ -1,0 +1,208 @@
+# tests/tcyr/jpeg.tcyr — JPEG (JFIF baseline) marker framing + SOF0 parse +
+# non-baseline rejection (0.3.0, bite 1). Self-contained CPU suite (own main +
+# assert_summary), standalone like error.tcyr/png.tcyr: include the lib chain +
+# the assert harness. Fixtures are tiny hand-built JPEG marker streams embedded
+# as byte arrays (no file I/O).
+include "src/lib.cyr"
+include "lib/assert.cyr"
+
+# ================================================================
+# Fixture builders
+# ================================================================
+
+# A minimal valid baseline header: SOI + SOF0(8x8, 8-bit, 3 components) + SOS.
+# The scan stops at SOS (bite 1 does not decode the entropy stream).
+fn fx_jpeg_baseline(len_out): i64 {
+    var b = alloc(23);
+    store8(b + 0, 0xFF);    # SOI
+    store8(b + 1, 0xD8);
+    store8(b + 2, 0xFF);    # SOF0
+    store8(b + 3, 0xC0);
+    store8(b + 4, 0x00);    # Lf = 17
+    store8(b + 5, 0x11);
+    store8(b + 6, 0x08);    # P = 8
+    store8(b + 7, 0x00);    # Y = 8
+    store8(b + 8, 0x08);
+    store8(b + 9, 0x00);    # X = 8
+    store8(b + 10, 0x08);
+    store8(b + 11, 0x03);   # Nf = 3
+    store8(b + 12, 0x01);   # comp 1: id=1
+    store8(b + 13, 0x22);   #         H=2 V=2
+    store8(b + 14, 0x00);   #         Tq=0
+    store8(b + 15, 0x02);   # comp 2: id=2
+    store8(b + 16, 0x11);   #         H=1 V=1
+    store8(b + 17, 0x01);   #         Tq=1
+    store8(b + 18, 0x03);   # comp 3: id=3
+    store8(b + 19, 0x11);   #         H=1 V=1
+    store8(b + 20, 0x01);   #         Tq=1
+    store8(b + 21, 0xFF);   # SOS (scan boundary — bite 1 stops here)
+    store8(b + 22, 0xDA);
+    store64(len_out, 23);
+    return b;
+}
+
+# A 4-byte SOI + one marker stream, for the cases that reject on the marker
+# itself (before any segment body is read).
+fn fx_jpeg4(len_out, b0, b1, b2, b3): i64 {
+    var b = alloc(4);
+    store8(b + 0, b0);
+    store8(b + 1, b1);
+    store8(b + 2, b2);
+    store8(b + 3, b3);
+    store64(len_out, 4);
+    return b;
+}
+
+# ================================================================
+# _cur_u16_be (added to png_chunks.cyr for JPEG segment lengths)
+# ================================================================
+fn test_cur_u16_be() {
+    var buf[2];
+    store8(&buf + 0, 0x12);
+    store8(&buf + 1, 0x34);
+    var cur[24];
+    _cur_init(&cur, &buf, 2);
+    assert_eq(_cur_u16_be(&cur), 4660, "u16_be = 0x1234");
+    assert_eq(_cur_pos(&cur), 2, "pos advanced 2");
+    return 0;
+}
+
+# ================================================================
+# Signature (SOI 0xFFD8)
+# ================================================================
+fn test_signature() {
+    var lo = 0;
+    var b = fx_jpeg_baseline(&lo);
+    assert_eq(chitra_jpeg_check_signature(b, lo), 1, "valid SOI signature");
+    store8(b + 1, 0xD9);
+    assert_eq(chitra_jpeg_check_signature(b, lo), 0, "bad SOI rejected");
+    var one = 1;
+    assert_eq(chitra_jpeg_check_signature(b, one), 0, "len<2 rejected");
+    return 0;
+}
+
+# ================================================================
+# Baseline header scan fills the frame
+# ================================================================
+fn test_scan_baseline() {
+    var lo = 0;
+    var b = fx_jpeg_baseline(&lo);
+    var err = 0;
+    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    assert(f != 0, "baseline scan returns a frame");
+    assert_eq(err, 0, "no error on baseline");
+    assert_eq(chitra_jpeg_frame_width(f), 8, "width 8");
+    assert_eq(chitra_jpeg_frame_height(f), 8, "height 8");
+    assert_eq(chitra_jpeg_frame_precision(f), 8, "precision 8");
+    assert_eq(chitra_jpeg_frame_num_components(f), 3, "3 components");
+    assert_eq(chitra_jpeg_frame_seen_sof(f), 1, "seen sof");
+    return 0;
+}
+
+# ================================================================
+# Non-baseline modes are rejected with distinct codes
+# ================================================================
+fn test_reject_progressive() {
+    var lo = 0;
+    var b = fx_jpeg4(&lo, 0xFF, 0xD8, 0xFF, 0xC2);   # SOF2
+    var err = 0;
+    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    assert_eq(f, 0, "progressive rejected (null frame)");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_PROGRESSIVE, "progressive err code");
+    return 0;
+}
+
+fn test_reject_arithmetic() {
+    var lo = 0;
+    var b = fx_jpeg4(&lo, 0xFF, 0xD8, 0xFF, 0xCA);   # SOF10 arithmetic
+    var err = 0;
+    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    assert_eq(f, 0, "arithmetic rejected");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_ARITHMETIC, "arithmetic err code");
+    return 0;
+}
+
+fn test_reject_mode() {
+    var lo = 0;
+    var b = fx_jpeg4(&lo, 0xFF, 0xD8, 0xFF, 0xC3);   # SOF3 lossless
+    var err = 0;
+    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    assert_eq(f, 0, "lossless mode rejected");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_MODE, "mode err code");
+    return 0;
+}
+
+fn test_reject_precision12() {
+    var lo = 0;
+    var b = fx_jpeg_baseline(&lo);
+    store8(b + 6, 0x0C);   # precision = 12
+    var err = 0;
+    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    assert_eq(f, 0, "precision 12 rejected");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_PRECISION, "precision err code");
+    return 0;
+}
+
+fn test_reject_components() {
+    var lo = 0;
+    var b = fx_jpeg_baseline(&lo);
+    # Force a 4-component header: Nf=4 and grow Lf to 8+3*4=20, but only the
+    # Nf byte and the precision-check ordering matter — components check fires
+    # on Nf not in {1,3}. Set Nf=4 (and Lf to match so the length check passes
+    # only after the components reject; components is checked first).
+    store8(b + 11, 0x04);   # Nf = 4
+    var err = 0;
+    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    assert_eq(f, 0, "4-component rejected");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_COMPONENTS, "components err code");
+    return 0;
+}
+
+fn test_reject_bad_signature() {
+    var lo = 0;
+    var b = fx_jpeg4(&lo, 0x00, 0x01, 0x02, 0x03);
+    var err = 0;
+    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    assert_eq(f, 0, "non-JPEG rejected");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_SIGNATURE, "signature err code");
+    return 0;
+}
+
+fn test_reject_truncated() {
+    var lo = 0;
+    var b = fx_jpeg_baseline(&lo);
+    var err = 0;
+    # Only 8 bytes available: SOF0 declares Lf=17 but the payload runs past end.
+    var f = chitra_jpeg_scan_markers(b, 8, &err);
+    assert_eq(f, 0, "truncated rejected");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_TRUNCATED, "truncated err code");
+    return 0;
+}
+
+fn test_reject_eoi_before_sos() {
+    var lo = 0;
+    var b = fx_jpeg4(&lo, 0xFF, 0xD8, 0xFF, 0xD9);   # SOI then EOI, no frame
+    var err = 0;
+    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    assert_eq(f, 0, "EOI before SOS rejected");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_MARKER, "premature EOI err code");
+    return 0;
+}
+
+fn main() {
+    test_cur_u16_be();
+    test_signature();
+    test_scan_baseline();
+    test_reject_progressive();
+    test_reject_arithmetic();
+    test_reject_mode();
+    test_reject_precision12();
+    test_reject_components();
+    test_reject_bad_signature();
+    test_reject_truncated();
+    test_reject_eoi_before_sos();
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

@@ -35,6 +35,18 @@ enum ChitraErrCode {
     CHITRA_ERR_DIMENSIONS = 10;  # width/height vs data: lying-IHDR / overflow / bomb caps
     CHITRA_ERR_FILTER     = 11;  # per-row filter byte not in {0,1,2,3,4} (spec § 9)
     CHITRA_ERR_NO_IDAT    = 12;  # structurally valid PNG with zero IDAT (no pixel data)
+    # ---- JPEG (chitra 0.3.0, JFIF baseline) ----
+    CHITRA_ERR_JPEG_MARKER      = 13;  # malformed/misplaced JPEG marker or bad 16-bit segment length
+    CHITRA_ERR_JPEG_SOF         = 14;  # invalid SOF0 frame header (precision/components/sampling/dims)
+    CHITRA_ERR_JPEG_DQT         = 15;  # malformed DQT quantization table
+    CHITRA_ERR_JPEG_DHT         = 16;  # malformed DHT / Huffman-table build failure
+    CHITRA_ERR_JPEG_SOS         = 17;  # malformed SOS scan header (selectors / table refs)
+    CHITRA_ERR_JPEG_ENTROPY     = 18;  # corrupt entropy stream (undecodable code / bit overrun / bad RSTn)
+    CHITRA_ERR_JPEG_PROGRESSIVE = 19;  # deferred: progressive DCT (SOF2) — baseline-only in 0.3.0
+    CHITRA_ERR_JPEG_ARITHMETIC  = 20;  # deferred: arithmetic coding (SOF9/10/11, DAC) — Huffman-only
+    CHITRA_ERR_JPEG_PRECISION   = 21;  # deferred: sample precision != 8 (12-bit) — 8-bit-only in 0.3.0
+    CHITRA_ERR_JPEG_MODE        = 22;  # deferred: hierarchical/lossless/differential SOF modes
+    CHITRA_ERR_JPEG_COMPONENTS  = 23;  # deferred: unsupported component count (CMYK/YCCK 4-component)
     CHITRA_ERR_OTHER      = 99;  # catch-all
 }
 
@@ -83,6 +95,17 @@ fn chitra_err_name(code): i64 {
     if (code == CHITRA_ERR_DIMENSIONS) { return "bad dimensions"; }
     if (code == CHITRA_ERR_FILTER)     { return "bad filter byte"; }
     if (code == CHITRA_ERR_NO_IDAT)    { return "no IDAT chunks"; }
+    if (code == CHITRA_ERR_JPEG_MARKER)      { return "bad JPEG marker"; }
+    if (code == CHITRA_ERR_JPEG_SOF)         { return "bad JPEG frame header"; }
+    if (code == CHITRA_ERR_JPEG_DQT)         { return "bad JPEG quant table"; }
+    if (code == CHITRA_ERR_JPEG_DHT)         { return "bad JPEG Huffman table"; }
+    if (code == CHITRA_ERR_JPEG_SOS)         { return "bad JPEG scan header"; }
+    if (code == CHITRA_ERR_JPEG_ENTROPY)     { return "corrupt JPEG entropy stream"; }
+    if (code == CHITRA_ERR_JPEG_PROGRESSIVE) { return "progressive JPEG unsupported"; }
+    if (code == CHITRA_ERR_JPEG_ARITHMETIC)  { return "arithmetic JPEG unsupported"; }
+    if (code == CHITRA_ERR_JPEG_PRECISION)   { return "JPEG sample precision unsupported"; }
+    if (code == CHITRA_ERR_JPEG_MODE)        { return "JPEG mode unsupported"; }
+    if (code == CHITRA_ERR_JPEG_COMPONENTS)  { return "JPEG component count unsupported"; }
     if (code == CHITRA_ERR_OTHER)      { return "other error"; }
     return "unknown error";
 }
@@ -262,6 +285,18 @@ fn _cur_u32_be(cur): i64 {
     var b3 = load8(p + 3);
     store64(cur + CUR_POS_OFFSET, load64(cur + CUR_POS_OFFSET) + 4);
     return ((b0 << 24) | (b1 << 16) | (b2 << 8) | b3) & 4294967295;
+}
+
+# Read a big-endian u16 and advance 2 bytes. JPEG segment lengths are 2-byte
+# big-endian (ITU-T T.81 § B.1.1.4). Masked to 16 bits. Caller checks
+# _cur_can_read(cur, 2) first; returns 0 defensively on OOB (never an OOB load).
+fn _cur_u16_be(cur): i64 {
+    if (_cur_can_read(cur, 2) == 0) { return 0; }
+    var p = load64(cur + CUR_BASE_OFFSET) + load64(cur + CUR_POS_OFFSET);
+    var b0 = load8(p + 0);
+    var b1 = load8(p + 1);
+    store64(cur + CUR_POS_OFFSET, load64(cur + CUR_POS_OFFSET) + 2);
+    return ((b0 << 8) | b1) & 65535;
 }
 
 # Absolute pointer at the cursor's current position (for chunk-data
@@ -1418,4 +1453,211 @@ fn chitra_image_free(img): i64 {
 # @public
 fn chitra_version(): i64 {
     return 201;
+}
+
+# --- jpeg_markers.cyr ---
+
+# @internal — JPEG (JFIF/EXIF) baseline marker + segment framing (0.3.0, bite 1).
+# jpeg_markers.cyr — turn untrusted JPEG bytes into a validated marker walk and
+# a ChitraJpegFrame skeleton. This is the JPEG analog of png_chunks.cyr: it
+# reuses the bounds-checked byte cursor (_cur_* in png_chunks.cyr) and adds
+# _cur_u16_be there for JPEG's 2-byte big-endian segment lengths (ITU-T T.81
+# § B.1). Every read is validated against len BEFORE the access.
+#
+# Bite 1 scope: signature (SOI 0xFFD8), the marker/segment walk up to SOS,
+# parse the SOF0 frame header (precision / dimensions / component count), and
+# REJECT every non-baseline mode with a distinct error (the chitra/kii
+# "defer-don't-half-implement" discipline — see docs/adr/0004-jpeg-decode-model.md).
+# DQT / DHT / DRI / APPn / COM payloads are recognized but skipped here; later
+# bites parse them.
+#
+# JPEG marker legend (the byte after a 0xFF; ITU-T T.81 Table B.1):
+#   D8 SOI  D9 EOI  DA SOS  DB DQT  DC DNL  DD DRI  FE COM  E0..EF APPn
+#   C0 SOF0(baseline)  C1 SOF1(ext-seq)  C2 SOF2(progressive)  C3 SOF3(lossless)
+#   C4 DHT  C5..C7 differential  C9..CB arithmetic SOF  CC DAC
+#   CD..CF differential arithmetic  D0..D7 RSTn  01 TEM (all standalone)
+
+# ================================================================
+# ChitraJpegFrame — the marker-walk handoff record (internal).
+# Bite 1 fills the core header fields; later bites extend it (per-component
+# sampling factors, quant-table selectors, restart interval, Huffman/quant
+# table storage). CHITRA_JPEG_FRAME_SIZE reserves room so the alloc size is
+# stable as fields are added across the 0.3.0 arc.
+#   +0  width          (i64 — pixels)
+#   +8  height         (i64 — pixels)
+#   +16 precision      (i64 — sample bits; 8 only in 0.3.0)
+#   +24 num_components (i64 — 1 grayscale or 3 YCbCr)
+#   +32 seen_sof       (i64 — 1 once a valid SOF0 has been parsed)
+# ================================================================
+var JF_WIDTH      = 0;
+var JF_HEIGHT     = 8;
+var JF_PRECISION  = 16;
+var JF_NCOMP      = 24;
+var JF_SEEN_SOF   = 32;
+var CHITRA_JPEG_FRAME_SIZE = 256;
+
+fn chitra_jpeg_frame_width(f): i64          { return load64(f + JF_WIDTH); }
+fn chitra_jpeg_frame_height(f): i64         { return load64(f + JF_HEIGHT); }
+fn chitra_jpeg_frame_precision(f): i64      { return load64(f + JF_PRECISION); }
+fn chitra_jpeg_frame_num_components(f): i64 { return load64(f + JF_NCOMP); }
+fn chitra_jpeg_frame_seen_sof(f): i64       { return load64(f + JF_SEEN_SOF); }
+
+# Bump-allocator no-op (matches chitra_raw_free / chitra_image_free). Safe on 0.
+fn chitra_jpeg_frame_free(f): i64 { return 0; }
+
+# ================================================================
+# Signature — every JPEG starts with SOI = 0xFF 0xD8 (T.81 § B.2.1).
+# ================================================================
+fn chitra_jpeg_check_signature(src, len): i64 {
+    if (len < 2) { return 0; }
+    if (load8(src) != 0xFF) { return 0; }
+    if (load8(src + 1) != 0xD8) { return 0; }
+    return 1;
+}
+
+# ================================================================
+# Marker classifier. Returns an ACTION (1=SOF0/parse, 2=SOS/stop,
+# 3=standalone/no-length, 4=length-bearing/skip) or a CHITRA_ERR_* reject
+# code (>=13) for any non-baseline mode. Action values 1..4 never collide
+# with the JPEG error codes (13..23).
+# ================================================================
+fn _jpeg_marker_action(m): i64 {
+    if (m == 0xC0) { return 1; }                          # SOF0 baseline — parse
+    if (m == 0xDA) { return 2; }                          # SOS — end of header scan
+    if (m == 0xC2) { return CHITRA_ERR_JPEG_PROGRESSIVE; }
+    if (m == 0xC9) { return CHITRA_ERR_JPEG_ARITHMETIC; } # SOF9 ext-seq arithmetic
+    if (m == 0xCA) { return CHITRA_ERR_JPEG_ARITHMETIC; } # SOF10 progressive arithmetic
+    if (m == 0xCB) { return CHITRA_ERR_JPEG_ARITHMETIC; } # SOF11 lossless arithmetic
+    if (m == 0xCC) { return CHITRA_ERR_JPEG_ARITHMETIC; } # DAC
+    if (m == 0xC1) { return CHITRA_ERR_JPEG_MODE; }       # SOF1 extended sequential
+    if (m == 0xC3) { return CHITRA_ERR_JPEG_MODE; }       # SOF3 lossless
+    if (m == 0xC5) { return CHITRA_ERR_JPEG_MODE; }       # SOF5 differential sequential
+    if (m == 0xC6) { return CHITRA_ERR_JPEG_MODE; }       # SOF6 differential progressive
+    if (m == 0xC7) { return CHITRA_ERR_JPEG_MODE; }       # SOF7 differential lossless
+    if (m == 0xCD) { return CHITRA_ERR_JPEG_MODE; }       # SOF13 differential seq arithmetic
+    if (m == 0xCE) { return CHITRA_ERR_JPEG_MODE; }       # SOF14 differential prog arithmetic
+    if (m == 0xCF) { return CHITRA_ERR_JPEG_MODE; }       # SOF15 differential lossless arithmetic
+    if (m == 0xD9) { return CHITRA_ERR_JPEG_MARKER; }     # EOI before SOS — no scan present
+    if (m >= 0xD0 && m <= 0xD7) { return 3; }             # RSTn standalone
+    if (m == 0x01) { return 3; }                          # TEM standalone
+    return 4;   # APPn / COM / DQT / DHT / DRI / DNL / ... — length-bearing, skip in bite 1
+}
+
+# ================================================================
+# Parse a SOF0 segment. Cursor is positioned at the 2-byte length field.
+# Returns 0 on success (frame filled) or a CHITRA_ERR_* code.
+# SOF0 payload (T.81 § B.2.2): Lf(2) P(1) Y(2) X(2) Nf(1) then Nf*3 comp specs.
+# Component specs are skipped here; bite 2 parses sampling factors + Tq.
+# ================================================================
+fn _jpeg_parse_sof0(cur, frame): i64 {
+    if (_cur_can_read(cur, 2) == 0) { return CHITRA_ERR_TRUNCATED; }
+    var seglen = _cur_u16_be(cur);
+    if (seglen < 11) { return CHITRA_ERR_JPEG_SOF; }      # 8 + 3*1 minimum
+    if (_cur_can_read(cur, seglen - 2) == 0) { return CHITRA_ERR_TRUNCATED; }
+    var precision = _cur_u8(cur);
+    var height = _cur_u16_be(cur);
+    var width = _cur_u16_be(cur);
+    var ncomp = _cur_u8(cur);
+    if (precision != 8) { return CHITRA_ERR_JPEG_PRECISION; }
+    if (ncomp != 1 && ncomp != 3) { return CHITRA_ERR_JPEG_COMPONENTS; }
+    # Y==0 (DNL-deferred height) is rejected, never decoded with a 0-height
+    # buffer — see docs/adr/0004 scope.
+    if (width == 0 || height == 0) { return CHITRA_ERR_DIMENSIONS; }
+    if (width > CHITRA_MAX_DIM || height > CHITRA_MAX_DIM) { return CHITRA_ERR_DIMENSIONS; }
+    if (width * height > CHITRA_MAX_PIXELS) { return CHITRA_ERR_DIMENSIONS; }
+    if (seglen != 8 + 3 * ncomp) { return CHITRA_ERR_JPEG_SOF; }
+    _cur_skip(cur, 3 * ncomp);   # component specs — bite 2 parses these
+    store64(frame + JF_WIDTH, width);
+    store64(frame + JF_HEIGHT, height);
+    store64(frame + JF_PRECISION, precision);
+    store64(frame + JF_NCOMP, ncomp);
+    store64(frame + JF_SEEN_SOF, 1);
+    return 0;
+}
+
+# ================================================================
+# chitra_jpeg_scan_markers — validate the JPEG marker structure from SOI up to
+# SOS, parsing the SOF0 frame header and rejecting non-baseline modes. Returns
+# a ChitraJpegFrame ptr (caller-owned) on success, or 0 with *err_out set to a
+# ChitraErr. Mirrors chitra_png_parse_raw's (ptr, err_out) split.
+#
+# The walk always advances >= 2 bytes per iteration (the FF + marker code) or
+# terminates on the can_read(2) gate, so it cannot loop forever on bad input.
+# ================================================================
+fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
+    store64(err_out, 0);
+    if (chitra_jpeg_check_signature(src, len) == 0) {
+        store64(err_out, chitra_err(CHITRA_ERR_SIGNATURE));
+        return 0;
+    }
+    var frame = alloc(CHITRA_JPEG_FRAME_SIZE);
+    if (frame == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
+    store64(frame + JF_WIDTH, 0);
+    store64(frame + JF_HEIGHT, 0);
+    store64(frame + JF_PRECISION, 0);
+    store64(frame + JF_NCOMP, 0);
+    store64(frame + JF_SEEN_SOF, 0);
+
+    var cur[24];
+    _cur_init(&cur, src, len);
+    _cur_skip(&cur, 2);   # past SOI
+
+    var done = 0;
+    var rc = 0;
+    var b = 0;
+    var m = 0;
+    var act = 0;
+    var seglen = 0;
+    var fill_done = 0;
+
+    while (done == 0) {
+        if (_cur_can_read(&cur, 2) == 0) { rc = CHITRA_ERR_JPEG_MARKER; done = 1; }
+        if (done == 0) {
+            b = _cur_u8(&cur);
+            if (b != 0xFF) { rc = CHITRA_ERR_JPEG_MARKER; done = 1; }
+        }
+        if (done == 0) {
+            m = _cur_u8(&cur);
+            # collapse a run of fill 0xFF bytes before the marker code
+            fill_done = 0;
+            while (fill_done == 0) {
+                if (m != 0xFF) { fill_done = 1; }
+                if (m == 0xFF) {
+                    if (_cur_can_read(&cur, 1) == 0) { fill_done = 1; }
+                    if (_cur_can_read(&cur, 1) == 1) { m = _cur_u8(&cur); }
+                }
+            }
+            if (m == 0xFF) { rc = CHITRA_ERR_JPEG_MARKER; done = 1; }
+        }
+        if (done == 0) {
+            act = _jpeg_marker_action(m);
+            if (act >= 13) { rc = act; done = 1; }
+            if (act == 1) {
+                rc = _jpeg_parse_sof0(&cur, frame);
+                if (rc != 0) { done = 1; }
+            }
+            if (act == 2) {
+                if (load64(frame + JF_SEEN_SOF) == 0) { rc = CHITRA_ERR_JPEG_SOF; }
+                done = 1;
+            }
+            if (act == 4) {
+                if (_cur_can_read(&cur, 2) == 0) { rc = CHITRA_ERR_TRUNCATED; done = 1; }
+                if (done == 0) {
+                    seglen = _cur_u16_be(&cur);
+                    if (seglen < 2) { rc = CHITRA_ERR_JPEG_MARKER; done = 1; }
+                }
+                if (done == 0) {
+                    if (_cur_can_read(&cur, seglen - 2) == 0) { rc = CHITRA_ERR_TRUNCATED; done = 1; }
+                }
+                if (done == 0) { _cur_skip(&cur, seglen - 2); }
+            }
+            # act == 3 (standalone marker): nothing to skip, loop continues
+        }
+    }
+
+    if (rc != 0) {
+        store64(err_out, chitra_err(rc));
+        return 0;
+    }
+    return frame;
 }

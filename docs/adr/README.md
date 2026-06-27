@@ -26,3 +26,4 @@ Durable rationale belongs in an ADR; non-obvious code invariants belong in an ar
 | [0001](0001-fork-kii-png-decoder.md) | Accepted | Fork kii's PNG decoder into the chitra package (one-time fork, manual backports, no live dependency) |
 | [0002](0002-security-model.md) | Accepted | Security model: untrusted-image input + library/no-emit posture |
 | [0003](0003-mabda-abi-compatibility.md) | Accepted | mabda ABI compatibility: 16-byte GpuErr-compatible `ChitraErr` + append-only `ChitraImage` |
+| [0004](0004-jpeg-decode-model.md) | Accepted | JPEG decode model: JFIF baseline sequential Huffman 8-bit only; integer fixed-point IDCT; non-baseline modes cleanly rejected |

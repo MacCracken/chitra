@@ -166,6 +166,18 @@ fn _cur_u32_be(cur): i64 {
     return ((b0 << 24) | (b1 << 16) | (b2 << 8) | b3) & 4294967295;
 }
 
+# Read a big-endian u16 and advance 2 bytes. JPEG segment lengths are 2-byte
+# big-endian (ITU-T T.81 § B.1.1.4). Masked to 16 bits. Caller checks
+# _cur_can_read(cur, 2) first; returns 0 defensively on OOB (never an OOB load).
+fn _cur_u16_be(cur): i64 {
+    if (_cur_can_read(cur, 2) == 0) { return 0; }
+    var p = load64(cur + CUR_BASE_OFFSET) + load64(cur + CUR_POS_OFFSET);
+    var b0 = load8(p + 0);
+    var b1 = load8(p + 1);
+    store64(cur + CUR_POS_OFFSET, load64(cur + CUR_POS_OFFSET) + 2);
+    return ((b0 << 8) | b1) & 65535;
+}
+
 # Absolute pointer at the cursor's current position (for chunk-data
 # scanning without copying). Caller validates the span via _cur_can_read.
 fn _cur_ptr(cur): i64 {

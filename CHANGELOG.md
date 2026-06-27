@@ -5,6 +5,21 @@ All notable changes to chitra are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+The 0.3.0 JFIF-baseline JPEG arc — in progress, bite by bite. See
+[`docs/proposals/jpeg-baseline-decoder.md`](docs/proposals/jpeg-baseline-decoder.md)
+and [`docs/adr/0004-jpeg-decode-model.md`](docs/adr/0004-jpeg-decode-model.md).
+
+### Added
+- **JPEG marker framing (bite 1)** — `src/jpeg_markers.cyr`:
+  `chitra_jpeg_check_signature` (SOI), `chitra_jpeg_scan_markers` (SOI →
+  segment walk → SOS, parsing the SOF0 frame header), and a `_cur_u16_be`
+  cursor helper. Non-baseline modes (progressive, arithmetic, 12-bit,
+  hierarchical/lossless, 4-component CMYK) are rejected with distinct error
+  codes — the defer-don't-half-implement posture. 11 new `CHITRA_ERR_JPEG_*`
+  codes (13–23). `tests/tcyr/jpeg.tcyr`: +28 assertions (suite total 553).
+
 ## [0.2.1] — 2026-06-26
 
 **Sub-byte bit depths 1/2/4 + Adam7 interlace** — completes the PNG

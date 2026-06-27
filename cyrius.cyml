@@ -26,6 +26,7 @@ modules = [
     "src/png_filter.cyr",
     "src/png_color.cyr",
     "src/png.cyr",
+    "src/jpeg_markers.cyr",
 ]
 
 [deps]
