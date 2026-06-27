@@ -18,7 +18,8 @@ later without a rename.
   `zlib_decompress`), the five unfilter predictors, canonical-RGBA8
   output, and the kii security guards (decompression-bomb caps,
   lying-IHDR rejection, ratio caps). No Adam7 interlace (single-pass
-  only). The decoder is complete and fuzz-corpus-tested — the public
+  only). The decoder is complete and inherits kii's fuzz-hardening (a
+  chitra-native fuzz harness is a tracked v1.0 gap) — the public
   entry points are `chitra_png_decode` (→ an owned RGBA8 `ChitraImage`)
   and the `chitra_png_decode_rgba8` convenience wrapper.
 - **v0.2.0 — bit depth 16 + hardening parity.** Adds 16-bit decode for
@@ -36,7 +37,7 @@ later without a rename.
   Adam7's 7 passes are deinterlaced into the same dense buffer the
   non-interlaced path yields, so the color pass is interlace-agnostic.
   Verified against ImageMagick + an interlaced-vs-non-interlaced
-  cross-check (523-assertion suite).
+  cross-check (525-assertion suite).
 - **Staged (tracked, not silently dropped):** **JPEG** (Huffman + IDCT +
   chroma upsample) → 0.3+. PNG is now feature-complete.
 

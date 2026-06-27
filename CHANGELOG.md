@@ -32,7 +32,7 @@ the PNG spec permits. The depth-8/16 non-interlaced path is unchanged
   non-interlaced decode for 7 color/depth/odd-dimension cases). Fixtures
   are ImageMagick-generated (independent reference codec) or python-packed
   and cross-checked against ImageMagick. Also folded in the deferred
-  depth-16 ct4/ct6/ct0-tRNS fixtures from 0.2.0. Suite: **523 assertions**.
+  depth-16 ct4/ct6/ct0-tRNS fixtures from 0.2.0. Suite: **525 assertions**.
 
 ### Changed
 - `chitra_version()` → 201. `ChitraPngRaw` widened 96→104B (internal —
