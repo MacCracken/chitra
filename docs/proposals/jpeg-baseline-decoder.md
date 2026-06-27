@@ -78,7 +78,13 @@ and their resolutions:
   `Tc/Th`/counts and builds 4 DC + 4 AC tables into the frame. `jpeg.tcyr` +24
   assertions checked against the Annex K.3.3 standard table (suite 580 → 604).
   lint/fmt/vet clean.
-- Bites 4–9: pending.
+- **Bite 4 — DONE (2026-06-26).** Entropy bit-reader (MSB-first, `0xFF00`
+  unstuffing, marker detection), Annex F `DECODE` + `RECEIVE`/`EXTEND`, and
+  `_jpeg_decode_block` (one 8×8 block → 64 zig-zag coefficients; DC differential,
+  AC run/size with ZRL/EOB) in `jpeg_huffman.cyr`. `jpeg.tcyr` +27 assertions,
+  incl. a full block decoded from a hand-encoded stream (suite 604 → 631).
+  lint/fmt/vet clean.
+- Bites 5–9: pending.
 
 ## Scope
 

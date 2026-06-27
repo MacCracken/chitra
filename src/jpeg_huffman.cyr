@@ -83,3 +83,180 @@ fn _jpeg_huff_build(table, bits): i64 {
     }
     return rc;
 }
+
+# ================================================================
+# Entropy bit-reader (T.81 § F.2.2 + § B.1.1.5 byte stuffing). MSB-first bit
+# pull over the entropy-coded segment after SOS. A 0xFF in the stream is either
+# followed by 0x00 (a stuffing byte to discard, the 0xFF is real data) or by a
+# marker code (RSTn / EOI / ...), at which point the reader stops and records
+# the marker; subsequent bit reads pad with zeros. The 24-byte... actually
+# 48-byte record:
+#   +0 base  +8 pos  +16 end  +24 buf (current byte)  +32 cnt (bits left in buf)
+#   +40 marker (the marker byte after a 0xFF, or 0)
+# ================================================================
+var BR_BASE   = 0;
+var BR_POS    = 8;
+var BR_END    = 16;
+var BR_BUF    = 24;
+var BR_CNT    = 32;
+var BR_MARKER = 40;
+var BR_SIZE   = 48;
+
+fn _jpeg_br_init(reader, base, len): i64 {
+    store64(reader + BR_BASE, base);
+    store64(reader + BR_POS, 0);
+    store64(reader + BR_END, len);
+    store64(reader + BR_BUF, 0);
+    store64(reader + BR_CNT, 0);
+    store64(reader + BR_MARKER, 0);
+    return 0;
+}
+
+fn _jpeg_br_marker(reader): i64 { return load64(reader + BR_MARKER); }
+fn _jpeg_br_pos(reader): i64    { return load64(reader + BR_POS); }
+
+# Load one data byte (8 bits) into the buffer. Only called when CNT == 0. On a
+# stuffing pair (FF 00) the 0xFF is loaded and the 0x00 discarded. On a marker
+# (FF xx, xx != 0) or end-of-data, the marker is recorded (xx, or EOI for a
+# trailing lone FF) and CNT is left 0 so callers pad with zero bits.
+fn _jpeg_br_load_byte(reader): i64 {
+    if (load64(reader + BR_MARKER) != 0) { return 0; }
+    var base = load64(reader + BR_BASE);
+    var pos = load64(reader + BR_POS);
+    var end = load64(reader + BR_END);
+    var b = 0;
+    var b2 = 0;
+    if (pos >= end) { return 0; }
+    b = load8(base + pos);
+    pos = pos + 1;
+    if (b == 0xFF) {
+        if (pos >= end) {
+            store64(reader + BR_MARKER, 0xD9);
+            store64(reader + BR_POS, pos - 1);
+            return 0;
+        }
+        b2 = load8(base + pos);
+        if (b2 == 0x00) { pos = pos + 1; }     # stuffing — discard, keep 0xFF
+        if (b2 != 0x00) {
+            store64(reader + BR_MARKER, b2);
+            store64(reader + BR_POS, pos - 1);  # leave pos at the 0xFF for resync
+            return 0;
+        }
+    }
+    store64(reader + BR_BUF, b);
+    store64(reader + BR_CNT, 8);
+    store64(reader + BR_POS, pos);
+    return 0;
+}
+
+# Read one bit MSB-first. Returns 0 past end / after a marker (zero padding).
+fn _jpeg_br_bit(reader): i64 {
+    var cnt = load64(reader + BR_CNT);
+    if (cnt == 0) {
+        _jpeg_br_load_byte(reader);
+        cnt = load64(reader + BR_CNT);
+    }
+    if (cnt == 0) { return 0; }
+    cnt = cnt - 1;
+    store64(reader + BR_CNT, cnt);
+    return (load64(reader + BR_BUF) >> cnt) & 1;
+}
+
+# RECEIVE: read n bits as an unsigned value (T.81 § F.2.2.4).
+fn _jpeg_br_bits(reader, n): i64 {
+    var v = 0;
+    var i = 0;
+    while (i < n) {
+        v = (v << 1) | _jpeg_br_bit(reader);
+        i = i + 1;
+    }
+    return v;
+}
+
+# EXTEND a value received with n bits to its signed coefficient (T.81 § F.2.2.1,
+# figure F.12): values below 2^(n-1) are negative.
+fn _jpeg_extend(v, n): i64 {
+    if (n == 0) { return 0; }
+    if (v < (1 << (n - 1))) {
+        return v - (1 << n) + 1;
+    }
+    return v;
+}
+
+# DECODE a single Huffman-coded symbol (T.81 § F.2.2.3, figure F.16). Walks the
+# maxcode table, extending the code one bit per length until it fits. Returns
+# the symbol (0..255), or -1 on an undecodable code (no length matched, or an
+# index outside the table's symbol list — incomplete-table defense).
+fn _jpeg_decode(reader, table): i64 {
+    var code = _jpeg_br_bit(reader);
+    var L = 1;
+    var maxc = _jpeg_huff_maxcode(table, 1);
+    var done = 0;
+    var bad = 0;
+    while (done == 0) {
+        if (code <= maxc) { done = 1; }
+        if (done == 0) {
+            L = L + 1;
+            if (L > 16) { done = 1; bad = 1; }
+            if (done == 0) {
+                code = (code << 1) | _jpeg_br_bit(reader);
+                maxc = _jpeg_huff_maxcode(table, L);
+            }
+        }
+    }
+    if (bad == 1) { return 0 - 1; }
+    var idx = _jpeg_huff_valptr(table, L) + code - _jpeg_huff_mincode(table, L);
+    if (idx < 0) { return 0 - 1; }
+    if (idx >= _jpeg_huff_count(table)) { return 0 - 1; }
+    return _jpeg_huff_val(table, idx);
+}
+
+# Decode one 8x8 block's 64 coefficients in zig-zag order into zz_out (64 i64,
+# de-zig-zag deferred to dequant). DC is differential against `pred`; AC uses
+# run/size (RRRR/SSSS) coding with ZRL (16-zero run) and EOB (T.81 § F.2.2.2).
+# Returns the new DC predictor value; on a corrupt stream sets *err_out to a
+# CHITRA_ERR_JPEG_ENTROPY ChitraErr and returns 0.
+fn _jpeg_decode_block(reader, dct, act, pred, zz_out, err_out): i64 {
+    store64(err_out, 0);
+    var i = 0;
+    while (i < 64) { store64(zz_out + i * 8, 0); i = i + 1; }
+
+    var t = _jpeg_decode(reader, dct);
+    if (t < 0) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY)); return 0; }
+    if (t > 16) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY)); return 0; }
+    var diff = 0;
+    if (t > 0) { diff = _jpeg_extend(_jpeg_br_bits(reader, t), t); }
+    var dc = pred + diff;
+    store64(zz_out + 0, dc);
+
+    var k = 1;
+    var rs = 0;
+    var r = 0;
+    var s = 0;
+    var done = 0;
+    while (done == 0) {
+        if (k > 63) { done = 1; }
+        if (done == 0) {
+            rs = _jpeg_decode(reader, act);
+            if (rs < 0) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY)); done = 1; }
+            if (done == 0) {
+                r = (rs >> 4) & 15;
+                s = rs & 15;
+                if (s == 0) {
+                    if (r == 15) { k = k + 16; }   # ZRL: a run of 16 zeros
+                    if (r != 15) { done = 1; }     # EOB: remaining coeffs are zero
+                }
+                if (s != 0) {
+                    k = k + r;
+                    if (k > 63) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY)); done = 1; }
+                    if (done == 0) {
+                        store64(zz_out + k * 8, _jpeg_extend(_jpeg_br_bits(reader, s), s));
+                        k = k + 1;
+                    }
+                }
+            }
+        }
+    }
+    if (load64(err_out) != 0) { return 0; }
+    return dc;
+}

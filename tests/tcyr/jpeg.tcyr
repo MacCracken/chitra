@@ -484,6 +484,132 @@ fn test_reject_dht_oversub() {
     return 0;
 }
 
+# Build a DC test table: 2 codes of length 1 -> symbol 0 = code "0", symbol 1 =
+# code "1" (so DC size 0 = bit 0, DC size 1 = bit 1).
+fn fx_dc_table(): i64 {
+    var t = alloc(HT_SIZE);
+    var bits[136];
+    var i = 0;
+    while (i <= 16) { store64(&bits + i * 8, 0); i = i + 1; }
+    store64(&bits + 1 * 8, 2);
+    store64(t + HT_COUNT, 2);
+    store64(t + HT_HUFFVAL + 0 * 8, 0);
+    store64(t + HT_HUFFVAL + 1 * 8, 1);
+    _jpeg_huff_build(t, &bits);
+    return t;
+}
+
+# Build an AC test table: 2 codes of length 2 -> symbol 0x00 (EOB) = code "00",
+# symbol 0x01 (run 0, size 1) = code "01".
+fn fx_ac_table(): i64 {
+    var t = alloc(HT_SIZE);
+    var bits[136];
+    var i = 0;
+    while (i <= 16) { store64(&bits + i * 8, 0); i = i + 1; }
+    store64(&bits + 2 * 8, 2);
+    store64(t + HT_COUNT, 2);
+    store64(t + HT_HUFFVAL + 0 * 8, 0);
+    store64(t + HT_HUFFVAL + 1 * 8, 1);
+    _jpeg_huff_build(t, &bits);
+    return t;
+}
+
+# Entropy stream encoding (with the tables above): DC size 1 -> "1", magnitude
+# "1" (=> DC +1); AC "01"+"1" (run0/size1, +1 at position 1); AC "00" (EOB).
+# Bits: 1 1 0 1 1 0 0, padded -> 0b11011000 = 0xD8.
+fn fx_entropy_block(len_out): i64 {
+    var b = alloc(1);
+    store8(b + 0, 0xD8);
+    store64(len_out, 1);
+    return b;
+}
+
+fn test_extend() {
+    assert_eq(_jpeg_extend(1, 1), 1, "extend(1,1)=1");
+    assert_eq(_jpeg_extend(0, 1), 0 - 1, "extend(0,1)=-1");
+    assert_eq(_jpeg_extend(5, 3), 5, "extend(5,3)=5");
+    assert_eq(_jpeg_extend(2, 3), 0 - 5, "extend(2,3)=-5");
+    assert_eq(_jpeg_extend(7, 3), 7, "extend(7,3)=7");
+    assert_eq(_jpeg_extend(0, 0), 0, "extend(_,0)=0");
+    return 0;
+}
+
+fn test_bitreader() {
+    var buf[4];
+    store8(&buf + 0, 0xB5);   # 1011 0101
+    var rdr[48];
+    _jpeg_br_init(&rdr, &buf, 1);
+    assert_eq(_jpeg_br_bit(&rdr), 1, "bit0");
+    assert_eq(_jpeg_br_bit(&rdr), 0, "bit1");
+    assert_eq(_jpeg_br_bit(&rdr), 1, "bit2");
+    assert_eq(_jpeg_br_bit(&rdr), 1, "bit3");
+    assert_eq(_jpeg_br_bits(&rdr, 4), 5, "bits4..7 = 0101 = 5");
+    return 0;
+}
+
+fn test_bitreader_stuffing() {
+    var buf[4];
+    store8(&buf + 0, 0xFF);
+    store8(&buf + 1, 0x00);   # stuffed -> 0xFF is real data
+    store8(&buf + 2, 0x80);   # 1000 0000
+    var rdr[48];
+    _jpeg_br_init(&rdr, &buf, 3);
+    assert_eq(_jpeg_br_bits(&rdr, 8), 255, "stuffed 0xFF reads as 255");
+    assert_eq(_jpeg_br_bit(&rdr), 1, "next bit from 0x80 = 1");
+    assert_eq(_jpeg_br_marker(&rdr), 0, "no marker yet");
+    return 0;
+}
+
+fn test_bitreader_marker() {
+    var buf[4];
+    store8(&buf + 0, 0x80);   # 1000 0000
+    store8(&buf + 1, 0xFF);
+    store8(&buf + 2, 0xD9);   # EOI marker
+    var rdr[48];
+    _jpeg_br_init(&rdr, &buf, 3);
+    assert_eq(_jpeg_br_bit(&rdr), 1, "first data bit");
+    assert_eq(_jpeg_br_bits(&rdr, 7), 0, "rest of 0x80");
+    assert_eq(_jpeg_br_bits(&rdr, 4), 0, "bits after marker pad 0");
+    assert_eq(_jpeg_br_marker(&rdr), 0xD9, "EOI marker detected");
+    return 0;
+}
+
+fn test_decode_block() {
+    var dct = fx_dc_table();
+    var act = fx_ac_table();
+    var lo = 0;
+    var ent = fx_entropy_block(&lo);
+    var rdr[48];
+    _jpeg_br_init(&rdr, ent, lo);
+    var zz = alloc(512);
+    var err = 0;
+    var dc = _jpeg_decode_block(&rdr, dct, act, 0, zz, &err);
+    assert_eq(err, 0, "decode_block no error");
+    assert_eq(dc, 1, "new DC predictor = 1");
+    assert_eq(load64(zz + 0 * 8), 1, "zz[0] DC = 1");
+    assert_eq(load64(zz + 1 * 8), 1, "zz[1] AC = 1");
+    assert_eq(load64(zz + 2 * 8), 0, "zz[2] = 0 (EOB)");
+    assert_eq(load64(zz + 63 * 8), 0, "zz[63] = 0");
+    return 0;
+}
+
+fn test_decode_block_dc_predictor() {
+    # Second block decoded against a non-zero predictor chains the DC value.
+    var dct = fx_dc_table();
+    var act = fx_ac_table();
+    var lo = 0;
+    var ent = fx_entropy_block(&lo);
+    var rdr[48];
+    _jpeg_br_init(&rdr, ent, lo);
+    var zz = alloc(512);
+    var err = 0;
+    var dc = _jpeg_decode_block(&rdr, dct, act, 10, zz, &err);
+    assert_eq(err, 0, "no error");
+    assert_eq(dc, 11, "DC = pred(10) + diff(1) = 11");
+    assert_eq(load64(zz + 0 * 8), 11, "zz[0] = 11");
+    return 0;
+}
+
 fn main() {
     test_cur_u16_be();
     test_signature();
@@ -493,6 +619,12 @@ fn main() {
     test_reject_dht_class();
     test_reject_dht_tableid();
     test_reject_dht_oversub();
+    test_extend();
+    test_bitreader();
+    test_bitreader_stuffing();
+    test_bitreader_marker();
+    test_decode_block();
+    test_decode_block_dc_predictor();
     test_reject_progressive();
     test_reject_arithmetic();
     test_reject_mode();

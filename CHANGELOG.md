@@ -32,6 +32,13 @@ and [`docs/adr/0004-jpeg-decode-model.md`](docs/adr/0004-jpeg-decode-model.md).
   (`Tc ∈ {0,1}`, `Th < 4`, Σcounts ≤ 256, in-bounds) and builds up to 4 DC + 4
   AC tables into frame storage. `jpeg.tcyr`: +24 assertions verifying the built
   table against the standard Annex K.3.3 DC-luminance codes (suite total 604).
+- **JPEG entropy decode (bite 4)** — `jpeg_huffman.cyr` gains the entropy
+  bit-reader (MSB-first, `0xFF00` byte-unstuffing, marker detection with
+  zero-padding past a marker), the Annex F `DECODE` procedure, `RECEIVE`/`EXTEND`
+  sign recovery, and `_jpeg_decode_block` decoding one 8×8 block's 64 zig-zag
+  coefficients (DC differential + AC run/size with ZRL and EOB). `jpeg.tcyr`:
+  +27 assertions including a full block decoded from a hand-encoded stream
+  (suite total 631).
 
 ## [0.2.1] — 2026-06-26
 
