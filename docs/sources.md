@@ -46,11 +46,11 @@ within each, by the module/function that consumes them.
     (read S bits, sign-reconstruct the DC/AC magnitude). Used by:
     `src/jpeg_huffman.cyr` — `_jpeg_receive`, `_jpeg_extend`.
   - § F.1.2.1 / F.2.2 — baseline DC difference (predictor) + AC run/size
-    (RRRR/SSSS, EOB, ZRL) decode. Used by: `src/jpeg_scan.cyr` MCU/block
+    (RRRR/SSSS, EOB, ZRL) decode. Used by: `src/jpeg.cyr` MCU/block
     decode loop.
   - Annex A (A.2.1) — component sampling factors Hi/Vi, MCU composition,
-    interleaved data-unit ordering. Used by: `src/jpeg_scan.cyr` MCU
-    geometry; `src/jpeg_color.cyr` upsampling layout.
+    interleaved data-unit ordering. Used by: `src/jpeg.cyr` MCU
+    geometry; `src/jpeg.cyr` upsampling layout.
   - Annex K — example luminance/chrominance quantization + Huffman tables
     (the standard reference tables). Used by: `tests/tcyr/jpeg.tcyr`
     known-answer table-build tests.
@@ -87,16 +87,16 @@ within each, by the module/function that consumes them.
 
 - **ITU-R BT.601 (full-range, as used by JFIF)** and **JFIF v1.02 (ISO/IEC
   10918-5)** — the YCbCr ↔ RGB transform equations chitra applies
-  (full-range BT.601, the JFIF default). Used by: `src/jpeg_color.cyr` —
+  (full-range BT.601, the JFIF default). Used by: `src/jpeg.cyr` —
   integer fixed-point YCbCr→RGB with per-channel clamp.
 - **libjpeg `jdcolor.c`** — the standard 16-bit-shift fixed-point YCbCr→RGB
   coefficient set (the integer realization of the BT.601 equations).
   <https://github.com/libjpeg-turbo/libjpeg-turbo/blob/main/jdcolor.c>
-  *(Implementation guide.)* Used by: `src/jpeg_color.cyr`.
+  *(Implementation guide.)* Used by: `src/jpeg.cyr`.
 - **ITU-T T.81 Annex A.2.1 + JFIF chroma-positioning convention** — chroma
   subsampling layout; chitra uses box/nearest replication upsampling (the
   conformant-simple choice; interpolation is out of 0.3.0 scope). Used by:
-  `src/jpeg_color.cyr` — chroma upsample pass.
+  `src/jpeg.cyr` — chroma upsample pass.
 
 ### JPEG decoder CVE corpus (security hardening)
 

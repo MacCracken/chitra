@@ -809,6 +809,132 @@ fn test_decode_gray_crop() {
     return 0;
 }
 
+# ---- bite 6b: 3-component YCbCr 4:4:4 + color convert ----
+
+# A complete 8x8 baseline 3-component (YCbCr, 4:4:4) JPEG. All components share
+# quant table 0 (ones), DC table 0 (Annex K), AC table 0 (2 symbols). Entropy:
+# Y block DC=+8 then EOB; Cb and Cr blocks DC=0 then EOB -> neutral chroma.
+# So every pixel is Y=129, Cb=Cr=128 -> RGB (129,129,129).
+fn fx_jpeg_ycc_8x8(len_out): i64 {
+    var b = alloc(161);
+    var i = 0;
+    store8(b + 0, 0xFF);
+    store8(b + 1, 0xD8);
+    store8(b + 2, 0xFF);            # DQT table 0, ones
+    store8(b + 3, 0xDB);
+    store8(b + 4, 0x00);
+    store8(b + 5, 0x43);
+    store8(b + 6, 0x00);
+    i = 0;
+    while (i < 64) { store8(b + 7 + i, 1); i = i + 1; }
+    store8(b + 71, 0xFF);           # SOF0 8x8, 3 components 4:4:4
+    store8(b + 72, 0xC0);
+    store8(b + 73, 0x00);
+    store8(b + 74, 0x11);
+    store8(b + 75, 0x08);
+    store8(b + 76, 0x00);
+    store8(b + 77, 0x08);
+    store8(b + 78, 0x00);
+    store8(b + 79, 0x08);
+    store8(b + 80, 0x03);
+    store8(b + 81, 0x01);           # comp 1: id 1, H/V 1, Tq 0
+    store8(b + 82, 0x11);
+    store8(b + 83, 0x00);
+    store8(b + 84, 0x02);           # comp 2: id 2, H/V 1, Tq 0
+    store8(b + 85, 0x11);
+    store8(b + 86, 0x00);
+    store8(b + 87, 0x03);           # comp 3: id 3, H/V 1, Tq 0
+    store8(b + 88, 0x11);
+    store8(b + 89, 0x00);
+    store8(b + 90, 0xFF);           # DHT: DC table 0 (Annex K) + AC table 0
+    store8(b + 91, 0xC4);
+    store8(b + 92, 0x00);
+    store8(b + 93, 0x32);
+    store8(b + 94, 0x00);           # DC Tc/Th
+    store8(b + 95, 0x00);           # DC BITS
+    store8(b + 96, 0x01);
+    store8(b + 97, 0x05);
+    store8(b + 98, 0x01);
+    store8(b + 99, 0x01);
+    store8(b + 100, 0x01);
+    store8(b + 101, 0x01);
+    store8(b + 102, 0x01);
+    store8(b + 103, 0x01);
+    store8(b + 104, 0x00);
+    store8(b + 105, 0x00);
+    store8(b + 106, 0x00);
+    store8(b + 107, 0x00);
+    store8(b + 108, 0x00);
+    store8(b + 109, 0x00);
+    store8(b + 110, 0x00);
+    i = 0;
+    while (i < 12) { store8(b + 111 + i, i); i = i + 1; }   # DC huffval 0..11
+    store8(b + 123, 0x10);          # AC Tc/Th
+    store8(b + 124, 0x00);          # AC BITS: L2=2
+    store8(b + 125, 0x02);
+    i = 0;
+    while (i < 14) { store8(b + 126 + i, 0); i = i + 1; }
+    store8(b + 140, 0x00);          # AC huffval
+    store8(b + 141, 0x01);
+    store8(b + 142, 0xFF);          # SOS: 3 components
+    store8(b + 143, 0xDA);
+    store8(b + 144, 0x00);
+    store8(b + 145, 0x0C);
+    store8(b + 146, 0x03);
+    store8(b + 147, 0x01);          # Cs 1, Td/Ta 0
+    store8(b + 148, 0x00);
+    store8(b + 149, 0x02);          # Cs 2, Td/Ta 0
+    store8(b + 150, 0x00);
+    store8(b + 151, 0x03);          # Cs 3, Td/Ta 0
+    store8(b + 152, 0x00);
+    store8(b + 153, 0x00);          # Ss
+    store8(b + 154, 0x3F);          # Se
+    store8(b + 155, 0x00);          # Ah/Al
+    store8(b + 156, 0xB0);          # entropy: Y DC=+8/EOB, Cb DC=0/EOB, Cr DC=0/EOB
+    store8(b + 157, 0x00);
+    store8(b + 158, 0x00);
+    store8(b + 159, 0xFF);          # EOI
+    store8(b + 160, 0xD9);
+    store64(len_out, 161);
+    return b;
+}
+
+fn test_ycc_to_rgb() {
+    var rgb[8];
+    _jpeg_ycc_to_rgb(128, 128, 128, &rgb);
+    assert_eq(load8(&rgb + 0), 128, "neutral R = 128");
+    assert_eq(load8(&rgb + 1), 128, "neutral G = 128");
+    assert_eq(load8(&rgb + 2), 128, "neutral B = 128");
+    _jpeg_ycc_to_rgb(128, 128, 160, &rgb);
+    assert_eq(load8(&rgb + 0), 173, "Cr+32 -> R = 173");
+    assert_eq(load8(&rgb + 1), 105, "Cr+32 -> G = 105");
+    assert_eq(load8(&rgb + 2), 128, "Cr+32 -> B = 128");
+    _jpeg_ycc_to_rgb(0, 128, 128, &rgb);
+    assert_eq(load8(&rgb + 0), 0, "Y=0 -> R = 0");
+    _jpeg_ycc_to_rgb(200, 128, 255, &rgb);
+    assert_eq(load8(&rgb + 0), 255, "Cr=255 -> R clamps to 255");
+    return 0;
+}
+
+fn test_decode_color444() {
+    var lo = 0;
+    var b = fx_jpeg_ycc_8x8(&lo);
+    var err = 0;
+    var img = chitra_jpeg_decode(b, lo, &err);
+    assert(img != 0, "4:4:4 decode returns an image");
+    assert_eq(err, 0, "no error");
+    assert_eq(chitra_image_width(img), 8, "width 8");
+    assert_eq(chitra_image_channels(img), 4, "4 channels");
+    var px = chitra_image_pixels(img);
+    assert_eq(load8(px + 0), 129, "pixel0 R = 129 (Y=129, neutral chroma)");
+    assert_eq(load8(px + 1), 129, "pixel0 G = 129");
+    assert_eq(load8(px + 2), 129, "pixel0 B = 129");
+    assert_eq(load8(px + 3), 255, "pixel0 A = 255");
+    assert_eq(load8(px + 63 * 4 + 1), 129, "pixel63 G = 129");
+    assert_eq(chitra_image_source_color_type(img), 259, "src ctype = 0x103 (JPEG YCbCr)");
+    return 0;
+}
+
 fn main() {
     test_cur_u16_be();
     test_signature();
@@ -831,6 +957,8 @@ fn main() {
     test_dequant();
     test_decode_gray();
     test_decode_gray_crop();
+    test_ycc_to_rgb();
+    test_decode_color444();
     test_reject_progressive();
     test_reject_arithmetic();
     test_reject_mode();

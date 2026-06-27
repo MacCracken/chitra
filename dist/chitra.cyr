@@ -2452,6 +2452,39 @@ fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
 # never aliases it (ADR 0003 / review).
 
 # ================================================================
+# YCbCr -> RGB color conversion (JFIF full-range, ITU-R BT.601). Fixed-point
+# with SCALEBITS=16, the libjpeg jdcolor constants:
+#   R = Y                         + 1.40200*(Cr-128)
+#   G = Y - 0.34414*(Cb-128)      - 0.71414*(Cr-128)
+#   B = Y + 1.77200*(Cb-128)
+# Descale uses the IDCT's signed round-to-nearest _jpeg_descale (Cyrius `>>` is
+# logical). Source: libjpeg jdcolor.c; ITU-R BT.601. See docs/sources.md.
+# ================================================================
+var JCC_CR_R = 91881;    # FIX(1.40200)
+var JCC_CB_B = 116130;   # FIX(1.77200)
+var JCC_CB_G = 22554;    # FIX(0.34414)
+var JCC_CR_G = 46802;    # FIX(0.71414)
+
+fn _jpeg_clamp8(v): i64 {
+    if (v < 0) { return 0; }
+    if (v > 255) { return 255; }
+    return v;
+}
+
+# Convert one YCbCr triple to RGB, writing 3 bytes (R, G, B) at dst.
+fn _jpeg_ycc_to_rgb(y, cb, cr, dst): i64 {
+    var crr = cr - 128;
+    var cbb = cb - 128;
+    var r = y + _jpeg_descale(JCC_CR_R * crr, 16);
+    var g = y - _jpeg_descale(JCC_CB_G * cbb + JCC_CR_G * crr, 16);
+    var b = y + _jpeg_descale(JCC_CB_B * cbb, 16);
+    store8(dst + 0, _jpeg_clamp8(r));
+    store8(dst + 1, _jpeg_clamp8(g));
+    store8(dst + 2, _jpeg_clamp8(b));
+    return 0;
+}
+
+# ================================================================
 # Parse the SOS scan header (T.81 § B.2.3) at frame.sos_offset (the 2-byte Ls
 # field). Validates the scan against the frame, records each component's DC/AC
 # Huffman selectors (Td/Ta), and enforces the baseline spectral selection
@@ -2626,6 +2659,153 @@ fn _jpeg_decode_gray(frame, src, len, entropy_start, err_out): i64 {
 }
 
 # ================================================================
+# Decode a 3-component YCbCr baseline scan with NO chroma subsampling (4:4:4,
+# all Hi=Vi=1). One data unit per component per 8x8 MCU. Decodes Y/Cb/Cr planes
+# then converts to RGBA8. Returns the ChitraImage ptr, or 0 with *err_out.
+# Subsampled (4:2:0 / 4:2:2 / general H,V) decode lands in bite 7.
+# ================================================================
+fn _jpeg_decode_color444(frame, src, len, entropy_start, err_out): i64 {
+    var w = chitra_jpeg_frame_width(frame);
+    var h = chitra_jpeg_frame_height(frame);
+    var mcu_cols = (w + 7) / 8;
+    var mcu_rows = (h + 7) / 8;
+    var pw = mcu_cols * 8;
+    var ph = mcu_rows * 8;
+    if (pw * ph > CHITRA_MAX_RAW_BYTES) { store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS)); return 0; }
+
+    var planes[24];   # 3 plane ptrs
+    var preds[24];    # 3 DC predictors
+    var dctabs[24];
+    var actabs[24];
+    var quants[24];
+    var ci = 0;
+    var td = 0;
+    var ta = 0;
+    var tq = 0;
+    var pl = 0;
+    var rc = 0;
+    var setup_done = 0;
+    while (setup_done == 0) {
+        if (ci >= 3) { setup_done = 1; }
+        if (setup_done == 0) {
+            td = chitra_jpeg_frame_comp_td(frame, ci);
+            ta = chitra_jpeg_frame_comp_ta(frame, ci);
+            tq = chitra_jpeg_frame_comp_tq(frame, ci);
+            if ((chitra_jpeg_frame_huff_present(frame) & (1 << td)) == 0) { rc = CHITRA_ERR_JPEG_SOS; setup_done = 1; }
+            if (setup_done == 0) {
+                if ((chitra_jpeg_frame_huff_present(frame) & (1 << (4 + ta))) == 0) {
+                    rc = CHITRA_ERR_JPEG_SOS;
+                    setup_done = 1;
+                }
+            }
+            if (setup_done == 0) {
+                if ((chitra_jpeg_frame_quant_present(frame) & (1 << tq)) == 0) {
+                    rc = CHITRA_ERR_JPEG_SOF;
+                    setup_done = 1;
+                }
+            }
+            if (setup_done == 0) {
+                pl = alloc(pw * ph);
+                if (pl == 0) { rc = CHITRA_ERR_OOM; setup_done = 1; }
+            }
+            if (setup_done == 0) {
+                store64(&planes + ci * 8, pl);
+                store64(&preds + ci * 8, 0);
+                store64(&dctabs + ci * 8, chitra_jpeg_frame_huff(frame, 0, td));
+                store64(&actabs + ci * 8, chitra_jpeg_frame_huff(frame, 1, ta));
+                store64(&quants + ci * 8, load64(frame + JF_QUANT) + tq * 64 * 8);
+                ci = ci + 1;
+            }
+        }
+    }
+    if (rc != 0) { store64(err_out, chitra_err(rc)); return 0; }
+
+    var reader[48];
+    _jpeg_br_init(&reader, src + entropy_start, len - entropy_start);
+    var zz = alloc(512);
+    var out = alloc(512);
+    if (zz == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
+    if (out == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
+
+    var my = 0;
+    var mx = 0;
+    var comp = 0;
+    var r = 0;
+    var c = 0;
+    var berr = 0;
+    var pr = 0;
+    var done = 0;
+    while (done == 0) {
+        if (my >= mcu_rows) { done = 1; }
+        if (done == 0) {
+            mx = 0;
+            while (mx < mcu_cols) {
+                comp = 0;
+                while (comp < 3) {
+                    pr = load64(&preds + comp * 8);
+                    pr = _jpeg_decode_block(&reader, load64(&dctabs + comp * 8),
+                    load64(&actabs + comp * 8), pr, zz, &berr);
+                    store64(&preds + comp * 8, pr);
+                    if (load64(&berr) != 0) {
+                        store64(err_out, load64(&berr));
+                        done = 1;
+                        comp = 3;
+                        mx = mcu_cols;
+                    }
+                    if (done == 0) {
+                        _jpeg_idct_block(zz, load64(&quants + comp * 8), out);
+                        pl = load64(&planes + comp * 8);
+                        r = 0;
+                        while (r < 8) {
+                            c = 0;
+                            while (c < 8) {
+                                store8(pl + (my * 8 + r) * pw + (mx * 8 + c), load64(out + (r * 8 + c) * 8));
+                                c = c + 1;
+                            }
+                            r = r + 1;
+                        }
+                        comp = comp + 1;
+                    }
+                }
+                if (done == 0) { mx = mx + 1; }
+            }
+            my = my + 1;
+        }
+    }
+    if (load64(err_out) != 0) { return 0; }
+
+    if (w * h * 4 > CHITRA_MAX_RAW_BYTES) { store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS)); return 0; }
+    var rgba = alloc(w * h * 4);
+    if (rgba == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
+    var p0 = load64(&planes + 0);
+    var p1 = load64(&planes + 8);
+    var p2 = load64(&planes + 16);
+    var y = 0;
+    var x = 0;
+    var o = 0;
+    while (y < h) {
+        x = 0;
+        while (x < w) {
+            o = (y * w + x) * 4;
+            _jpeg_ycc_to_rgb(load8(p0 + y * pw + x), load8(p1 + y * pw + x), load8(p2 + y * pw + x), rgba + o);
+            store8(rgba + o + 3, 255);
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+
+    var img = alloc(CHITRA_IMAGE_SIZE);
+    if (img == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
+    store64(img + IMAGE_WIDTH_OFFSET, w);
+    store64(img + IMAGE_HEIGHT_OFFSET, h);
+    store64(img + IMAGE_PIXELS_OFFSET, rgba);
+    store64(img + IMAGE_CHANNELS_OFFSET, 4);
+    store64(img + IMAGE_SEEN_IEND_OFFSET, 1);
+    store64(img + IMAGE_SRC_CTYPE_OFFSET, 256 + 3);   # JPEG YCbCr sentinel (0x103)
+    return img;
+}
+
+# ================================================================
 # chitra_jpeg_decode — the top-level public decode. Parse (src, len) JPEG bytes
 # -> an owned RGBA8 ChitraImage. Returns the ChitraImage ptr on success, or 0
 # with *err_out set to a ChitraErr (left 0 on success). Mirrors chitra_png_decode.
@@ -2641,7 +2821,10 @@ fn chitra_jpeg_decode(src, len, err_out): i64 {
     if (ncomp == 1) {
         return _jpeg_decode_gray(frame, src, len, entropy_start, err_out);
     }
-    # 3-component YCbCr + chroma subsampling land in bites 6b/7.
+    if (chitra_jpeg_frame_max_h(frame) == 1 && chitra_jpeg_frame_max_v(frame) == 1) {
+        return _jpeg_decode_color444(frame, src, len, entropy_start, err_out);
+    }
+    # chroma subsampling (4:2:0 / 4:2:2 / general H,V) lands in bite 7.
     store64(err_out, chitra_err(CHITRA_ERR_UNSUPPORTED));
     return 0;
 }

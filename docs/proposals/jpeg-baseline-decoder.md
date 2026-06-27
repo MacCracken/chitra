@@ -95,9 +95,15 @@ and their resolutions:
   grayscale MCU loop + plane assembly + crop + RGBA8 emit (R=G=B, A=255);
   `source_color_type` = `0x100 | ncomp`. Frame extended with per-component Td/Ta
   + SOS offset. `jpeg.tcyr` +17 assertions decoding a full hand-built 8×8 and
-  5×5 grayscale JPEG to pixels (suite 649 → 666). lint/fmt/vet clean. (3-component
-  YCbCr returns CHITRA_ERR_UNSUPPORTED until bite 6b.)
-- Bites 6b–9: pending.
+  5×5 grayscale JPEG to pixels (suite 649 → 666). lint/fmt/vet clean.
+- **Bite 6b — DONE (2026-06-26).** 3-component YCbCr 4:4:4 (no subsampling) decode
+  in `jpeg.cyr`: Y/Cb/Cr plane MCU loop + fixed-point full-range BT.601 YCbCr→RGB
+  (libjpeg jdcolor constants, signed `_jpeg_descale`) → RGBA8; `source_color_type`
+  = `0x103`. `jpeg.tcyr` +18 assertions (color known-answers + a full 4:4:4 JPEG
+  decoded to pixels; suite 666 → 684). lint/fmt/vet clean. NOTE: the planned
+  `jpeg_scan.cyr`/`jpeg_color.cyr` split was consolidated into `jpeg.cyr` — bite 7
+  will refactor the grayscale + 4:4:4 paths into one subsampling-aware loop.
+- Bites 7–9: pending.
 
 ## Scope
 

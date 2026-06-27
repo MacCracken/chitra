@@ -54,6 +54,13 @@ and [`docs/adr/0004-jpeg-decode-model.md`](docs/adr/0004-jpeg-decode-model.md).
   emits canonical RGBA8 (R=G=B=gray, A=255). `source_color_type` carries the
   JPEG sentinel `0x100 | num_components`. `jpeg.tcyr`: +17 assertions decoding a
   complete hand-built 8×8 (and cropped 5×5) grayscale JPEG to pixels (suite 666).
+- **JPEG YCbCr 4:4:4 decode (bite 6b)** — `chitra_jpeg_decode` now handles
+  3-component baseline JPEG with no chroma subsampling (all Hi=Vi=1): the MCU
+  loop decodes Y/Cb/Cr planes (one data unit each per MCU, independent DC
+  predictors), then a fixed-point full-range BT.601 YCbCr→RGB color pass
+  (libjpeg jdcolor constants) emits RGBA8. `source_color_type` = `0x103`.
+  `jpeg.tcyr`: +18 assertions — direct YCbCr→RGB known-answers (incl. clamp) and
+  a complete hand-built 8×8 4:4:4 JPEG decoded to pixels (suite total 684).
 
 ## [0.2.1] — 2026-06-26
 
