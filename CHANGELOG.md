@@ -39,6 +39,13 @@ and [`docs/adr/0004-jpeg-decode-model.md`](docs/adr/0004-jpeg-decode-model.md).
   coefficients (DC differential + AC run/size with ZRL and EOB). `jpeg.tcyr`:
   +27 assertions including a full block decoded from a hand-encoded stream
   (suite total 631).
+- **JPEG dequant + IDCT (bite 5)** — new `src/jpeg_idct.cyr`: the zig-zag→
+  natural index map, dequantization, the committed libjpeg `jpeg_idct_islow`
+  integer fixed-point 8×8 inverse DCT (ADR 0004), and the `+128` level-shift
+  with `[0,255]` clamp. DESCALE uses signed round-to-nearest division (Cyrius
+  `>>` is logical, not arithmetic). `jpeg.tcyr`: +18 assertions — zig-zag table,
+  DC-only known-answers (`round(D/8)+128` with high/low clamps), and dequant
+  scaling (suite total 649).
 
 ## [0.2.1] — 2026-06-26
 

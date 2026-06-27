@@ -10,14 +10,22 @@ within each, by the module/function that consumes them.
 
 > Provenance note: the JPEG entries below are drawn from the ITU-T T.81
 > spec walk and the integration research behind
-> [`proposals/jpeg-baseline-decoder.md`](proposals/jpeg-baseline-decoder.md);
-> a **dedicated numerical-methods research pass on the IDCT factorization
-> was not run**, so the specific integer-IDCT reference (Loeffler /
-> libjpeg `islow`) is the recommended implementation basis rather than a
-> committed-and-measured choice. Where a citation is the spec definition
-> (T.81) it is authoritative; where it is an implementation reference
-> (libjpeg source) it is a guide, marked as such. The JPEG decode path
-> ships at 0.3.0 — these entries are forward-looking until then.
+> [`proposals/jpeg-baseline-decoder.md`](proposals/jpeg-baseline-decoder.md).
+> As of bite 5 (2026-06-26) the IDCT factorization is **committed**: the
+> libjpeg `jpeg_idct_islow` integer separable IDCT (Loeffler-Ligtenberg-
+> Moschytz), ratified in
+> [`adr/0004-jpeg-decode-model.md`](adr/0004-jpeg-decode-model.md) and
+> implemented in `src/jpeg_idct.cyr`. Where a citation is the spec
+> definition (T.81) it is authoritative; where it is an implementation
+> reference (libjpeg source) it is a guide, marked as such. The JPEG
+> decode path is landing bite-by-bite across the 0.3.0 arc.
+>
+> Cyrius note: `>>` is a logical shift, so `src/jpeg_idct.cyr` rounds via
+> signed division (`_jpeg_descale`, round-to-nearest, symmetric about 0)
+> rather than the arithmetic-shift `DESCALE` of the libjpeg reference. This
+> is a valid rounding of the same value and keeps chitra's output
+> deterministic; it can differ from libjpeg by ≤1 LSB on negative
+> intermediates.
 
 ## JPEG (0.3.0, forthcoming)
 
@@ -64,9 +72,8 @@ within each, by the module/function that consumes them.
 - **C. Loeffler, A. Ligtenberg, G. S. Moschytz, "Practical Fast 1-D DCT
   Algorithms with 11 Multiplications," ICASSP 1989** — the factorization
   underlying most integer separable IDCT implementations.
-  *(Recommended implementation basis; not yet committed/measured — see the
-  provenance note above.)* Used by: `src/jpeg_idct.cyr` — fixed-point
-  separable 8×8 inverse DCT.
+  *(Committed factorization — ADR 0004.)* Used by: `src/jpeg_idct.cyr` —
+  fixed-point separable 8×8 inverse DCT.
 - **libjpeg `jidctint.c` (`jpeg_idct_islow`)** — the canonical integer
   "slow/accurate" IDCT with documented fixed-point scaling and right-shift
   rounding; the practical reference for choosing scale shifts that keep

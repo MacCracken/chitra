@@ -1,0 +1,222 @@
+# @internal — JPEG dequantization + zig-zag + inverse DCT (0.3.0, bite 5).
+# jpeg_idct.cyr — turn a block of 64 zig-zag-order DCT coefficients (from
+# jpeg_huffman's _jpeg_decode_block) plus its quantization table into 64
+# natural-order 8-bit samples. Frame-independent: operates on caller buffers.
+#
+# IDCT: the libjpeg `jpeg_idct_islow` integer fixed-point separable algorithm
+# (Loeffler-Ligtenberg-Moschytz factorization), committed in
+# docs/adr/0004-jpeg-decode-model.md; constants per ITU-T T.81 + libjpeg jidctint.c.
+#   Source: Loeffler, C., Ligtenberg, A., Moschytz, G. (1989), "Practical fast
+#   1-D DCT algorithms with 11 multiplications," IEEE ICASSP, pp. 988-991.
+#   Implementation reference: libjpeg jidctint.c (jpeg_idct_islow). See docs/sources.md.
+#
+# CONST_BITS = 13 (fixed-point scale of the FIX_* constants). PASS1_BITS = 2.
+# Pass 1 (columns) descales by CONST_BITS - PASS1_BITS = 11; pass 2 (rows) by
+# CONST_BITS + PASS1_BITS + 3 = 18, where +3 is the IDCT 1/8 normalization.
+#
+# NOTE (Cyrius): `>>` is a LOGICAL shift here, so it is wrong for the negative
+# intermediates the IDCT produces. DESCALE therefore uses signed division with
+# round-to-nearest (symmetric about 0) — deterministic, and a valid rounding of
+# the same value. The even-part CONST_BITS scaling uses `* 8192` (= 1<<13) rather
+# than a left shift so negative coefficients scale correctly.
+
+var FIX_0_298631336 = 2446;
+var FIX_0_390180644 = 3196;
+var FIX_0_541196100 = 4433;
+var FIX_0_765366865 = 6270;
+var FIX_0_899976223 = 7373;
+var FIX_1_175875602 = 9633;
+var FIX_1_501321110 = 12299;
+var FIX_1_847759065 = 15137;
+var FIX_1_961570560 = 16069;
+var FIX_2_053119869 = 16819;
+var FIX_2_562915447 = 20995;
+var FIX_3_072711026 = 25172;
+
+# ================================================================
+# Zig-zag → natural (row-major 8x8) index map (T.81 figure A.6). Lazily built
+# once into a 64-i64 table. Coefficients and quant tables arrive in zig-zag
+# order; dequant scatters them into natural order via this map.
+# ================================================================
+var _jpeg_zz_ptr = 0;
+fn _jpeg_zigzag_table(): i64 {
+    if (_jpeg_zz_ptr != 0) { return _jpeg_zz_ptr; }
+    var t = alloc(64 * 8);
+    store64(t + 0 * 8, 0);
+    store64(t + 1 * 8, 1);
+    store64(t + 2 * 8, 8);
+    store64(t + 3 * 8, 16);
+    store64(t + 4 * 8, 9);
+    store64(t + 5 * 8, 2);
+    store64(t + 6 * 8, 3);
+    store64(t + 7 * 8, 10);
+    store64(t + 8 * 8, 17);
+    store64(t + 9 * 8, 24);
+    store64(t + 10 * 8, 32);
+    store64(t + 11 * 8, 25);
+    store64(t + 12 * 8, 18);
+    store64(t + 13 * 8, 11);
+    store64(t + 14 * 8, 4);
+    store64(t + 15 * 8, 5);
+    store64(t + 16 * 8, 12);
+    store64(t + 17 * 8, 19);
+    store64(t + 18 * 8, 26);
+    store64(t + 19 * 8, 33);
+    store64(t + 20 * 8, 40);
+    store64(t + 21 * 8, 48);
+    store64(t + 22 * 8, 41);
+    store64(t + 23 * 8, 34);
+    store64(t + 24 * 8, 27);
+    store64(t + 25 * 8, 20);
+    store64(t + 26 * 8, 13);
+    store64(t + 27 * 8, 6);
+    store64(t + 28 * 8, 7);
+    store64(t + 29 * 8, 14);
+    store64(t + 30 * 8, 21);
+    store64(t + 31 * 8, 28);
+    store64(t + 32 * 8, 35);
+    store64(t + 33 * 8, 42);
+    store64(t + 34 * 8, 49);
+    store64(t + 35 * 8, 56);
+    store64(t + 36 * 8, 57);
+    store64(t + 37 * 8, 50);
+    store64(t + 38 * 8, 43);
+    store64(t + 39 * 8, 36);
+    store64(t + 40 * 8, 29);
+    store64(t + 41 * 8, 22);
+    store64(t + 42 * 8, 15);
+    store64(t + 43 * 8, 23);
+    store64(t + 44 * 8, 30);
+    store64(t + 45 * 8, 37);
+    store64(t + 46 * 8, 44);
+    store64(t + 47 * 8, 51);
+    store64(t + 48 * 8, 58);
+    store64(t + 49 * 8, 59);
+    store64(t + 50 * 8, 52);
+    store64(t + 51 * 8, 45);
+    store64(t + 52 * 8, 38);
+    store64(t + 53 * 8, 31);
+    store64(t + 54 * 8, 39);
+    store64(t + 55 * 8, 46);
+    store64(t + 56 * 8, 53);
+    store64(t + 57 * 8, 60);
+    store64(t + 58 * 8, 61);
+    store64(t + 59 * 8, 54);
+    store64(t + 60 * 8, 47);
+    store64(t + 61 * 8, 55);
+    store64(t + 62 * 8, 62);
+    store64(t + 63 * 8, 63);
+    _jpeg_zz_ptr = t;
+    return t;
+}
+
+# DESCALE: round-to-nearest division by 2^n, symmetric about zero (works for
+# negatives despite the logical `>>`). n >= 1.
+fn _jpeg_descale(x, n): i64 {
+    var half = 1 << (n - 1);
+    var div = 1 << n;
+    if (x >= 0) { return (x + half) / div; }
+    return 0 - ((0 - x + half) / div);
+}
+
+# Final per-output store: descale, and (pass 2 only) level-shift +128 + clamp.
+fn _jpeg_idct_out(addr, val, shift, do_ls): i64 {
+    var d = _jpeg_descale(val, shift);
+    if (do_ls == 1) {
+        d = d + 128;
+        if (d < 0) { d = 0; }
+        if (d > 255) { d = 255; }
+    }
+    store64(addr, d);
+    return 0;
+}
+
+# One 1-D inverse DCT stage over 8 values at inp + i*istep, writing 8 results to
+# outp + j*ostep (steps in bytes). `shift` is the descale; `do_ls` enables the
+# pass-2 level-shift + clamp. Identical butterfly for both passes (the islow form).
+fn _jpeg_idct_1d(inp, istep, outp, ostep, shift, do_ls): i64 {
+    var s0 = load64(inp + 0 * istep);
+    var s1 = load64(inp + 1 * istep);
+    var s2 = load64(inp + 2 * istep);
+    var s3 = load64(inp + 3 * istep);
+    var s4 = load64(inp + 4 * istep);
+    var s5 = load64(inp + 5 * istep);
+    var s6 = load64(inp + 6 * istep);
+    var s7 = load64(inp + 7 * istep);
+
+    # even part
+    var z1 = (s2 + s6) * FIX_0_541196100;
+    var tmp2 = z1 - s6 * FIX_1_847759065;
+    var tmp3 = z1 + s2 * FIX_0_765366865;
+    var tmp0 = (s0 + s4) * 8192;
+    var tmp1 = (s0 - s4) * 8192;
+    var tmp10 = tmp0 + tmp3;
+    var tmp13 = tmp0 - tmp3;
+    var tmp11 = tmp1 + tmp2;
+    var tmp12 = tmp1 - tmp2;
+
+    # odd part
+    var o0 = s7;
+    var o1 = s5;
+    var o2 = s3;
+    var o3 = s1;
+    var oz1 = o0 + o3;
+    var oz2 = o1 + o2;
+    var oz3 = o0 + o2;
+    var oz4 = o1 + o3;
+    var oz5 = (oz3 + oz4) * FIX_1_175875602;
+    o0 = o0 * FIX_0_298631336;
+    o1 = o1 * FIX_2_053119869;
+    o2 = o2 * FIX_3_072711026;
+    o3 = o3 * FIX_1_501321110;
+    oz1 = 0 - (oz1 * FIX_0_899976223);
+    oz2 = 0 - (oz2 * FIX_2_562915447);
+    oz3 = 0 - (oz3 * FIX_1_961570560);
+    oz4 = 0 - (oz4 * FIX_0_390180644);
+    oz3 = oz3 + oz5;
+    oz4 = oz4 + oz5;
+    o0 = o0 + oz1 + oz3;
+    o1 = o1 + oz2 + oz4;
+    o2 = o2 + oz2 + oz3;
+    o3 = o3 + oz1 + oz4;
+
+    _jpeg_idct_out(outp + 0 * ostep, tmp10 + o3, shift, do_ls);
+    _jpeg_idct_out(outp + 7 * ostep, tmp10 - o3, shift, do_ls);
+    _jpeg_idct_out(outp + 1 * ostep, tmp11 + o2, shift, do_ls);
+    _jpeg_idct_out(outp + 6 * ostep, tmp11 - o2, shift, do_ls);
+    _jpeg_idct_out(outp + 2 * ostep, tmp12 + o1, shift, do_ls);
+    _jpeg_idct_out(outp + 5 * ostep, tmp12 - o1, shift, do_ls);
+    _jpeg_idct_out(outp + 3 * ostep, tmp13 + o0, shift, do_ls);
+    _jpeg_idct_out(outp + 4 * ostep, tmp13 - o0, shift, do_ls);
+    return 0;
+}
+
+# ================================================================
+# _jpeg_idct_block — dequantize + de-zig-zag `zz` (64 i64, zig-zag order) with
+# `quant` (64 i64, zig-zag order) into a natural-order block, run the 2-D IDCT,
+# and write 64 level-shifted clamped samples (0..255) to `out` (64 i64,
+# row-major). The two arrays `zz`/`quant`/`out` are caller-owned.
+# ================================================================
+fn _jpeg_idct_block(zz, quant, out): i64 {
+    var zztab = _jpeg_zigzag_table();
+    var coef[512];   # 64 i64, natural order
+    var ws[512];     # 64 i64, pass-1 workspace
+    var k = 0;
+    var nat = 0;
+    while (k < 64) {
+        nat = load64(zztab + k * 8);
+        store64(&coef + nat * 8, load64(zz + k * 8) * load64(quant + k * 8));
+        k = k + 1;
+    }
+    var c = 0;
+    while (c < 8) {
+        _jpeg_idct_1d(&coef + c * 8, 64, &ws + c * 8, 64, 11, 0);
+        c = c + 1;
+    }
+    var r = 0;
+    while (r < 8) {
+        _jpeg_idct_1d(&ws + r * 64, 8, out + r * 64, 8, 18, 1);
+        r = r + 1;
+    }
+    return 0;
+}

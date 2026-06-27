@@ -610,6 +610,82 @@ fn test_decode_block_dc_predictor() {
     return 0;
 }
 
+# ---- bite 5: dequant + zig-zag + IDCT + level-shift ----
+
+fn fx_zz_zero(): i64 {
+    var z = alloc(512);
+    var i = 0;
+    while (i < 64) { store64(z + i * 8, 0); i = i + 1; }
+    return z;
+}
+
+fn fx_quant_ones(): i64 {
+    var q = alloc(512);
+    var i = 0;
+    while (i < 64) { store64(q + i * 8, 1); i = i + 1; }
+    return q;
+}
+
+fn test_zigzag_table() {
+    var t = _jpeg_zigzag_table();
+    assert_eq(load64(t + 0 * 8), 0, "zigzag[0] = 0");
+    assert_eq(load64(t + 1 * 8), 1, "zigzag[1] = 1");
+    assert_eq(load64(t + 2 * 8), 8, "zigzag[2] = 8");
+    assert_eq(load64(t + 3 * 8), 16, "zigzag[3] = 16");
+    assert_eq(load64(t + 5 * 8), 2, "zigzag[5] = 2");
+    assert_eq(load64(t + 63 * 8), 63, "zigzag[63] = 63");
+    return 0;
+}
+
+fn test_descale() {
+    assert_eq(_jpeg_descale(2048, 11), 1, "descale(2048,11)=1");
+    assert_eq(_jpeg_descale(0 - 2048, 11), 0 - 1, "descale(-2048,11)=-1");
+    assert_eq(_jpeg_descale(0, 18), 0, "descale(0,18)=0");
+    return 0;
+}
+
+fn test_idct_zero() {
+    var zz = fx_zz_zero();
+    var q = fx_quant_ones();
+    var out = alloc(512);
+    _jpeg_idct_block(zz, q, out);
+    assert_eq(load64(out + 0 * 8), 128, "zero block -> 128 at [0]");
+    assert_eq(load64(out + 30 * 8), 128, "zero block -> 128 mid");
+    assert_eq(load64(out + 63 * 8), 128, "zero block -> 128 at [63]");
+    return 0;
+}
+
+fn test_idct_dc() {
+    var q = fx_quant_ones();
+    var out = alloc(512);
+    var zz = fx_zz_zero();
+    store64(zz + 0, 8);                 # DC = 8 -> round(8/8)+128 = 129, flat
+    _jpeg_idct_block(zz, q, out);
+    assert_eq(load64(out + 0 * 8), 129, "DC=8 -> 129 at [0]");
+    assert_eq(load64(out + 63 * 8), 129, "DC=8 -> 129 flat");
+    store64(zz + 0, 0 - 8);            # DC = -8 -> 127
+    _jpeg_idct_block(zz, q, out);
+    assert_eq(load64(out + 0 * 8), 127, "DC=-8 -> 127");
+    store64(zz + 0, 2000);            # clamps high
+    _jpeg_idct_block(zz, q, out);
+    assert_eq(load64(out + 0 * 8), 255, "DC=2000 -> clamp 255");
+    store64(zz + 0, 0 - 2000);        # clamps low
+    _jpeg_idct_block(zz, q, out);
+    assert_eq(load64(out + 0 * 8), 0, "DC=-2000 -> clamp 0");
+    return 0;
+}
+
+fn test_dequant() {
+    var q = fx_quant_ones();
+    store64(q + 0, 2);                  # quant[0] = 2
+    var out = alloc(512);
+    var zz = fx_zz_zero();
+    store64(zz + 0, 4);                 # raw DC 4 * quant 2 = 8 dequant -> 129
+    _jpeg_idct_block(zz, q, out);
+    assert_eq(load64(out + 0 * 8), 129, "dequant 4*2=8 -> 129");
+    return 0;
+}
+
 fn main() {
     test_cur_u16_be();
     test_signature();
@@ -625,6 +701,11 @@ fn main() {
     test_bitreader_marker();
     test_decode_block();
     test_decode_block_dc_predictor();
+    test_zigzag_table();
+    test_descale();
+    test_idct_zero();
+    test_idct_dc();
+    test_dequant();
     test_reject_progressive();
     test_reject_arithmetic();
     test_reject_mode();

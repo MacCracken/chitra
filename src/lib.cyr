@@ -59,4 +59,5 @@ include "src/png.cyr"
 # modules join here as the 0.3.0 bites land.
 # ================================================================
 include "src/jpeg_huffman.cyr"
+include "src/jpeg_idct.cyr"
 include "src/jpeg_markers.cyr"

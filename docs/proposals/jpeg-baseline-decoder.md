@@ -84,7 +84,13 @@ and their resolutions:
   AC run/size with ZRL/EOB) in `jpeg_huffman.cyr`. `jpeg.tcyr` +27 assertions,
   incl. a full block decoded from a hand-encoded stream (suite 604 → 631).
   lint/fmt/vet clean.
-- Bites 5–9: pending.
+- **Bite 5 — DONE (2026-06-26).** New `src/jpeg_idct.cyr`: zig-zag→natural map,
+  dequantization, the committed libjpeg `jpeg_idct_islow` integer 8×8 IDCT
+  (ADR 0004), `+128` level-shift + clamp. DESCALE uses signed round-to-nearest
+  division (Cyrius `>>` is logical); `sources.md` IDCT citation promoted from
+  provisional to committed. `jpeg.tcyr` +18 assertions — zig-zag table, DC-only
+  known-answers with clamps, dequant scaling (suite 631 → 649). lint/fmt/vet clean.
+- Bites 6–9: pending.
 
 ## Scope
 
