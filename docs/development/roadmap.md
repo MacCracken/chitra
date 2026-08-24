@@ -8,9 +8,10 @@
 > both decode paths are **feature-complete for their scope** — every spec-legal
 > PNG depth × color-type × interlace combination, and JFIF **baseline** JPEG
 > (grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0, restart markers), decode to
-> canonical RGBA8. What remains before a v1.0 freeze is hardening
-> infrastructure (both harnesses landed in 0.3.3), an API/ABI freeze, and the next
-> formats.
+> canonical RGBA8. Hardening infrastructure is **done** — both harnesses landed
+> in 0.3.3 — so what remains before a v1.0 freeze is the **API/ABI freeze
+> itself**, and getting the downstream consumers onto it. The next formats are
+> additive and do not gate the freeze.
 
 The roadmap is **smallest-first** per AGNOS bite-discipline: each release is a
 single coherent cycle that decodes demonstrably more (or hardens demonstrably
@@ -29,6 +30,9 @@ Per-release detail, per-bite provenance, and deferrals live in
 | [0.2.0](../../CHANGELOG.md#020--2026-06-26) | **Bit depth 16 + kii guard-parity backport** — makes chitra a strict superset of kii's native decoder. Big-endian 16-bit samples truncate to the high byte (unchanged rendered output). Backports the IEND-must-be-zero-length guard and adds `CHITRA_ERR_NO_IDAT` (12); adds `chitra_image_seen_iend` and `chitra_image_source_color_type` accessors. `ChitraImage` widened 32→48B, **ABI-additive** (0.1.x offsets preserved → mabda-safe). |
 | [0.2.1](../../CHANGELOG.md#021--2026-06-26) | **Sub-byte depths 1/2/4 + Adam7 interlace = full PNG matrix.** Sub-byte grayscale (ct0) / palette (ct3) MSB-first unpack (gray scales ×255/85/17, palette indexes PLTE); the 7 Adam7 passes deinterlace into the same dense byte-padded buffer so the color pass stays interlace-agnostic. Also hardens the IHDR compression/filter-method allow-lists and re-asserts the dimension caps in the color pass. |
 | [0.3.0](../../CHANGELOG.md#030--2026-06-27) | **JFIF baseline JPEG → the same canonical RGBA8.** A full baseline (SOF0) sequential-Huffman 8-bit decoder: grayscale (1 comp) + YCbCr (3 comp), chroma subsampling 4:4:4 / 4:2:2 / 4:2:0 (and general Hi,Vi box upsampling), and DRI / RST0–7 restart markers. Pipeline = marker walk (DQT/DHT/SOF0/DRI) → per-component MCU loop (bit-reader + `DECODE`/`RECEIVE`/`EXTEND`, libjpeg islow integer IDCT, level-shift+clamp) → box upsample → BT.601 YCbCr→RGB. New public `chitra_jpeg_decode` / `chitra_jpeg_decode_rgba8` / `chitra_jpeg_check_signature` plus a signature-sniffing `chitra_image_decode` PNG-vs-JPEG router. Output verified **byte-identical to ImageMagick** on a real 16×16 baseline gradient (real Annex K Huffman tables + AC entropy). Non-baseline modes (progressive / arithmetic / 12-bit / hierarchical/lossless / CMYK) reject loud with distinct codes (ADR [0004](../adr/0004-jpeg-decode-model.md)). |
+| [0.3.1](../../CHANGELOG.md#031---2026-08-17) | **Toolchain bump** — cyrius pin 6.2.44 → 6.5.27, matching the rest of the AGNOS desktop stack. No decode change. |
+| [0.3.2](../../CHANGELOG.md#032---2026-08-23) | **Toolchain catch-up + version-probe fix** — cyrius pin 6.5.27 → 6.5.35 with `lib/` re-vendored, clearing the shadow-lib and pin-drift build warnings. Fixes `chitra_version()`, which 0.3.1 left at its 0.3.0 value while bumping every other version source; `make version-check` now gates that literal so it cannot drift silently again. No decode change. |
+| [0.3.3](../../CHANGELOG.md#033---2026-08-23) | **P-1 audit, hardening and repair — and both v1.0 hardening gates.** A ten-lens adversarial sweep of both decode paths, every finding put to two independent skeptics. **No memory-safety defect was found**; the repairs are correctness, conformance and resource hardening: full-width depth-16 tRNS keying, rejection of single-component non-interleaved JPEG scans, a JPEG decompression-bomb cap (`CHITRA_MAX_JPEG_RATIO`, the analogue of the PNG inflate-ratio cap), a `chitra_err_new` that can no longer return 0, T.81 fill-byte handling, ZRL overrun rejection, non-segment marker rejection, and the PNG § 5.4 / § 5.6 chunk-ordering guards. Every repair carries a regression test verified to fail against the pre-repair code. **Four input classes that previously decoded now reject**, deliberately. Adds the first fuzz harnesses (`make fuzz`, ~10⁶ cases) and the first benchmark harness (`make bench` + `bench-history.csv`), closing both remaining v1.0 hardening gates. Audit: [`2026-08-23`](../audit/2026-08-23-audit.md). |
 
 ## v1.0 criteria
 
@@ -81,10 +85,32 @@ surface freeze.
   `chitra_jpeg_check_signature`), the format-router `chitra_image_decode`, the
   `ChitraImage` record (append-only fields), and the 16-byte `ChitraErr`
   (GpuErr-layout-compatible). Pending — the surface is still moving pre-1.0.
+  Three concrete prerequisites, all surfaced by the
+  [0.3.3 audit](../audit/2026-08-23-audit.md) and deliberately deferred out of
+  a patch release because each changes the public surface:
+  - Add `@public` markers to `chitra_png_check_signature` and
+    `chitra_jpeg_check_signature`. Both are public by documentation and by
+    consumer use, but live in modules carrying neither the file-level banner
+    nor the per-function marker — so the marker set and the documented surface
+    disagree, and a freeze should not codify that disagreement.
+  - Reword the `chitra_err_name` strings for `CHITRA_ERR_INTERLACE` and
+    `CHITRA_ERR_BIT_DEPTH`. Both read as capability limits ("interlace
+    unsupported" / "bit depth unsupported") when both are in fact validity
+    rejections — chitra decodes Adam7 and every spec-legal depth. Changing
+    them changes public `chitra_err_name` output, which is precisely what a
+    freeze makes expensive to do later.
+  - Settle whether the four input classes 0.3.3 began rejecting are the frozen
+    behaviour, or whether any should decode instead (see the § A.2 item
+    below).
 - [ ] **Downstream consumers green** — mabda's `gpu_texture_load_png` and
   kii's PNG re-fold (its v1.2.0 deleted its own decoder and adopted
   `dist/chitra.cyr`; ADR 0006 on kii's side) both build and pass against the
-  frozen surface. Track until the freeze lands.
+  frozen surface. Track until the freeze lands. **Both pins are currently
+  behind**: mabda at `0.3.1`, kii at `0.3.0`, against a released `0.3.3`. The
+  0.3.3 dist is ABI-identical — no public signature, struct offset or symbol
+  changed — so both bumps are mechanical, but until they land neither consumer
+  has the 0.3.3 decode repairs, and kii is two cuts behind on a path it uses
+  in anger.
 - [x] **Root docs + doc tree complete** — CLAUDE.md, README, CHANGELOG,
   CONTRIBUTING, SECURITY, ADRs ([`../adr/README.md`](../adr/README.md)),
   architecture notes ([`../architecture/README.md`](../architecture/README.md)),
@@ -109,6 +135,18 @@ infrastructure that gates v1.0.
 - ~~Fuzz + benchmark harnesses~~ — **both closed in 0.3.3.** The remaining
   work before a v1.0 freeze is the **API/ABI freeze itself** and the next
   format, not hardening infrastructure.
+- **T.81 § A.2 non-interleaved scans** — a scan carrying a single component is
+  non-interleaved: its MCU is one data unit over the component's own
+  dimensions. chitra implements only the interleaved geometry, so since 0.3.3
+  it **rejects** a lone component with `H > 1` or `V > 1`
+  (`CHITRA_ERR_UNSUPPORTED`) rather than emitting the zero-padded, fabricated
+  pixels it previously did. Implementing the layout would turn that rejection
+  back into a decode. Low urgency — every real grayscale encoder emits
+  `H = V = 1`, where the two layouts coincide exactly — but it is a spec-legal
+  input class chitra currently refuses, so it is better settled before the
+  surface freezes than after. ADR
+  [0004](../adr/0004-jpeg-decode-model.md) records why rejecting was the right
+  call for a patch cut.
 - **Possible streaming / byte-budget API** — a chunked-input or
   bounded-allocation decode entry point for consumers that cannot hand the
   whole encoded buffer at once, or that need a hard memory ceiling. Speculative
