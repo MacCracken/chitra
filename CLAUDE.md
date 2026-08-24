@@ -12,8 +12,8 @@
 
 **chitra** (चित्र — Sanskrit: *image / picture*) — a pure-Cyrius CPU raster
 image decoder. Encoded image bytes → canonical RGBA8 pixels. No GPU, no C shim,
-no external binaries. The name is format-agnostic — PNG, JPEG and BMP already
-share it, and GIF can join later without a rename.
+no external binaries. The name is format-agnostic — PNG, JPEG, BMP and GIF all
+share it, and further formats can join without a rename.
 
 - **Type**: Shared library (no CLI binary — consumers link `dist/chitra.cyr`)
 - **License**: GPL-3.0-only
@@ -26,9 +26,9 @@ share it, and GIF can join later without a rename.
 
 Own **CPU-side raster image decode** for AGNOS. Turn encoded image bytes into
 canonical RGBA8 with zero GPU dependency and no C shim — the pure-Cyrius answer
-to "load this image into a texture." PNG, baseline JPEG and BMP are
-feature-complete for their scope; GIF lands next without breaking the
-byte-buffer → RGBA8 contract.
+to "load this image into a texture." All four common raster formats — PNG,
+baseline JPEG, BMP and GIF — decode to that one surface. What remains before
+v1.0 is the API/ABI freeze, not format coverage.
 
 ## Current State
 
@@ -69,7 +69,7 @@ make count-assertions                                # NUL-safe assertion total 
 - **Validate against a real reference** — every decode-matrix claim is checked against ImageMagick output, plus an interlaced-vs-non-interlaced cross-check. Numbers/images or it didn't happen.
 - **Spec-cite the hard cells** — bit-depth × color-type legality follows PNG § 11.2.2 Table 11.1; the five unfilter predictors follow § 9. Cite the section in the code.
 - Every buffer declaration is a contract: `var buf[N]` = N **bytes**, not N entries.
-- **Trust no input byte** — an encoded image (PNG, JPEG or BMP) is untrusted external data. Bounds-check every length, reject lying headers, cap decompression bombs, bound every entropy/Huffman loop.
+- **Trust no input byte** — an encoded image (PNG, JPEG, BMP or GIF) is untrusted external data. Bounds-check every length, reject lying headers, cap decompression bombs, bound every entropy/Huffman loop.
 
 ## Rules (Hard Constraints)
 
@@ -78,7 +78,7 @@ make count-assertions                                # NUL-safe assertion total 
 - **NEVER use `gh` CLI** — use `curl` to the GitHub API if needed
 - **`lib/` must be a real directory populated by `cyrius deps`** — never a symlink to a cyrius checkout (an agent editing `lib/*.cyr` would corrupt the toolchain repo). `make` targets guard this via `check-lib-wiring`; if it trips: `rm lib && mkdir lib && cyrius deps`.
 - **Stdlib includes live ONLY in `src/lib.cyr`** — domain modules (`src/*.cyr`) are flat (no stdlib includes). This is what lets `cyrius distlib` strip-concatenate into a compile-clean `dist/chitra.cyr`. Adding a stdlib include to a domain module breaks the dist bundle.
-- **`[lib].modules` order in `cyrius.cyml` is dependency order** — `error.cyr` (dep-free) → `png_chunks.cyr` → `png_filter.cyr` → `png_color.cyr` → `png.cyr` → `jpeg_huffman.cyr` → `jpeg_idct.cyr` → `jpeg_markers.cyr` → `jpeg.cyr` → `bmp.cyr` (the frame-independent JPEG leaves precede the frame-builder — see [architecture/004](docs/architecture/004-jpeg-decode-pipeline.md); `bmp.cyr` comes last because it needs `ChitraImage` from `png.cyr`, the ceilings from `png_chunks.cyr`, and nothing else). Don't reorder without re-running `cyrius distlib` and verifying the bundle still compiles.
+- **`[lib].modules` order in `cyrius.cyml` is dependency order** — `error.cyr` (dep-free) → `png_chunks.cyr` → `png_filter.cyr` → `png_color.cyr` → `png.cyr` → `jpeg_huffman.cyr` → `jpeg_idct.cyr` → `jpeg_markers.cyr` → `jpeg.cyr` → `bmp.cyr` → `gif_lzw.cyr` → `gif.cyr` (the frame-independent JPEG leaves precede the frame-builder — see [architecture/004](docs/architecture/004-jpeg-decode-pipeline.md); `bmp.cyr` needs only `ChitraImage`, the ceilings and the error codes; `gif_lzw.cyr` is likewise a frame-independent leaf and must precede `gif.cyr`, which drives it). Don't reorder without re-running `cyrius distlib` and verifying the bundle still compiles.
 - **`ChitraErr` stays a 16-byte record** (`+0` code, `+8` detail ptr) — layout-compatible with mabda's `GpuErr` so a decode failure maps cleanly onto `GPU_ERR_IMAGE_DECODE`. Don't widen it.
 - **`ChitraImage` field additions are append-only** — `width`/`height`/`pixels`/`channels` keep their 0.1.x offsets (mabda's accessors depend on them). New fields go at the end (`seen_iend` @ +32, `src_ctype` @ +40), and any widen bumps `CHITRA_IMAGE_SIZE`.
 - Do not add unnecessary dependencies (current set: stdlib + `sankoch` + `thread`).
@@ -114,9 +114,10 @@ CHANGELOG entry and an ADR:
 - `chitra_png_decode_rgba8(src, len, w_out, h_out)` → RGBA8 ptr directly (no detailed error)
 - `chitra_jpeg_decode(src, len, err_out)` / `chitra_jpeg_decode_rgba8(src, len, w_out, h_out)` — the JPEG pair, mirroring the PNG ones
 - `chitra_bmp_decode(src, len, err_out)` / `chitra_bmp_decode_rgba8(src, len, w_out, h_out)` — the BMP pair (0.4.0)
-- `chitra_image_decode(src, len, err_out)` → the **format-sniffing router** (PNG magic, then JPEG SOI, then BMP `BM`, else `CHITRA_ERR_SIGNATURE`); the entry to reach for when the format isn't known up front
-- `chitra_png_check_signature` / `chitra_jpeg_check_signature` / `chitra_bmp_check_signature` — signature predicates
-- `chitra_image_{width,height,pixels,channels,seen_iend,source_color_type}` accessors (`source_color_type`: PNG color_type 0/2/3/4/6; `0x100 | ncomp` for JPEG — 0x101 grayscale, 0x103 YCbCr; `0x200 | bpp` for BMP — 0x208 palette-8, 0x218 24bpp, 0x220 32bpp)
+- `chitra_gif_decode(src, len, err_out)` / `chitra_gif_decode_rgba8(src, len, w_out, h_out)` — the GIF pair (0.5.0). **First frame only** — see [ADR 0005](docs/adr/0005-gif-first-frame-only.md)
+- `chitra_image_decode(src, len, err_out)` → the **format-sniffing router** (PNG magic, then JPEG SOI, then BMP `BM`, then GIF `GIF8?a`, else `CHITRA_ERR_SIGNATURE`); the entry to reach for when the format isn't known up front
+- `chitra_png_check_signature` / `chitra_jpeg_check_signature` / `chitra_bmp_check_signature` / `chitra_gif_check_signature` — signature predicates
+- `chitra_image_{width,height,pixels,channels,seen_iend,source_color_type}` accessors (`source_color_type`: PNG color_type 0/2/3/4/6; `0x100 | ncomp` for JPEG — 0x101 grayscale, 0x103 YCbCr; `0x200 | bpp` for BMP — 0x208 palette-8, 0x218 24bpp, 0x220 32bpp; `0x300 | min_code_size` for GIF)
 - `chitra_image_free` (no-op under the bump allocator; kept for symmetry)
 - `chitra_version()` (packed `major*10000 + minor*100 + patch`)
 - error API: `chitra_err_new` / `chitra_err` / `chitra_err_code` / `chitra_err_detail` / `chitra_err_name` / `chitra_err_print_name` + the `ChitraErrCode` enum
@@ -174,6 +175,16 @@ non-negotiable — re-verify each before tagging.
 3. **Palette span + index bounds** — the palette span is validated against `len`, and every index is hard-rejected against the declared entry count → `CHITRA_ERR_BMP_PALETTE`. Never clamp an index; reject it
 4. **Deferred modes reject with distinct codes** — RLE4/RLE8, BITFIELDS, 16 bpp, V4/V5 headers. `BI_JPEG` / `BI_PNG` are refused outright: honouring them re-enters the decoder, which is a recursion surface, not a feature
 5. **No checksum exists** — BMP has nothing like PNG's per-chunk CRC, so every byte of a BMP reaching the parser is attacker-chosen with nothing to turn it away but chitra's own bounds. Treat the header parser as the entire perimeter
+
+**GIF** (0.5.0; first frame only — [ADR 0005](docs/adr/0005-gif-first-frame-only.md)):
+
+1. **LZW is chitra's own decompressor** — `sankoch` has no LZW to delegate to, unlike PNG's DEFLATE. Treat it as the newest attack surface in the tree
+2. **Expansion capped at the frame's pixel count** — LZW is a compressor; a few hundred bytes expand without limit unless bounded → `CHITRA_ERR_GIF_LZW`
+3. **Prefix chains cannot cycle** — entries are only added with `prefix < the index being written`, so chains strictly decrease. The walk is *additionally* bounded by the dictionary size: a guard you can reason about is worth less than one you cannot get past
+4. **Codes above `next_code` are rejected**; the one legal exception (`code == next_code`, KwKwK) is handled explicitly. A truncated LZW stream rejects rather than zero-padding — padding would fabricate dictionary entries
+5. **Sub-block chains** — every length byte bounds-checked, gathered payload capped at the input length, so a chain cannot make chitra hold more than the file
+6. **Frame rect must lie inside the logical screen** — reject, never clamp; clamping decodes a different image than the file describes
+7. **Palette indices hard-rejected** against the table in force (local wins over global)
 
 File findings in `docs/audit/YYYY-MM-DD-audit.md`. Severity: CRITICAL / HIGH / MEDIUM / LOW.
 

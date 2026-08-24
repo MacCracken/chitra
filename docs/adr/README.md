@@ -27,3 +27,4 @@ Durable rationale belongs in an ADR; non-obvious code invariants belong in an ar
 | [0002](0002-security-model.md) | Accepted | Security model: untrusted-image input + library/no-emit posture |
 | [0003](0003-mabda-abi-compatibility.md) | Accepted | mabda ABI compatibility: 16-byte GpuErr-compatible `ChitraErr` + append-only `ChitraImage` |
 | [0004](0004-jpeg-decode-model.md) | Accepted | JPEG decode model: JFIF baseline sequential Huffman 8-bit only; integer fixed-point IDCT; non-baseline modes cleanly rejected |
+| [0005](0005-gif-first-frame-only.md) | Accepted | GIF decodes the **first frame only** — `ChitraImage` keeps its one-image shape, so animation is not represented; a multi-frame surface would be a separate, additive entry point |

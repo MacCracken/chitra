@@ -1,11 +1,11 @@
 # chitra — Roadmap
 
-> **Last Updated**: 2026-08-24 (0.4.0)
+> **Last Updated**: 2026-08-24 (0.5.0)
 >
 > Sequencing — what ships, in what order, against what gates. Volatile state
 > (current version, sizes, assertion counts, in-flight work) lives in
-> [`state.md`](state.md), not here. **chitra is pre-v1** (current: 0.4.0) and
-> all three decode paths are **feature-complete for their scope** — every spec-legal
+> [`state.md`](state.md), not here. **chitra is pre-v1** (current: 0.5.0) and
+> all four decode paths are **feature-complete for their scope** — every spec-legal
 > PNG depth × color-type × interlace combination, and JFIF **baseline** JPEG
 > (grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0, restart markers), decode to
 > canonical RGBA8. Hardening infrastructure is **done** — both harnesses landed
@@ -32,6 +32,7 @@ Per-release detail, per-bite provenance, and deferrals live in
 | [0.3.0](../../CHANGELOG.md#030--2026-06-27) | **JFIF baseline JPEG → the same canonical RGBA8.** A full baseline (SOF0) sequential-Huffman 8-bit decoder: grayscale (1 comp) + YCbCr (3 comp), chroma subsampling 4:4:4 / 4:2:2 / 4:2:0 (and general Hi,Vi box upsampling), and DRI / RST0–7 restart markers. Pipeline = marker walk (DQT/DHT/SOF0/DRI) → per-component MCU loop (bit-reader + `DECODE`/`RECEIVE`/`EXTEND`, libjpeg islow integer IDCT, level-shift+clamp) → box upsample → BT.601 YCbCr→RGB. New public `chitra_jpeg_decode` / `chitra_jpeg_decode_rgba8` / `chitra_jpeg_check_signature` plus a signature-sniffing `chitra_image_decode` PNG-vs-JPEG router. Output verified **byte-identical to ImageMagick** on a real 16×16 baseline gradient (real Annex K Huffman tables + AC entropy). Non-baseline modes (progressive / arithmetic / 12-bit / hierarchical/lossless / CMYK) reject loud with distinct codes (ADR [0004](../adr/0004-jpeg-decode-model.md)). |
 | [0.3.1](../../CHANGELOG.md#031---2026-08-17) | **Toolchain bump** — cyrius pin 6.2.44 → 6.5.27, matching the rest of the AGNOS desktop stack. No decode change. |
 | [0.3.2](../../CHANGELOG.md#032---2026-08-23) | **Toolchain catch-up + version-probe fix** — cyrius pin 6.5.27 → 6.5.35 with `lib/` re-vendored, clearing the shadow-lib and pin-drift build warnings. Fixes `chitra_version()`, which 0.3.1 left at its 0.3.0 value while bumping every other version source; `make version-check` now gates that literal so it cannot drift silently again. No decode change. |
+| [0.5.0](../../CHANGELOG.md#050---2026-08-24) | **GIF → the same canonical RGBA8, first frame only.** The fourth and last common raster format. `src/gif_lzw.cyr` is the **only decompressor chitra implements itself** — `sankoch` has no LZW to delegate to — with the three LZW attack shapes defended at the point each arises: expansion capped at the frame's pixel count, prefix chains that cannot cycle (entries added only with `prefix < index`, plus a size bound), and out-of-range codes rejected with the one legal KwKwK exception handled explicitly. `src/gif.cyr` carries GIF87a/89a headers, global **and** local color tables, the 4-pass row interlace, GCE transparency, and sub-block chains bounded by the input length. First-frame-only is [ADR 0005](../adr/0005-gif-first-frame-only.md): `ChitraImage` keeps its shape, so consumers gain GIF on a re-pin. Fixtures are real ImageMagick GIFs, expectations corroborated by a second independent decoder. A KwKwK ordering bug was found by that cross-check and fixed pre-release. +622 test assertions, +1,259,514 fuzz assertions, +1 benchmark (43 ns/px). |
 | [0.4.0](../../CHANGELOG.md#040---2026-08-24) | **BMP → the same canonical RGBA8.** The third format, and the simplest decode path in the library: no entropy coding, no DEFLATE, no DCT — **6 ns/px** at 24/32 bpp against PNG's 83 and JPEG's 43. `BI_RGB` uncompressed at 1/4/8 bpp (palette, MSB-first), 24 bpp and 32 bpp; `BITMAPINFOHEADER` (40-byte) and `BITMAPCOREHEADER` (12-byte) DIB headers; bottom-up **and** top-down row order; the BGRA palette. New public `chitra_bmp_decode` / `chitra_bmp_decode_rgba8` / `chitra_bmp_check_signature`; `chitra_image_decode` now sniffs three formats. Output verified **identical to ImageMagick** on all eight valid fixtures, including the bottom-up/top-down pair that must agree from opposite storage orders. RLE4/RLE8, BITFIELDS, 16 bpp, V4/V5 headers reject with distinct codes; `BI_JPEG`/`BI_PNG` are refused outright as a decoder-recursion surface. +294 test assertions, +1,819,490 fuzz assertions, +3 benchmarks. |
 | [0.3.3](../../CHANGELOG.md#033---2026-08-23) | **P-1 audit, hardening and repair — and both v1.0 hardening gates.** A ten-lens adversarial sweep of both decode paths, every finding put to two independent skeptics. **No memory-safety defect was found**; the repairs are correctness, conformance and resource hardening: full-width depth-16 tRNS keying, rejection of single-component non-interleaved JPEG scans, a JPEG decompression-bomb cap (`CHITRA_MAX_JPEG_RATIO`, the analogue of the PNG inflate-ratio cap), a `chitra_err_new` that can no longer return 0, T.81 fill-byte handling, ZRL overrun rejection, non-segment marker rejection, and the PNG § 5.4 / § 5.6 chunk-ordering guards. Every repair carries a regression test verified to fail against the pre-repair code. **Four input classes that previously decoded now reject**, deliberately. Adds the first fuzz harnesses (`make fuzz`, ~10⁶ cases) and the first benchmark harness (`make bench` + `bench-history.csv`), closing both remaining v1.0 hardening gates. Audit: [`2026-08-23`](../audit/2026-08-23-audit.md). |
 
@@ -52,8 +53,9 @@ surface freeze.
   `CHITRA_ERR_JPEG_*` codes (13–23). Decode model: ADR
   [`0004-jpeg-decode-model.md`](../adr/0004-jpeg-decode-model.md); design:
   [`../proposals/jpeg-baseline-decoder.md`](../proposals/jpeg-baseline-decoder.md).
-  Format coverage is **progressing**, not closed — BMP shipped in 0.4.0, GIF
-  lands in 0.5.0 (see *Planned releases*).
+  Format coverage: all four common raster formats now decode — BMP shipped in
+  0.4.0, GIF in 0.5.0. What remains in the arc is paying off deferrals, not
+  adding formats.
 - [x] **First security audit** — line-by-line guard verification across the
   src modules, captured in
   [`../audit/2026-06-26-audit.md`](../audit/2026-06-26-audit.md). Confirmed
@@ -63,7 +65,7 @@ surface freeze.
 - [x] **In-tree fuzz harness at 10⁶ iterations clean** — **DONE in 0.3.3.**
   `fuzz/fuzz_png.fcyr` + `fuzz/fuzz_jpeg.fcyr`, run by `make fuzz` and wired
   into `make test-all`. As of 0.4.0 there is one harness per format (PNG,
-  JPEG, BMP): **~1.5 M decode cases / 5,284,328 assertions, 0 failures**.
+  JPEG, BMP, GIF): **~1.9 M decode cases / 6,543,842 assertions, 0 failures**.
   0.3.3 alone cleared the 10⁶ bar with the first two. Both public decode entries are driven over random,
   signature-prefixed, bit-flipped, truncated and degenerate-length input, plus
   **entropy-segment-only mutation** for JPEG — the surface that was previously
@@ -73,7 +75,7 @@ surface freeze.
   [`docs/audit/2026-08-23-audit.md`](../audit/2026-08-23-audit.md) § 5.
 - [x] **Benchmark harness + CSV history** — **DONE in 0.3.3.**
   `tests/bcyr/chitra.bcyr` (`make bench`) measures decode latency for both
-  formats across 15 benchmarks, and `scripts/bench-csv.sh`
+  formats across 16 benchmarks, and `scripts/bench-csv.sh`
   (`make bench-record`) appends stamped results to
   [`bench-history.csv`](../../bench-history.csv). The harness **generates its
   own fixtures at 256×256** — the in-tree test fixtures are 2×2..16×16 and
@@ -140,32 +142,24 @@ ignoring it discards real alpha. ImageMagick makes the same call, which is what
 settled it. **0.5.2 supersedes this**: once the declared masks are read, the
 heuristic is replaced by the header's own answer and stops being a guess.
 
-**The 0.5.x arc** — 0.5.0 adds the last of the four common raster formats;
+**The 0.5.x arc** — 0.5.0 added the last of the four common raster formats;
 0.5.1 and 0.5.2 pay off the BMP deferrals from 0.4.0. Splitting the BMP work
 into two cuts follows the bite discipline: RLE is a decode loop, masks are a
 header feature, and they share nothing.
 
-### 0.5.0 — GIF
+### ~~0.5.0 — GIF~~ — SHIPPED
 
-GIF into the same canonical RGBA8 surface. Deliberately last of the four
-formats because it is the hardest and raises a scope question the others do
-not: **animation**. GIF carries LZW compression, a global palette plus optional
-per-frame local palettes, its own interlacing scheme, and a frame sequence with
-disposal methods.
+See the *Shipped* index above. The scope question this cut was gated on —
+first frame versus a multi-frame surface — was settled in
+[ADR 0005](../adr/0005-gif-first-frame-only.md) in favour of **first frame
+only**, preserving the one-image-in / one-image-out contract every other format
+honours.
 
-The scope decision to settle **before** code: whether `chitra_gif_decode`
-returns the **first frame only** — keeping the one-image-in / one-image-out
-contract every other format honours, and keeping `ChitraImage` unchanged — or
-whether chitra grows a multi-frame surface. First-frame-only is the smaller,
-contract-preserving move and is the presumption unless a consumer needs
-otherwise. Either way it earns an ADR before implementation, because a
-multi-frame surface would be the first change to the output contract since
-0.1.0.
-
-Note LZW is chitra's own work: `sankoch` provides DEFLATE, not LZW, so unlike
-the PNG path there is no dependency to delegate to. That makes the GIF
-decompressor new attack surface in the same sense the JPEG entropy decoder was
-— it wants a `fuzz/fuzz_gif.fcyr` from the first cut, not retrofitted.
+What that leaves open, and the ADR says so explicitly: an *optimised* animation
+whose first frame is a background plate decodes to that plate. If a consumer
+ever needs the sequence, the shape is a **separate** multi-frame entry point
+returning a frame list, leaving `chitra_gif_decode` untouched — additive, not a
+reversal.
 
 ### 0.5.1 — BMP run-length compression
 

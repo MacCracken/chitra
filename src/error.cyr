@@ -45,6 +45,11 @@ enum ChitraErrCode {
     CHITRA_ERR_BMP_DEPTH        = 25;  # bpp not in {1,4,8,24,32} (16 deferred)
     CHITRA_ERR_BMP_COMPRESSION  = 26;  # deferred: RLE4/RLE8, BITFIELDS, embedded JPEG/PNG
     CHITRA_ERR_BMP_PALETTE      = 27;  # palette missing, short, or an index outside it
+    # ---- GIF (chitra 0.5.0, first frame only — see ADR 0005) ----
+    CHITRA_ERR_GIF_HEADER       = 28;  # bad signature/version, screen or image descriptor
+    CHITRA_ERR_GIF_LZW          = 29;  # corrupt LZW stream (bad code, oversized output, bad chain)
+    CHITRA_ERR_GIF_PALETTE      = 30;  # no color table in force, or an index outside it
+    CHITRA_ERR_GIF_NO_IMAGE     = 31;  # structurally valid GIF with no image descriptor
     CHITRA_ERR_OTHER      = 99;  # catch-all
 }
 
@@ -123,6 +128,10 @@ fn chitra_err_name(code): i64 {
     if (code == CHITRA_ERR_BMP_DEPTH)        { return "BMP bit depth unsupported"; }
     if (code == CHITRA_ERR_BMP_COMPRESSION)  { return "BMP compression unsupported"; }
     if (code == CHITRA_ERR_BMP_PALETTE)      { return "BMP palette invalid"; }
+    if (code == CHITRA_ERR_GIF_HEADER)       { return "malformed GIF header"; }
+    if (code == CHITRA_ERR_GIF_LZW)          { return "corrupt GIF LZW stream"; }
+    if (code == CHITRA_ERR_GIF_PALETTE)      { return "GIF color table invalid"; }
+    if (code == CHITRA_ERR_GIF_NO_IMAGE)     { return "GIF has no image data"; }
     if (code == CHITRA_ERR_OTHER)      { return "other error"; }
     return "unknown error";
 }

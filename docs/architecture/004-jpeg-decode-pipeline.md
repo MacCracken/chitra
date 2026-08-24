@@ -268,7 +268,7 @@ of new attack surface never fuzzed in-tree. `fuzz/fuzz_jpeg.fcyr` now covers it
 directly, including **entropy-segment-only mutation** — the header is left valid
 so hostile bits reach the bit-reader and `DECODE` rather than being turned away
 at the signature gate. `tests/bcyr/chitra.bcyr` measures the path's cost.
-The 226 assertions in `jpeg.tcyr` (of 1,078 across the 6 suites, `make test`)
+The 226 assertions in `jpeg.tcyr` (of 1,700 across the 7 suites, `make test`)
 remain hand-authored known-answer tests — the byte-identical ImageMagick
 cross-check is correctness evidence, and the fuzz harness is now the generated
 coverage that complements it.

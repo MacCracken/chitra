@@ -31,6 +31,8 @@ modules = [
     "src/jpeg_markers.cyr",
     "src/jpeg.cyr",
     "src/bmp.cyr",
+    "src/gif_lzw.cyr",
+    "src/gif.cyr",
 ]
 
 [deps]

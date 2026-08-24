@@ -621,6 +621,230 @@ fn _bench_bmp(name, bpp): i64 {
 }
 
 # ================================================================
+# GIF generation — the only format here that needs a real ENCODER.
+#
+# PNG delegates compression to sankoch's zlib_compress and BMP has none, but
+# there is no LZW encoder to borrow, so this harness carries a small greedy one.
+# That matters for honesty: a GIF benchmark built from literal codes alone
+# would never make the decoder walk a dictionary chain, and chain walking is
+# where GIF decode actually spends its time. Encoding happens OUTSIDE the timed
+# region, so its cost does not pollute the measurement.
+#
+# The dictionary is a direct-indexed table of 4096 x 256 slots rather than a
+# hash — 8 MB, O(1) lookup, and trivially correct. A bench harness can afford
+# memory that a decoder cannot.
+# ================================================================
+var GIFE_MAX = 4096;
+
+# Bit writer, LSB-first (GIF's packing order, opposite to JPEG's).
+# State (32 bytes): +0 buf, +8 byte pos, +16 accumulator, +24 bit count.
+fn _gife_init(st, buf): i64 {
+    store64(st + 0, buf);
+    store64(st + 8, 0);
+    store64(st + 16, 0);
+    store64(st + 24, 0);
+    return 0;
+}
+
+fn _gife_put(st, code, width): i64 {
+    var acc = load64(st + 16);
+    var cnt = load64(st + 24);
+    acc = acc | (code << cnt);
+    cnt = cnt + width;
+    var buf = load64(st + 0);
+    var pos = load64(st + 8);
+    while (cnt >= 8) {
+        store8(buf + pos, acc & 255);
+        pos = pos + 1;
+        acc = acc / 256;
+        cnt = cnt - 8;
+    }
+    store64(st + 8, pos);
+    store64(st + 16, acc);
+    store64(st + 24, cnt);
+    return 0;
+}
+
+fn _gife_flush(st): i64 {
+    var cnt = load64(st + 24);
+    if (cnt > 0) {
+        var buf = load64(st + 0);
+        var pos = load64(st + 8);
+        store8(buf + pos, load64(st + 16) & 255);
+        store64(st + 8, pos + 1);
+        store64(st + 16, 0);
+        store64(st + 24, 0);
+    }
+    return load64(st + 8);
+}
+
+# Greedy LZW encode of `idx` (npix palette indices) into `out`. Returns length.
+fn _gife_lzw(idx, npix, mcs, out, table): i64 {
+    var clear = 1 << mcs;
+    var endc = clear + 1;
+    var i = 0;
+    while (i < GIFE_MAX * 256) { store64(table + i * 8, 0); i = i + 1; }
+
+    var bw[32];
+    _gife_init(&bw, out);
+    var width = mcs + 1;
+    var next_code = clear + 2;
+    _gife_put(&bw, clear, width);
+
+    var prev = load8(idx);
+    var k = 1;
+    var c = 0;
+    var slot = 0;
+    var found = 0;
+    while (k < npix) {
+        c = load8(idx + k);
+        slot = prev * 256 + c;
+        found = load64(table + slot * 8);
+        if (found != 0) {
+            prev = found;
+        } else {
+            _gife_put(&bw, prev, width);
+            if (next_code < GIFE_MAX) {
+                store64(table + slot * 8, next_code);
+                next_code = next_code + 1;
+                if (next_code > (1 << width)) {
+                    if (width < 12) { width = width + 1; }
+                }
+            } else {
+                _gife_put(&bw, clear, width);
+                i = 0;
+                while (i < GIFE_MAX * 256) { store64(table + i * 8, 0); i = i + 1; }
+                next_code = clear + 2;
+                width = mcs + 1;
+            }
+            prev = c;
+        }
+        k = k + 1;
+    }
+    _gife_put(&bw, prev, width);
+    _gife_put(&bw, endc, width);
+    return _gife_flush(&bw);
+}
+
+# Assemble a complete GIF89a: header, screen descriptor, 256-entry global
+# color table, image descriptor, and the LZW data chunked into sub-blocks.
+fn _mk_gif(w, h, len_out): i64 {
+    var npix = w * h;
+    var idx = alloc(npix);
+    var y = 0;
+    var x = 0;
+    while (y < h) {
+        x = 0;
+        while (x < w) {
+            store8(idx + y * w + x, _sample(x, y, 0));
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+
+    var table = alloc(GIFE_MAX * 256 * 8);
+    var lzw = alloc(npix * 2 + 4096);
+    var lzw_len = _gife_lzw(idx, npix, 8, lzw, table);
+
+    # sub-block chunking adds one length byte per 255 payload bytes
+    var total = 13 + 768 + 10 + 1 + lzw_len + (lzw_len / 255) + 2 + 1;
+    var b = alloc(total);
+    var o = 0;
+    store8(b + 0, 0x47); store8(b + 1, 0x49); store8(b + 2, 0x46);
+    store8(b + 3, 0x38); store8(b + 4, 0x39); store8(b + 5, 0x61);
+    store8(b + 6, w & 255); store8(b + 7, (w / 256) & 255);
+    store8(b + 8, h & 255); store8(b + 9, (h / 256) & 255);
+    store8(b + 10, 0xF7);            # GCT present, 256 entries
+    store8(b + 11, 0);
+    store8(b + 12, 0);
+    o = 13;
+    var e = 0;
+    while (e < 256) {
+        store8(b + o + e * 3 + 0, e);
+        store8(b + o + e * 3 + 1, (e * 3) & 255);
+        store8(b + o + e * 3 + 2, (e * 7) & 255);
+        e = e + 1;
+    }
+    o = o + 768;
+
+    store8(b + o, 0x2C);
+    store8(b + o + 1, 0); store8(b + o + 2, 0);
+    store8(b + o + 3, 0); store8(b + o + 4, 0);
+    store8(b + o + 5, w & 255); store8(b + o + 6, (w / 256) & 255);
+    store8(b + o + 7, h & 255); store8(b + o + 8, (h / 256) & 255);
+    store8(b + o + 9, 0);            # no LCT, not interlaced
+    o = o + 10;
+    store8(b + o, 8);                # LZW minimum code size
+    o = o + 1;
+
+    var left = lzw_len;
+    var src_at = 0;
+    var n = 0;
+    var j = 0;
+    while (left > 0) {
+        n = left;
+        if (n > 255) { n = 255; }
+        store8(b + o, n);
+        o = o + 1;
+        j = 0;
+        while (j < n) {
+            store8(b + o + j, load8(lzw + src_at + j));
+            j = j + 1;
+        }
+        o = o + n;
+        src_at = src_at + n;
+        left = left - n;
+    }
+    store8(b + o, 0);                # sub-block terminator
+    store8(b + o + 1, 0x3B);         # trailer
+    o = o + 2;
+    store64(len_out, o);
+    return b;
+}
+
+fn _verify_gif(bytes, len, w, h, label): i64 {
+    var err = 0;
+    var img = chitra_gif_decode(bytes, len, &err);
+    if (img == 0) { _fail(label); return 0; }
+    if (chitra_image_width(img) != w) { _fail(label); return 0; }
+    if (chitra_image_height(img) != h) { _fail(label); return 0; }
+    # the generated palette maps index i -> (i, 3i, 7i), so a round-trip of
+    # _sample must come back exactly; this is what proves the encoder and the
+    # decoder agree rather than both being wrong the same way
+    var px = chitra_image_pixels(img);
+    if (load8(px + 0) != _sample(0, 0, 0)) { _fail(label); return 0; }
+    if (load8(px + 1) != ((_sample(0, 0, 0) * 3) & 255)) { _fail(label); return 0; }
+    if (load8(px + 3) != 255) { _fail(label); return 0; }
+    return 1;
+}
+
+fn _check_gif(w, h, label): i64 {
+    var lo = 0;
+    var b = _mk_gif(w, h, &lo);
+    if (_verify_gif(b, lo, w, h, label) == 1) { _ok(label); }
+    return 0;
+}
+
+fn _bench_gif(name): i64 {
+    var lo = 0;
+    var bytes = _mk_gif(BENCH_DIM, BENCH_DIM, &lo);
+    if (_verify_gif(bytes, lo, BENCH_DIM, BENCH_DIM, name) == 0) { return 0; }
+    var b = bench_new(name);
+    var err = 0;
+    var r = 0;
+    while (r < ROUNDS) {
+        bench_start(b);
+        chitra_gif_decode(bytes, lo, &err);
+        bench_stop(b);
+        r = r + 1;
+    }
+    bench_report(b);
+    _csv_row(b);
+    _per_pixel(b, BENCH_DIM * BENCH_DIM);
+    return 0;
+}
+
+# ================================================================
 # Benchmarks
 #
 # NOTE ON MEMORY: chitra's allocator is a bump allocator and
@@ -730,6 +954,7 @@ fn main(): i64 {
     _check_bmp(64, 64, 24, "bmp 24bpp bottom-up");
     _check_bmp(64, 64, 32, "bmp 32bpp");
     _check_bmp(64, 64, 8, "bmp 8bpp palette");
+    _check_gif(64, 64, "gif lzw round-trip");
 
     println("");
     println("-- PNG decode, 256x256 --");
@@ -752,6 +977,10 @@ fn main(): i64 {
     _bench_bmp("bmp_rgb24_256", 24);
     _bench_bmp("bmp_rgba32_256", 32);
     _bench_bmp("bmp_palette8_256", 8);
+
+    println("");
+    println("-- GIF decode, 256x256 --");
+    _bench_gif("gif_lzw_256");
 
     println("");
     println("-- fixed cost (16x16, throughput-irrelevant) --");

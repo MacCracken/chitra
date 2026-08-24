@@ -1,35 +1,42 @@
 # chitra — Current State
 
-> **Last refresh**: 2026-08-24 (0.4.0) | **Refresh cadence**: every release.
+> **Last refresh**: 2026-08-24 (0.5.0) | **Refresh cadence**: every release.
 > [`CLAUDE.md`](../../CLAUDE.md) is preferences / process / architecture
 > (durable); this file is **state** (volatile) — it is the home for the
 > version, sizes, and counts `CLAUDE.md` must not inline.
 
 ## Version
 
-**0.4.0** — cut 2026-08-24, tagged. **BMP decode.** chitra gains its third format,
-normalizing Windows BMP to the same canonical RGBA8 `ChitraImage` that PNG and
-JPEG already produce — the format-agnostic name paying off, with no rename and
-no change to the existing surface.
+**0.5.0** — cut 2026-08-24. **GIF decode — the fourth and last of the common
+raster formats.** PNG, JPEG, BMP and GIF now all normalize to the same
+canonical RGBA8 `ChitraImage` behind one `chitra_image_decode` router.
 
-BMP is the simplest of the three paths (no entropy coding, no DEFLATE, no DCT)
-and benchmarks that way: **6 ns/px** at 24/32 bpp against PNG's 83 and JPEG's
-43 for the same 256×256 image. The difficulty is framing, not compression —
-bottom-up row order by default, 4-byte row padding, B,G,R channels, and a
-pixel-data offset that is an attacker-controlled header field rather than
-"after the palette". Output verified **identical to ImageMagick** on all eight
-valid fixtures, including the bottom-up/top-down pair that must agree from
-opposite storage orders.
+**First frame only** ([ADR 0005](../adr/0005-gif-first-frame-only.md)). GIF is
+the one format chitra handles that describes a *sequence*, and `ChitraImage`
+has one `pixels` pointer, no frame count, no delay. Returning frame 1 keeps the
+output contract every other format honours, so consumers gain GIF on a re-pin
+with no code change. The cost, stated rather than buried: an *optimised*
+animation whose first frame is a background plate decodes to that plate.
 
-`chitra_version()` → **400**. **1,078 test assertions** across 6 suites,
-**5,284,328 fuzz assertions** across 3 harnesses, and 15 benchmarks — 0
+`src/gif_lzw.cyr` is the **only decompressor chitra implements itself** —
+`sankoch` supplies DEFLATE, not LZW, so there was nothing to delegate to. It is
+therefore the newest attack surface in the tree, and is written against the
+three LZW attack shapes explicitly: unbounded expansion (capped at the frame's
+pixel count), cyclic prefix chains (impossible by construction — entries are
+added only with `prefix < index` — and separately size-bounded), and
+out-of-range codes (rejected, with the one legal KwKwK exception handled).
+
+A **KwKwK ordering bug** was found and fixed pre-release: the self-referential
+case must emit `string(prev)` then `first_char(prev)`, and the first draft
+pushed the trailing byte onto the top of the reverse expansion stack — twice —
+putting it at the front of the run instead of the end. The interlaced 8×8
+reference fixture caught it.
+
+`chitra_version()` → **500**. **1,700 test assertions** across 7 suites,
+**6,543,842 fuzz assertions** across 4 harnesses, and 16 benchmarks — 0
 failures throughout. See [`CHANGELOG.md`](../../CHANGELOG.md).
 
-The previous cut, **0.3.3**, was the P-1 audit + hardening release that closed
-both v1.0 hardening gates; its detail lives in the
-[2026-08-23 audit](../audit/2026-08-23-audit.md).
-
-Released tags: 0.1.0, 0.2.0, 0.2.1, 0.3.0, 0.3.1, 0.3.2, 0.3.3, **0.4.0**
+Released tags: 0.1.0, 0.2.0, 0.2.1, 0.3.0, 0.3.1, 0.3.2, 0.3.3, 0.4.0
 (SemVer;
 pre-1.0, the public surface is still moving — no API freeze until v1.0).
 
@@ -85,6 +92,15 @@ JPEG (0.3.0):
 - `chitra_jpeg_check_signature(src, len)` → 1 if the bytes open with the
   JPEG SOI marker.
 
+GIF (0.5.0, first frame only — [ADR 0005](../adr/0005-gif-first-frame-only.md)):
+
+- `chitra_gif_decode(src, len, err_out)` → `ChitraImage*` (0 on fail,
+  `*err_out` set). Sized to the **logical screen**; canvas the first frame does
+  not paint is emitted transparent (alpha 0) rather than background-filled —
+  chitra did not decode those pixels, and alpha 0 says exactly that.
+- `chitra_gif_decode_rgba8(src, len, w_out, h_out)` → RGBA8 ptr (0 on fail).
+- `chitra_gif_check_signature(src, len)` → 1 for `GIF87a` / `GIF89a`.
+
 BMP (0.4.0):
 
 - `chitra_bmp_decode(src, len, err_out)` → `ChitraImage*` (0 on fail,
@@ -108,7 +124,7 @@ Shared:
 - `ChitraImage` accessors: `chitra_image_{width,height,pixels,channels,
   seen_iend,source_color_type}`; `chitra_image_free` (a documented no-op
   under the bump allocator).
-- `chitra_version()` → **`400`** (`major*10000 + minor*100 + patch`).
+- `chitra_version()` → **`500`** (`major*10000 + minor*100 + patch`).
 - Error API: `chitra_err_new` / `chitra_err` / `chitra_err_code` /
   `chitra_err_detail` / `chitra_err_name` / `chitra_err_print_name` + enum
   `ChitraErrCode`.
@@ -127,7 +143,7 @@ closed the stream, 0 = tolerated IEND-less clean end), `src_ctype`@40. For a
 PNG, `src_ctype` is the pre-normalization PNG color_type (0/2/3/4/6); for a
 JPEG it carries the sentinel `0x100 | num_components` (so `0x101` grayscale,
 `0x103` YCbCr); for a BMP, `0x200 | bpp` (so `0x201`/`0x204`/`0x208` indexed,
-`0x218` at 24 bpp, `0x220` at 32 bpp). The +32/+40 fields are **append-only** — 0.1.x offsets
+`0x218` at 24 bpp, `0x220` at 32 bpp); for a GIF, `0x300 | min_code_size`. The +32/+40 fields are **append-only** — 0.1.x offsets
 preserved, so mabda's accessors are unaffected.
 
 `ChitraErr` is a **16-byte** record (+0 code, +8 detail ptr), **layout-
@@ -286,23 +302,35 @@ BMP (0.4.0):
   `png_chunks.cyr` for the shared ceilings, and `png.cyr` for `ChitraImage`
   — which is why it comes last in the include order.
 
+GIF (0.5.0):
+
+- `gif_lzw.cyr` (260 L) — the LZW decompressor: LSB-first variable-width bit
+  reader, dictionary build, chain expansion, Clear/End handling and the KwKwK
+  case. Frame-independent, so it precedes `gif.cyr` in the include order for
+  the same reason `jpeg_huffman.cyr` precedes `jpeg_markers.cyr`.
+- `gif.cyr` (408 L) — `chitra_gif_check_signature`, the block walk (extensions
+  skipped by their sub-block chain, GCE read for transparency), the image
+  descriptor and frame geometry, global/local color tables, the 4-pass row
+  interlace, and `chitra_gif_decode` / `_rgba8`.
+
 Include chain: `lib.cyr` (64 L) pulls the stdlib set then
 `error.cyr` → `png_chunks.cyr` → `png_filter.cyr` → `png_color.cyr` →
 `png.cyr` → `jpeg_huffman.cyr` → `jpeg_idct.cyr` → `jpeg_markers.cyr` →
-`jpeg.cyr` → `bmp.cyr` (the order in `[lib].modules`). Domain-module total:
-**3,494 L** across 10 files, plus `lib.cyr`.
+`jpeg.cyr` → `bmp.cyr` → `gif_lzw.cyr` → `gif.cyr` (the order in
+`[lib].modules`). Domain-module total: **4,180 L** across 12 files, plus
+`lib.cyr`.
 
 ## Sizes
 
-- `dist/chitra.cyr` — **~148 KB** (151,197 bytes / 3,524 lines; `cyrius
-  distlib` reports 3,490 code lines), regenerated by `cyrius distlib`
-  (= `make dist`). This is the artifact consumers link. 0.4.0 is **additive**:
-  three new public functions (`chitra_bmp_decode`, `_rgba8`,
-  `_check_signature`), four new error codes, and one new `src_ctype` sentinel
+- `dist/chitra.cyr` — **~175 KB** (179,677 bytes / 4,210 lines; `cyrius
+  distlib` reports 4,170 code lines), regenerated by `cyrius distlib`
+  (= `make dist`). This is the artifact consumers link. 0.5.0 is **additive**,
+  as 0.4.0 was: three new public functions (`chitra_gif_decode`, `_rgba8`,
+  `_check_signature`), four new error codes, one new `src_ctype` sentinel
   range. No existing signature, struct offset or symbol changed, so consumers
-  re-pin mechanically and gain BMP with no code change.
+  re-pin mechanically and gain GIF with no code change.
 - `dist/chitra.deps` — the 13-leaf stdlib sidecar consumers resolve against.
-- `build/chitra_smoke` — **~555 KB** (568,128 bytes), built from
+- `build/chitra_smoke` — **~567 KB** (580,624 bytes), built from
   `programs/smoke.cyr` (19 L) via `make build`. It only proves the include
   chain compiles and links clean — chitra is a library, there is no real CLI
   behind it.
@@ -310,7 +338,13 @@ Include chain: `lib.cyr` (64 L) pulls the stdlib set then
 ## Tests + bench
 
 - `make test` (globs `tests/tcyr/*.tcyr`; each is a standalone `main()`) →
-  **1,078 assertions, all pass** across 6 suites:
+  **1,700 assertions, all pass** across 7 suites:
+  - `gif.tcyr` — **622** (signature, plain / interlaced 4×4 and 8×8 /
+    transparent / animated-first-frame fixtures with **every pixel asserted**,
+    the no-image and bad-min-code-size rejections, a truncation sweep and the
+    four-format router). Fixtures are real ImageMagick GIFs; expectations were
+    corroborated by a second independent decoder, which is what caught the
+    KwKwK bug.
   - `bmp.tcyr` — **294** (signature, 24/32 bpp, 1/4/8 bpp palette,
     `BITMAPCOREHEADER`, bottom-up **and** top-down producing identical output,
     the 32-bpp undefined-alpha heuristic, deferred-mode + malformed-header
@@ -320,7 +354,7 @@ Include chain: `lib.cyr` (64 L) pulls the stdlib set then
     wrong returns the right *set* of pixels in the wrong places, and only
     position-sensitive expectations catch that.
   - `error.tcyr` — **20** (error codes, `chitra_err_*` accessors, name
-    round-trips, `chitra_version` → 400).
+    round-trips, `chitra_version` → 500).
   - `interlace.tcyr` — **35** (Adam7 cross-checked against the trusted
     non-interlaced decode for 7 color/depth/odd-dimension cases).
   - `jpeg.tcyr` — **226** (marker scan + non-baseline rejection, SOF0
@@ -339,9 +373,11 @@ Include chain: `lib.cyr` (64 L) pulls the stdlib set then
 - Reference verification is **embedded in the suite**, not a side script:
   the ImageMagick-encoded fixtures live inside `jpeg.tcyr` / `png.tcyr`, so
   a green `make test` *is* the reference cross-check.
-- `make fuzz` (= `cyrius fuzz`, globbing `fuzz/*.fcyr`) → **5,284,328
-  assertions, 0 failures** over **~1.5 M decode cases** (500,082 PNG +
-  500,155 JPEG + ~500,300 BMP), across 3 harnesses (1,170 lines).
+- `make fuzz` (= `cyrius fuzz`, globbing `fuzz/*.fcyr`) → **6,543,842
+  assertions, 0 failures** over **~1.9 M decode cases**, across 4 harnesses —
+  one per format (2,626 lines). `fuzz_gif.fcyr` carries an **LZW-stream-only**
+  mutation mode that leaves the header intact so hostile bits reach the
+  decompressor directly.
   This clears the roadmap's *10⁶ iterations clean* bar, not just the
   "a harness exists" bar.
   Each asserts **two** invariants: *survival* (the decoder returns on any
@@ -356,8 +392,10 @@ Include chain: `lib.cyr` (64 L) pulls the stdlib set then
     self-check asserting its fixtures decode and its entropy span is wide
     enough to mutate — the first draft silently exercised a 4-byte span, and
     a harness that no-ops is worse than none.
-- `make bench` (= `cyrius bench tests/bcyr/chitra.bcyr`) → **15 benchmarks**,
-  ~2 s (12 landed in 0.3.3, +3 BMP in 0.4.0). The harness **generates its
+- `make bench` (= `cyrius bench tests/bcyr/chitra.bcyr`) → **16 benchmarks**,
+  ~2 s (12 in 0.3.3, +3 BMP in 0.4.0, +1 GIF in 0.5.0 — the GIF case carries a
+  small greedy **LZW encoder**, because a benchmark built from literal codes
+  alone would never make the decoder walk a dictionary chain). The harness **generates its
   fixtures at realistic sizes**
   (256×256) rather than timing the 2×2..16×16 test fixtures, which would
   measure fixed overhead rather than throughput: PNG scanlines go through
@@ -400,14 +438,14 @@ path in the library (no chroma planes, no upsample, no color convert).
 
 ## Quality gates
 
-All green at 0.4.0 on cyrius 6.5.35:
+All green at 0.5.0 on cyrius 6.5.35:
 
 | gate | command | result |
 |---|---|---|
-| link check | `make build` | OK, 568,128 bytes, no warnings |
-| tests | `make test` | 1,078/1,078, 0 failures |
-| fuzz | `make fuzz` | 5,284,328/5,284,328, 0 failures (~1.5 M cases) |
-| bench | `make bench` | 15 benchmarks, fixtures self-verified, ~2 s |
+| link check | `make build` | OK, 580,624 bytes, no warnings |
+| tests | `make test` | 1,700/1,700, 0 failures |
+| fuzz | `make fuzz` | 6,543,842/6,543,842, 0 failures (~1.9 M cases) |
+| bench | `make bench` | 16 benchmarks, fixtures self-verified, ~2 s |
 | lint | `make lint` | 0 warnings (incl. `fuzz/*.fcyr` + `tests/bcyr/*.bcyr`) |
 | fmt | `make fmt-check` | clean |
 | vet | `make vet` | 1 dep, 0 untrusted, 0 missing |
@@ -451,16 +489,6 @@ and it is exactly what drifted in 0.3.1.
 Per [`docs/development/roadmap.md`](roadmap.md), which now sequences the
 0.5.x arc:
 
-- **0.5.0 — GIF**, the last of the four common raster formats. One scope
-  decision to settle *before* code, and it earns an ADR because it would be
-  the first change to the output contract since 0.1.0: does
-  `chitra_gif_decode` return the **first frame only** — preserving the
-  one-image-in / one-image-out shape every other format honours — or does
-  chitra grow a multi-frame surface? First-frame-only is the presumption.
-  Note LZW is chitra's own work: `sankoch` supplies DEFLATE, not LZW, so
-  there is no dependency to delegate to and the decompressor is new attack
-  surface in the same sense the JPEG entropy decoder was. It wants
-  `fuzz/fuzz_gif.fcyr` from the first cut, not retrofitted.
 - **0.5.1 — BMP `BI_RLE8` / `BI_RLE4`**, deferred in 0.4.0. The hardening is
   the interesting part, not the codec: the *delta* escape moves the write
   cursor by attacker-chosen (dx, dy) and must be bounds-checked against both
@@ -485,10 +513,15 @@ Per [`docs/development/roadmap.md`](roadmap.md), which now sequences the
 - Three audits have landed —
   [2026-06-26 (PNG)](../audit/2026-06-26-audit.md),
   [2026-06-27 (JPEG)](../audit/2026-06-27-audit.md) and
-  [2026-08-23 (P-1 sweep, PNG + JPEG)](../audit/2026-08-23-audit.md). **BMP
-  has not been audited** — it shipped with 294 known-answer assertions and
-  ~500 k fuzz cases, but no line-by-line guard review. Worth one before the
-  freeze.
+  [2026-08-23 (P-1 sweep, PNG + JPEG)](../audit/2026-08-23-audit.md).
+  **Neither BMP nor GIF has been audited.** Both shipped with known-answer
+  suites, reference cross-checks and ~500 k / ~370 k fuzz cases, but neither
+  has had the line-by-line guard review PNG and JPEG got. GIF is the higher
+  priority of the two: its LZW decompressor is the only one chitra implements
+  itself, and a real ordering bug in it survived until a reference cross-check
+  caught it — which is exactly the class of thing an audit is for. Worth one
+  before the freeze.
 - ~~Stale `src/error.cyr` enum comments~~ — **resolved in 0.3.2.**
 - ~~Fuzz harness~~ / ~~Benchmark harness~~ — **both resolved in 0.3.3.**
 - ~~BMP~~ — **shipped in 0.4.0.**
+- ~~GIF~~ — **shipped in 0.5.0** (first frame only, ADR 0005).

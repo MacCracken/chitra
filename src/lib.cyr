@@ -66,3 +66,9 @@ include "src/jpeg.cyr"
 # BMP (0.4.0) — BI_RGB uncompressed. Depends on error.cyr for codes,
 # png_chunks.cyr for the security ceilings, and png.cyr for ChitraImage.
 include "src/bmp.cyr"
+
+# GIF (0.5.0) — first frame only, see ADR 0005. gif_lzw.cyr is the
+# frame-independent decompressor and must precede gif.cyr, which drives it —
+# the same leaf-before-builder ordering the JPEG modules use.
+include "src/gif_lzw.cyr"
+include "src/gif.cyr"

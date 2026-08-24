@@ -197,6 +197,30 @@ whole crate. The full guard-to-source mapping is in
     `BI_BITFIELDS`, so 16 bpp is deferred rather than guessed.
   - `BI_JPEG` / `BI_PNG` embed a whole other format inside the DIB. Refused
     outright: honouring them re-enters the decoder.
+- **CompuServe GIF89a specification** —
+  <https://www.w3.org/Graphics/GIF/spec-gif89a.txt>
+  - § 18 Logical Screen Descriptor, § 19 Global Color Table, § 20 Image
+    Descriptor, § 21 Local Color Table — the two-geometry / two-palette model
+    (a frame rect inside a canvas; a local table overriding the global one).
+    Used by: `src/gif.cyr`.
+  - § 22 + Appendix F — LZW image data: the minimum code size (2..8),
+    variable-width LSB-first codes, Clear/End, and the dictionary. Used by:
+    `src/gif_lzw.cyr`. Note the KwKwK case (a code equal to the next
+    unassigned one, referring to the entry it is itself defining) is the
+    subtle part and the one chitra got wrong first — see the 0.5.0 CHANGELOG.
+  - § 20 packed field bit 6 — the 4-pass **row** interlace (starts 0/4/2/1,
+    steps 8/8/4/2). Distinct from PNG Adam7, which subsamples both axes.
+    Used by: `src/gif.cyr`.
+  - § 23 Graphic Control Extension — the transparent color index, which is why
+    transparency is read from a block *preceding* the image rather than from
+    the image itself. Used by: `src/gif.cyr`.
+  - § 15-16 sub-block chains — how every unbounded payload is framed. Used by:
+    `src/gif.cyr` `_gif_walk_blocks`, which is both the skip path for unknown
+    extensions and the gather path for LZW data.
+  What the spec leaves to the decoder, and chitra's choice: the canvas area a
+  frame does not paint. chitra emits it **transparent** rather than filling
+  with the background color index — it decoded nothing there, and alpha 0 says
+  so, where a fill would assert a color the frame never specified.
 - **RFC 1950 (zlib) + RFC 1951 (DEFLATE)** — IDAT decompression contract;
   § 3.2.5 sets the ~1032:1 ratio backstop behind
   `CHITRA_MAX_INFLATE_RATIO`. **chitra does not implement inflate** — it

@@ -1,18 +1,18 @@
 # chitra
 
-Version: 0.4.0
+Version: 0.5.0
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder, a sibling AGNOS package in the mould of `sakshi` /
 `patra` / `samvada`. It turns encoded image bytes into canonical RGBA8
 pixels with no GPU, no C shim, and no external binaries.
 
-The name is deliberately format-agnostic — PNG, JPEG and BMP already share
-it, and GIF can join later without a rename.
+The name is deliberately format-agnostic, and all four common raster formats
+now share it — PNG, JPEG, BMP and GIF — with room for more without a rename.
 
 ## What it decodes
 
-Three formats, one output contract: encoded bytes in, canonical **RGBA8** out —
+Four formats, one output contract: encoded bytes in, canonical **RGBA8** out —
 always 4 channels, always at the source dimensions, whatever went in.
 
 | Format | Coverage |
@@ -20,16 +20,22 @@ always 4 channels, always at the source dimensions, whatever went in.
 | **PNG** | Every spec-legal bit depth × color type: 1/2/4/8/16 across types 0/2/3/4/6 (§ 11.2.2 Table 11.1), plus **Adam7 interlace** for every cell. PLTE palettes, tRNS transparency (keyed and per-entry). IDAT inflate via `sankoch`. |
 | **JPEG** | JFIF **baseline** (SOF0 sequential Huffman, 8-bit): grayscale + YCbCr, chroma subsampling 4:4:4 / 4:2:2 / 4:2:0 and general `Hi,Vi` box upsampling, DRI / RST0–7 restart markers. Verified **byte-identical to ImageMagick**. |
 | **BMP** | `BI_RGB` uncompressed at 1 / 4 / 8 bpp (palette) and 24 / 32 bpp; `BITMAPINFOHEADER` + `BITMAPCOREHEADER`; bottom-up **and** top-down row order. Verified **identical to ImageMagick**. |
+| **GIF** | GIF87a/89a, LZW, global **and** local color tables, 4-pass row interlace, transparency from a Graphic Control Extension. **First frame only** — see [ADR 0005](docs/adr/0005-gif-first-frame-only.md). Verified against two independent decoders. |
 
 ```
 fn chitra_image_decode(src, len, err_out): i64
 ```
 
 One entry point sniffs the signature — PNG magic, then JPEG SOI, then BMP
-`BM` — and routes. Bytes matching none of the three are rejected with
-`CHITRA_ERR_SIGNATURE`; it does not fall through to a default decoder. If you
-already know the format, `chitra_{png,jpeg,bmp}_decode` have the identical
-shape, each with a `_rgba8` convenience wrapper.
+`BM`, then GIF `GIF8?a` — and routes. Bytes matching none of the four are
+rejected with `CHITRA_ERR_SIGNATURE`; it does not fall through to a default
+decoder. If you already know the format, `chitra_{png,jpeg,bmp,gif}_decode`
+have the identical shape, each with a `_rgba8` convenience wrapper.
+
+The one place that uniformity costs something: an **animated** GIF returns its
+first frame, with no indication that more existed. If frame 1 is a background
+plate — common in optimised animations — that is what you get. The reasoning
+and the shape a future multi-frame surface would take are in ADR 0005.
 
 ## What it refuses, and why that is the point
 
@@ -54,12 +60,12 @@ Untrusted bytes are the whole input surface, so the guards are the product:
   JPEG's output:input amplification cap (which JPEG needs *more*, because its
   bit-reader zero-pads past end-of-data and so needs no payload at all to
   drive a full-size decode).
-- **`make fuzz`** — one harness per format, **~1.5 M adversarial decode cases,
-  5,284,328 assertions, 0 failures**. They assert *both* that the decoder
+- **`make fuzz`** — one harness per format, **~1.9 M adversarial decode cases,
+  6,543,842 assertions, 0 failures**. They assert *both* that the decoder
   survives and that it honours the documented `(0, *err_out set)` contract —
   the invariant a crash-only fuzzer misses.
-- **`make bench`** — 15 decode benchmarks with committed
-  [CSV history](bench-history.csv). BMP **6 ns/px**, JPEG grayscale
+- **`make bench`** — 16 decode benchmarks with committed
+  [CSV history](bench-history.csv). BMP **6 ns/px**, JPEG grayscale and GIF
   **43 ns/px**, PNG RGBA8 **83 ns/px** at 256×256.
 - Three security audits in [`docs/audit/`](docs/audit/); the most recent is a
   ten-lens adversarial sweep of both compressed paths that found **no
@@ -67,9 +73,9 @@ Untrusted bytes are the whole input surface, so the guards are the product:
 
 Per-release detail — including the four input classes 0.3.3 began rejecting
 deliberately — is in [`CHANGELOG.md`](CHANGELOG.md). Sequencing is in
-[`docs/development/roadmap.md`](docs/development/roadmap.md): **0.5.0** GIF,
-**0.5.1/0.5.2** the BMP deferrals, **0.6.0** deferred JPEG geometry plus a
-streaming API, then the v1.0 API/ABI freeze.
+[`docs/development/roadmap.md`](docs/development/roadmap.md): **0.5.1/0.5.2**
+the BMP deferrals, **0.6.0** deferred JPEG geometry plus a streaming API, then
+the v1.0 API/ABI freeze.
 
 ## Relationships
 
@@ -102,9 +108,9 @@ All deps are pinned in `cyrius.cyml`; the toolchain pin is
 ```bash
 cyrius deps          # resolve stdlib + sankoch + thread into lib/
 make build           # link-check the include chain (→ build/chitra_smoke)
-make test            # 1078 assertions across tests/tcyr/
-make fuzz            # ~1.5 M adversarial decode cases (fuzz/*.fcyr)
-make bench           # 15 decode benchmarks (tests/bcyr/chitra.bcyr)
+make test            # 1700 assertions across tests/tcyr/
+make fuzz            # ~1.9 M adversarial decode cases (fuzz/*.fcyr)
+make bench           # 16 decode benchmarks (tests/bcyr/chitra.bcyr)
 make dist            # regenerate dist/chitra.cyr — the artifact consumers link
 make test-all        # version-check + dist + test + fuzz (the pre-release gate)
 ```
@@ -125,8 +131,8 @@ current surface, sizes and decode matrix, then:
   is a documented no-op, so decode cost is cumulative for the process — which
   is why the amplification caps exist.
 - [`docs/adr/`](docs/adr/) — the decisions and their alternatives (forking
-  kii's decoder, the security model, mabda ABI compatibility, the JPEG
-  decode model).
+  kii's decoder, the security model, mabda ABI compatibility, the JPEG decode
+  model, GIF first-frame-only).
 - [`docs/guides/getting-started.md`](docs/guides/getting-started.md) —
   consuming chitra from another package.
 - [`docs/audit/`](docs/audit/) — the security audit reports.

@@ -5,6 +5,108 @@ All notable changes to chitra are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-08-24
+
+**GIF decode — the fourth and last of the common raster formats.** chitra now
+decodes PNG, JPEG, BMP and GIF, all to the same canonical RGBA8 `ChitraImage`,
+behind one `chitra_image_decode` router.
+
+**GIF decodes the FIRST FRAME only** — see
+[ADR 0005](docs/adr/0005-gif-first-frame-only.md). GIF is the one format chitra
+handles that describes a *sequence* rather than an image, and `ChitraImage` has
+one `pixels` pointer, no frame count and no delay. Returning frame 1 keeps the
+output contract every other format honours, so existing consumers gain GIF on a
+re-pin with no code change. The cost is stated plainly rather than buried: an
+*optimised* animation whose first frame is a background plate decodes to that
+plate, not to what a viewer shows.
+
+### Added
+
+- **`src/gif_lzw.cyr`** — GIF's LZW decompressor: variable-width codes
+  (`min_code_size + 1` up to 12 bits), LSB-first packing, mid-stream Clear
+  handling, and the KwKwK self-referential case. This is the **only
+  decompressor chitra implements itself** — PNG delegates DEFLATE to `sankoch`,
+  and JPEG's entropy decode is Huffman, not dictionary-based. `sankoch` has no
+  LZW, so there was nothing to delegate to.
+- **`src/gif.cyr`** — the block walk and frame geometry:
+  GIF87a/GIF89a headers, the Logical Screen Descriptor, global **and**
+  per-image local color tables (the local table wins), the 4-pass row
+  interlace, and transparency from a Graphic Control Extension. Unknown
+  extension blocks are **skipped by their sub-block chain** rather than parsed,
+  which is what makes an unrecognised extension harmless.
+- New public surface, mirroring the existing formats:
+  `chitra_gif_decode(src, len, err_out)`,
+  `chitra_gif_decode_rgba8(src, len, w_out, h_out)`, and
+  `chitra_gif_check_signature(src, len)`.
+- **`chitra_image_decode` now sniffs four formats** — PNG magic, JPEG SOI,
+  BMP `BM`, GIF `GIF8?a`, then `CHITRA_ERR_SIGNATURE`.
+- `ChitraImage.src_ctype` gains the GIF sentinel **`0x300 | min_code_size`**,
+  distinct from PNG's raw color_type, JPEG's `0x100 | ncomp` and BMP's
+  `0x200 | bpp`.
+- Four error codes (28–31): `CHITRA_ERR_GIF_HEADER`, `_GIF_LZW`,
+  `_GIF_PALETTE`, `_GIF_NO_IMAGE`.
+- **`tests/tcyr/gif.tcyr`** — 622 assertions, every pixel of every fixture
+  asserted. Fixtures are **real GIFs produced by ImageMagick**, not hand-rolled
+  by the same understanding that wrote the decoder.
+- **`fuzz/fuzz_gif.fcyr`** — ~370,000 cases, **1,259,514 assertions**, 0
+  failures, including an **LZW-stream-only** mutation mode that leaves the
+  header intact so hostile bits land squarely in the decompressor.
+- **A GIF benchmark** with a small greedy **LZW encoder** in the harness
+  (`tests/bcyr/chitra.bcyr`). Writing an encoder was the honest option: a GIF
+  benchmark built from literal codes alone would never make the decoder walk a
+  dictionary chain, which is where GIF decode actually spends its time.
+  Encoding happens outside the timed region. **43 ns/px** at 256×256 — the same
+  ballpark as baseline JPEG, and 2× the cost of PNG RGBA8.
+
+### Fixed
+
+- **LZW KwKwK emitted the wrong bytes in the wrong order.** The
+  self-referential case (`code == next_code`) must emit `string(prev)` followed
+  by `first_char(prev)`. The expansion buffer is a reverse stack that the emit
+  loop walks from the top down, so the trailing byte has to sit at the
+  *bottom* — the first draft pushed it on top, and twice, producing one extra
+  byte at the front of the run. Caught by the interlaced 8×8 fixture, where it
+  shifted four pixels of one row; found and fixed before release. The trailing
+  byte's value is not known until the chain walk reaches the root, so index 0
+  is now reserved up front and filled afterwards.
+
+### Security
+
+- **The LZW decompressor is written against its three known attack shapes**,
+  each documented at the point it is defended:
+  - *Unbounded expansion* — output is capped at the frame's exact pixel count,
+    so a few hundred bytes cannot expand past one screenful.
+  - *Cyclic prefix chains* — dictionary entries are only ever added with
+    `prefix < the index being written`, so chains strictly decrease and cannot
+    cycle; the walk is **additionally** bounded by the dictionary size, because
+    a guard you can reason about is worth less than one you cannot get past.
+  - *Out-of-range codes* — a code above `next_code` has no entry and is
+    rejected; the single legal exception (`code == next_code`) is handled
+    explicitly.
+- A truncated LZW stream **rejects** rather than zero-padding. JPEG zero-pads
+  past end-of-data because a truncated scan still has a well-defined block to
+  finish; LZW has no such notion, and padding would fabricate dictionary
+  entries.
+- The frame rect must lie inside the logical screen it claims to paint. A frame
+  hanging off the canvas edge is rejected, not clamped — clamping would
+  silently decode a different image than the file describes.
+- Sub-block chains are walked with every length byte bounds-checked, and the
+  gathered payload is capped at the input length, so a chain cannot make chitra
+  hold more than the file itself.
+
+### Notes
+
+- **Uncovered canvas is transparent, not background-filled.** When the first
+  frame is smaller than the logical screen, the area outside its rect is
+  emitted as alpha 0. chitra did not decode those pixels; alpha 0 says exactly
+  that, where a background fill would assert a color the frame never specified.
+- Reference verification needed a tiebreak worth recording: ImageMagick's
+  `-interlace line` GIF **writer** does not round-trip its own source, so
+  agreement between two independent *readers* — ImageMagick's and a from-spec
+  Python decoder — is what established the interlaced expectations rather than
+  assuming the encoder preserved row order. The two agree pixel-for-pixel on
+  every fixture.
+
 ## [0.4.0] - 2026-08-24
 
 **BMP decode.** chitra gains its third format, normalizing Windows BMP to the

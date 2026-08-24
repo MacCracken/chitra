@@ -468,6 +468,9 @@ fn chitra_image_decode(src, len, err_out): i64 {
     if (chitra_bmp_check_signature(src, len) == 1) {
         return chitra_bmp_decode(src, len, err_out);
     }
+    if (chitra_gif_check_signature(src, len) == 1) {
+        return chitra_gif_decode(src, len, err_out);
+    }
     store64(err_out, chitra_err(CHITRA_ERR_SIGNATURE));
     return 0;
 }

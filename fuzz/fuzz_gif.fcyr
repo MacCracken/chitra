@@ -1,0 +1,1456 @@
+# chitra — GIF decode fuzz harness (`cyrius fuzz`).
+#
+# chitra's threat model is a HOSTILE ENCODED IMAGE: untrusted (src, len)
+# bytes reach a public entry point. This harness drives the GIF path with
+# adversarial input and asserts the two invariants every decode must hold,
+# no matter how malformed the input:
+#
+#   1. SURVIVAL   — the decoder returns. It must not fault, corrupt memory,
+#                   or loop forever on any byte sequence.
+#   2. CONTRACT   — the documented result shape holds on every path:
+#                   failure => returns 0 AND *err_out is a non-zero ChitraErr;
+#                   success => non-zero image, err_out untouched (0), and
+#                   width/height/pixels all sane.
+#
+# Invariant 2 is the one a crash-only fuzzer misses: a decoder that returns
+# 0 without setting *err_out hands the caller a stale or zero error, and
+# mabda maps ChitraErr straight onto GpuErr.
+#
+# Stack-array pointer note: `var buf[N]` reserves N bytes, but `buf` as an
+# rvalue yields the first 8 bytes, not the address — pass `&buf`.
+
+include "src/lib.cyr"
+include "lib/assert.cyr"
+
+# ================================================================
+# Deterministic PRNG (LCG) — seeded per case so every failure reproduces.
+# ================================================================
+var _fuzz_state = 0;
+
+fn _fuzz_seed(s): i64 {
+    _fuzz_state = s;
+    return 0;
+}
+
+fn _fuzz_next(): i64 {
+    _fuzz_state = _fuzz_state * 6364136223846793005 + 1442695040888963407;
+    return (_fuzz_state >> 33) & 255;
+}
+
+fn _fuzz_fill(buf, len): i64 {
+    var i = 0;
+    while (i < len) {
+        store8(buf + i, _fuzz_next());
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn fx_gif_plain(len_out): i64 {
+    var b = alloc(54);
+    store64(len_out, 54);
+    store8(b + 0, 71);
+    store8(b + 1, 73);
+    store8(b + 2, 70);
+    store8(b + 3, 56);
+    store8(b + 4, 57);
+    store8(b + 5, 97);
+    store8(b + 6, 4);
+    store8(b + 7, 0);
+    store8(b + 8, 4);
+    store8(b + 9, 0);
+    store8(b + 10, 241);
+    store8(b + 11, 0);
+    store8(b + 12, 0);
+    store8(b + 13, 255);
+    store8(b + 14, 0);
+    store8(b + 15, 0);
+    store8(b + 16, 0);
+    store8(b + 17, 255);
+    store8(b + 18, 0);
+    store8(b + 19, 255);
+    store8(b + 20, 255);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 0);
+    store8(b + 24, 255);
+    store8(b + 25, 33);
+    store8(b + 26, 249);
+    store8(b + 27, 4);
+    store8(b + 28, 0);
+    store8(b + 29, 0);
+    store8(b + 30, 0);
+    store8(b + 31, 0);
+    store8(b + 32, 0);
+    store8(b + 33, 44);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 0);
+    store8(b + 37, 0);
+    store8(b + 38, 4);
+    store8(b + 39, 0);
+    store8(b + 40, 4);
+    store8(b + 41, 0);
+    store8(b + 42, 0);
+    store8(b + 43, 2);
+    store8(b + 44, 7);
+    store8(b + 45, 68);
+    store8(b + 46, 38);
+    store8(b + 47, 39);
+    store8(b + 48, 128);
+    store8(b + 49, 182);
+    store8(b + 50, 87);
+    store8(b + 51, 0);
+    store8(b + 52, 0);
+    store8(b + 53, 59);
+    return b;
+}
+
+fn fx_gif_big(len_out): i64 {
+    var b = alloc(1122);
+    store64(len_out, 1122);
+    store8(b + 0, 71);
+    store8(b + 1, 73);
+    store8(b + 2, 70);
+    store8(b + 3, 56);
+    store8(b + 4, 57);
+    store8(b + 5, 97);
+    store8(b + 6, 48);
+    store8(b + 7, 0);
+    store8(b + 8, 48);
+    store8(b + 9, 0);
+    store8(b + 10, 242);
+    store8(b + 11, 7);
+    store8(b + 12, 0);
+    store8(b + 13, 0);
+    store8(b + 14, 0);
+    store8(b + 15, 0);
+    store8(b + 16, 255);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 0);
+    store8(b + 20, 255);
+    store8(b + 21, 0);
+    store8(b + 22, 255);
+    store8(b + 23, 255);
+    store8(b + 24, 0);
+    store8(b + 25, 0);
+    store8(b + 26, 0);
+    store8(b + 27, 255);
+    store8(b + 28, 255);
+    store8(b + 29, 0);
+    store8(b + 30, 255);
+    store8(b + 31, 0);
+    store8(b + 32, 255);
+    store8(b + 33, 255);
+    store8(b + 34, 255);
+    store8(b + 35, 255);
+    store8(b + 36, 255);
+    store8(b + 37, 33);
+    store8(b + 38, 249);
+    store8(b + 39, 4);
+    store8(b + 40, 0);
+    store8(b + 41, 0);
+    store8(b + 42, 0);
+    store8(b + 43, 0);
+    store8(b + 44, 0);
+    store8(b + 45, 44);
+    store8(b + 46, 0);
+    store8(b + 47, 0);
+    store8(b + 48, 0);
+    store8(b + 49, 0);
+    store8(b + 50, 48);
+    store8(b + 51, 0);
+    store8(b + 52, 48);
+    store8(b + 53, 0);
+    store8(b + 54, 0);
+    store8(b + 55, 3);
+    store8(b + 56, 255);
+    store8(b + 57, 88);
+    store8(b + 58, 101);
+    store8(b + 59, 4);
+    store8(b + 60, 198);
+    store8(b + 61, 196);
+    store8(b + 62, 148);
+    store8(b + 63, 113);
+    store8(b + 64, 192);
+    store8(b + 65, 8);
+    store8(b + 66, 98);
+    store8(b + 67, 5);
+    store8(b + 68, 32);
+    store8(b + 69, 64);
+    store8(b + 70, 144);
+    store8(b + 71, 10);
+    store8(b + 72, 67);
+    store8(b + 73, 5);
+    store8(b + 74, 3);
+    store8(b + 75, 209);
+    store8(b + 76, 0);
+    store8(b + 77, 21);
+    store8(b + 78, 38);
+    store8(b + 79, 28);
+    store8(b + 80, 2);
+    store8(b + 81, 249);
+    store8(b + 82, 73);
+    store8(b + 83, 66);
+    store8(b + 84, 140);
+    store8(b + 85, 30);
+    store8(b + 86, 68);
+    store8(b + 87, 85);
+    store8(b + 88, 8);
+    store8(b + 89, 207);
+    store8(b + 90, 80);
+    store8(b + 91, 4);
+    store8(b + 92, 68);
+    store8(b + 93, 54);
+    store8(b + 94, 213);
+    store8(b + 95, 149);
+    store8(b + 96, 18);
+    store8(b + 97, 200);
+    store8(b + 98, 176);
+    store8(b + 99, 234);
+    store8(b + 100, 4);
+    store8(b + 101, 108);
+    store8(b + 102, 10);
+    store8(b + 103, 64);
+    store8(b + 104, 77);
+    store8(b + 105, 130);
+    store8(b + 106, 33);
+    store8(b + 107, 220);
+    store8(b + 108, 14);
+    store8(b + 109, 7);
+    store8(b + 110, 18);
+    store8(b + 111, 165);
+    store8(b + 112, 96);
+    store8(b + 113, 202);
+    store8(b + 114, 13);
+    store8(b + 115, 28);
+    store8(b + 116, 38);
+    store8(b + 117, 2);
+    store8(b + 118, 239);
+    store8(b + 119, 160);
+    store8(b + 120, 59);
+    store8(b + 121, 114);
+    store8(b + 122, 185);
+    store8(b + 123, 218);
+    store8(b + 124, 143);
+    store8(b + 125, 75);
+    store8(b + 126, 73);
+    store8(b + 127, 117);
+    store8(b + 128, 110);
+    store8(b + 129, 116);
+    store8(b + 130, 100);
+    store8(b + 131, 158);
+    store8(b + 132, 97);
+    store8(b + 133, 48);
+    store8(b + 134, 48);
+    store8(b + 135, 4);
+    store8(b + 136, 10);
+    store8(b + 137, 158);
+    store8(b + 138, 74);
+    store8(b + 139, 68);
+    store8(b + 140, 181);
+    store8(b + 141, 106);
+    store8(b + 142, 11);
+    store8(b + 143, 81);
+    store8(b + 144, 189);
+    store8(b + 145, 66);
+    store8(b + 146, 148);
+    store8(b + 147, 163);
+    store8(b + 148, 160);
+    store8(b + 149, 224);
+    store8(b + 150, 4);
+    store8(b + 151, 78);
+    store8(b + 152, 25);
+    store8(b + 153, 78);
+    store8(b + 154, 61);
+    store8(b + 155, 111);
+    store8(b + 156, 6);
+    store8(b + 157, 88);
+    store8(b + 158, 60);
+    store8(b + 159, 14);
+    store8(b + 160, 58);
+    store8(b + 161, 128);
+    store8(b + 162, 19);
+    store8(b + 163, 6);
+    store8(b + 164, 41);
+    store8(b + 165, 90);
+    store8(b + 166, 10);
+    store8(b + 167, 80);
+    store8(b + 168, 22);
+    store8(b + 169, 4);
+    store8(b + 170, 109);
+    store8(b + 171, 65);
+    store8(b + 172, 37);
+    store8(b + 173, 112);
+    store8(b + 174, 100);
+    store8(b + 175, 22);
+    store8(b + 176, 34);
+    store8(b + 177, 134);
+    store8(b + 178, 110);
+    store8(b + 179, 30);
+    store8(b + 180, 128);
+    store8(b + 181, 0);
+    store8(b + 182, 74);
+    store8(b + 183, 54);
+    store8(b + 184, 130);
+    store8(b + 185, 31);
+    store8(b + 186, 92);
+    store8(b + 187, 110);
+    store8(b + 188, 11);
+    store8(b + 189, 134);
+    store8(b + 190, 3);
+    store8(b + 191, 25);
+    store8(b + 192, 74);
+    store8(b + 193, 104);
+    store8(b + 194, 78);
+    store8(b + 195, 55);
+    store8(b + 196, 71);
+    store8(b + 197, 1);
+    store8(b + 198, 111);
+    store8(b + 199, 29);
+    store8(b + 200, 43);
+    store8(b + 201, 71);
+    store8(b + 202, 43);
+    store8(b + 203, 90);
+    store8(b + 204, 23);
+    store8(b + 205, 38);
+    store8(b + 206, 44);
+    store8(b + 207, 123);
+    store8(b + 208, 134);
+    store8(b + 209, 172);
+    store8(b + 210, 107);
+    store8(b + 211, 168);
+    store8(b + 212, 27);
+    store8(b + 213, 81);
+    store8(b + 214, 92);
+    store8(b + 215, 24);
+    store8(b + 216, 24);
+    store8(b + 217, 68);
+    store8(b + 218, 38);
+    store8(b + 219, 58);
+    store8(b + 220, 52);
+    store8(b + 221, 38);
+    store8(b + 222, 139);
+    store8(b + 223, 81);
+    store8(b + 224, 111);
+    store8(b + 225, 74);
+    store8(b + 226, 30);
+    store8(b + 227, 11);
+    store8(b + 228, 80);
+    store8(b + 229, 17);
+    store8(b + 230, 45);
+    store8(b + 231, 81);
+    store8(b + 232, 177);
+    store8(b + 233, 138);
+    store8(b + 234, 164);
+    store8(b + 235, 131);
+    store8(b + 236, 172);
+    store8(b + 237, 159);
+    store8(b + 238, 100);
+    store8(b + 239, 80);
+    store8(b + 240, 20);
+    store8(b + 241, 218);
+    store8(b + 242, 30);
+    store8(b + 243, 0);
+    store8(b + 244, 19);
+    store8(b + 245, 44);
+    store8(b + 246, 18);
+    store8(b + 247, 7);
+    store8(b + 248, 110);
+    store8(b + 249, 52);
+    store8(b + 250, 77);
+    store8(b + 251, 28);
+    store8(b + 252, 22);
+    store8(b + 253, 221);
+    store8(b + 254, 12);
+    store8(b + 255, 94);
+    store8(b + 256, 13);
+    store8(b + 257, 60);
+    store8(b + 258, 168);
+    store8(b + 259, 203);
+    store8(b + 260, 28);
+    store8(b + 261, 141);
+    store8(b + 262, 159);
+    store8(b + 263, 49);
+    store8(b + 264, 147);
+    store8(b + 265, 175);
+    store8(b + 266, 132);
+    store8(b + 267, 110);
+    store8(b + 268, 245);
+    store8(b + 269, 81);
+    store8(b + 270, 37);
+    store8(b + 271, 158);
+    store8(b + 272, 25);
+    store8(b + 273, 52);
+    store8(b + 274, 26);
+    store8(b + 275, 70);
+    store8(b + 276, 28);
+    store8(b + 277, 118);
+    store8(b + 278, 56);
+    store8(b + 279, 109);
+    store8(b + 280, 96);
+    store8(b + 281, 248);
+    store8(b + 282, 120);
+    store8(b + 283, 179);
+    store8(b + 284, 32);
+    store8(b + 285, 194);
+    store8(b + 286, 49);
+    store8(b + 287, 94);
+    store8(b + 288, 120);
+    store8(b + 289, 122);
+    store8(b + 290, 212);
+    store8(b + 291, 187);
+    store8(b + 292, 178);
+    store8(b + 293, 99);
+    store8(b + 294, 14);
+    store8(b + 295, 137);
+    store8(b + 296, 79);
+    store8(b + 297, 71);
+    store8(b + 298, 106);
+    store8(b + 299, 245);
+    store8(b + 300, 160);
+    store8(b + 301, 208);
+    store8(b + 302, 237);
+    store8(b + 303, 203);
+    store8(b + 304, 21);
+    store8(b + 305, 6);
+    store8(b + 306, 43);
+    store8(b + 307, 184);
+    store8(b + 308, 0);
+    store8(b + 309, 170);
+    store8(b + 310, 209);
+    store8(b + 311, 226);
+    store8(b + 312, 255);
+    store8(b + 313, 217);
+    store8(b + 314, 133);
+    store8(b + 315, 101);
+    store8(b + 316, 226);
+    store8(b + 317, 208);
+    store8(b + 318, 220);
+    store8(b + 319, 160);
+    store8(b + 320, 2);
+    store8(b + 321, 113);
+    store8(b + 322, 18);
+    store8(b + 323, 156);
+    store8(b + 324, 40);
+    store8(b + 325, 38);
+    store8(b + 326, 212);
+    store8(b + 327, 196);
+    store8(b + 328, 64);
+    store8(b + 329, 114);
+    store8(b + 330, 99);
+    store8(b + 331, 74);
+    store8(b + 332, 6);
+    store8(b + 333, 1);
+    store8(b + 334, 35);
+    store8(b + 335, 132);
+    store8(b + 336, 148);
+    store8(b + 337, 96);
+    store8(b + 338, 199);
+    store8(b + 339, 230);
+    store8(b + 340, 99);
+    store8(b + 341, 133);
+    store8(b + 342, 112);
+    store8(b + 343, 107);
+    store8(b + 344, 30);
+    store8(b + 345, 160);
+    store8(b + 346, 104);
+    store8(b + 347, 105);
+    store8(b + 348, 136);
+    store8(b + 349, 138);
+    store8(b + 350, 130);
+    store8(b + 351, 55);
+    store8(b + 352, 209);
+    store8(b + 353, 82);
+    store8(b + 354, 177);
+    store8(b + 355, 249);
+    store8(b + 356, 160);
+    store8(b + 357, 167);
+    store8(b + 358, 211);
+    store8(b + 359, 167);
+    store8(b + 360, 42);
+    store8(b + 361, 204);
+    store8(b + 362, 24);
+    store8(b + 363, 74);
+    store8(b + 364, 140);
+    store8(b + 365, 160);
+    store8(b + 366, 104);
+    store8(b + 367, 7);
+    store8(b + 368, 148);
+    store8(b + 369, 34);
+    store8(b + 370, 124);
+    store8(b + 371, 142);
+    store8(b + 372, 128);
+    store8(b + 373, 48);
+    store8(b + 374, 72);
+    store8(b + 375, 212);
+    store8(b + 376, 194);
+    store8(b + 377, 153);
+    store8(b + 378, 24);
+    store8(b + 379, 15);
+    store8(b + 380, 160);
+    store8(b + 381, 177);
+    store8(b + 382, 210);
+    store8(b + 383, 134);
+    store8(b + 384, 1);
+    store8(b + 385, 231);
+    store8(b + 386, 176);
+    store8(b + 387, 70);
+    store8(b + 388, 48);
+    store8(b + 389, 27);
+    store8(b + 390, 133);
+    store8(b + 391, 91);
+    store8(b + 392, 193);
+    store8(b + 393, 160);
+    store8(b + 394, 15);
+    store8(b + 395, 20);
+    store8(b + 396, 9);
+    store8(b + 397, 131);
+    store8(b + 398, 96);
+    store8(b + 399, 226);
+    store8(b + 400, 180);
+    store8(b + 401, 138);
+    store8(b + 402, 115);
+    store8(b + 403, 82);
+    store8(b + 404, 6);
+    store8(b + 405, 30);
+    store8(b + 406, 147);
+    store8(b + 407, 74);
+    store8(b + 408, 221);
+    store8(b + 409, 144);
+    store8(b + 410, 176);
+    store8(b + 411, 102);
+    store8(b + 412, 199);
+    store8(b + 413, 140);
+    store8(b + 414, 42);
+    store8(b + 415, 29);
+    store8(b + 416, 180);
+    store8(b + 417, 217);
+    store8(b + 418, 125);
+    store8(b + 419, 185);
+    store8(b + 420, 160);
+    store8(b + 421, 195);
+    store8(b + 422, 132);
+    store8(b + 423, 174);
+    store8(b + 424, 53);
+    store8(b + 425, 15);
+    store8(b + 426, 132);
+    store8(b + 427, 112);
+    store8(b + 428, 208);
+    store8(b + 429, 77);
+    store8(b + 430, 205);
+    store8(b + 431, 149);
+    store8(b + 432, 13);
+    store8(b + 433, 240);
+    store8(b + 434, 112);
+    store8(b + 435, 68);
+    store8(b + 436, 164);
+    store8(b + 437, 242);
+    store8(b + 438, 65);
+    store8(b + 439, 97);
+    store8(b + 440, 11);
+    store8(b + 441, 18);
+    store8(b + 442, 56);
+    store8(b + 443, 156);
+    store8(b + 444, 93);
+    store8(b + 445, 104);
+    store8(b + 446, 193);
+    store8(b + 447, 198);
+    store8(b + 448, 80);
+    store8(b + 449, 11);
+    store8(b + 450, 116);
+    store8(b + 451, 80);
+    store8(b + 452, 52);
+    store8(b + 453, 90);
+    store8(b + 454, 24);
+    store8(b + 455, 40);
+    store8(b + 456, 103);
+    store8(b + 457, 7);
+    store8(b + 458, 134);
+    store8(b + 459, 29);
+    store8(b + 460, 109);
+    store8(b + 461, 26);
+    store8(b + 462, 119);
+    store8(b + 463, 41);
+    store8(b + 464, 150);
+    store8(b + 465, 65);
+    store8(b + 466, 199);
+    store8(b + 467, 201);
+    store8(b + 468, 202);
+    store8(b + 469, 30);
+    store8(b + 470, 208);
+    store8(b + 471, 160);
+    store8(b + 472, 216);
+    store8(b + 473, 192);
+    store8(b + 474, 43);
+    store8(b + 475, 92);
+    store8(b + 476, 55);
+    store8(b + 477, 81);
+    store8(b + 478, 79);
+    store8(b + 479, 225);
+    store8(b + 480, 24);
+    store8(b + 481, 170);
+    store8(b + 482, 176);
+    store8(b + 483, 38);
+    store8(b + 484, 28);
+    store8(b + 485, 98);
+    store8(b + 486, 42);
+    store8(b + 487, 225);
+    store8(b + 488, 4);
+    store8(b + 489, 187);
+    store8(b + 490, 236);
+    store8(b + 491, 177);
+    store8(b + 492, 12);
+    store8(b + 493, 50);
+    store8(b + 494, 44);
+    store8(b + 495, 18);
+    store8(b + 496, 173);
+    store8(b + 497, 28);
+    store8(b + 498, 180);
+    store8(b + 499, 176);
+    store8(b + 500, 123);
+    store8(b + 501, 163);
+    store8(b + 502, 211);
+    store8(b + 503, 10);
+    store8(b + 504, 119);
+    store8(b + 505, 0);
+    store8(b + 506, 63);
+    store8(b + 507, 191);
+    store8(b + 508, 40);
+    store8(b + 509, 194);
+    store8(b + 510, 202);
+    store8(b + 511, 69);
+    store8(b + 512, 139);
+    store8(b + 513, 76);
+    store8(b + 514, 59);
+    store8(b + 515, 179);
+    store8(b + 516, 110);
+    store8(b + 517, 48);
+    store8(b + 518, 137);
+    store8(b + 519, 3);
+    store8(b + 520, 14);
+    store8(b + 521, 111);
+    store8(b + 522, 225);
+    store8(b + 523, 29);
+    store8(b + 524, 221);
+    store8(b + 525, 176);
+    store8(b + 526, 9);
+    store8(b + 527, 17);
+    store8(b + 528, 237);
+    store8(b + 529, 74);
+    store8(b + 530, 28);
+    store8(b + 531, 63);
+    store8(b + 532, 78);
+    store8(b + 533, 112);
+    store8(b + 534, 189);
+    store8(b + 535, 25);
+    store8(b + 536, 218);
+    store8(b + 537, 128);
+    store8(b + 538, 200);
+    store8(b + 539, 7);
+    store8(b + 540, 213);
+    store8(b + 541, 217);
+    store8(b + 542, 228);
+    store8(b + 543, 105);
+    store8(b + 544, 212);
+    store8(b + 545, 49);
+    store8(b + 546, 81);
+    store8(b + 547, 221);
+    store8(b + 548, 113);
+    store8(b + 549, 175);
+    store8(b + 550, 197);
+    store8(b + 551, 17);
+    store8(b + 552, 219);
+    store8(b + 553, 236);
+    store8(b + 554, 16);
+    store8(b + 555, 164);
+    store8(b + 556, 71);
+    store8(b + 557, 149);
+    store8(b + 558, 136);
+    store8(b + 559, 47);
+    store8(b + 560, 4);
+    store8(b + 561, 119);
+    store8(b + 562, 155);
+    store8(b + 563, 196);
+    store8(b + 564, 198);
+    store8(b + 565, 132);
+    store8(b + 566, 59);
+    store8(b + 567, 20);
+    store8(b + 568, 255);
+    store8(b + 569, 195);
+    store8(b + 570, 232);
+    store8(b + 571, 240);
+    store8(b + 572, 64);
+    store8(b + 573, 108);
+    store8(b + 574, 51);
+    store8(b + 575, 80);
+    store8(b + 576, 240);
+    store8(b + 577, 0);
+    store8(b + 578, 16);
+    store8(b + 579, 159);
+    store8(b + 580, 41);
+    store8(b + 581, 97);
+    store8(b + 582, 82);
+    store8(b + 583, 33);
+    store8(b + 584, 10);
+    store8(b + 585, 0);
+    store8(b + 586, 114);
+    store8(b + 587, 68);
+    store8(b + 588, 113);
+    store8(b + 589, 56);
+    store8(b + 590, 88);
+    store8(b + 591, 16);
+    store8(b + 592, 13);
+    store8(b + 593, 15);
+    store8(b + 594, 36);
+    store8(b + 595, 104);
+    store8(b + 596, 177);
+    store8(b + 597, 83);
+    store8(b + 598, 26);
+    store8(b + 599, 53);
+    store8(b + 600, 148);
+    store8(b + 601, 1);
+    store8(b + 602, 6);
+    store8(b + 603, 28);
+    store8(b + 604, 31);
+    store8(b + 605, 172);
+    store8(b + 606, 132);
+    store8(b + 607, 202);
+    store8(b + 608, 30);
+    store8(b + 609, 113);
+    store8(b + 610, 0);
+    store8(b + 611, 2);
+    store8(b + 612, 65);
+    store8(b + 613, 12);
+    store8(b + 614, 4);
+    store8(b + 615, 149);
+    store8(b + 616, 227);
+    store8(b + 617, 221);
+    store8(b + 618, 21);
+    store8(b + 619, 99);
+    store8(b + 620, 245);
+    store8(b + 621, 192);
+    store8(b + 622, 194);
+    store8(b + 623, 81);
+    store8(b + 624, 128);
+    store8(b + 625, 116);
+    store8(b + 626, 68);
+    store8(b + 627, 3);
+    store8(b + 628, 13);
+    store8(b + 629, 240);
+    store8(b + 630, 72);
+    store8(b + 631, 5);
+    store8(b + 632, 14);
+    store8(b + 633, 90);
+    store8(b + 634, 24);
+    store8(b + 635, 88);
+    store8(b + 636, 224);
+    store8(b + 637, 205);
+    store8(b + 638, 49);
+    store8(b + 639, 159);
+    store8(b + 640, 176);
+    store8(b + 641, 145);
+    store8(b + 642, 200);
+    store8(b + 643, 120);
+    store8(b + 644, 225);
+    store8(b + 645, 233);
+    store8(b + 646, 50);
+    store8(b + 647, 220);
+    store8(b + 648, 27);
+    store8(b + 649, 27);
+    store8(b + 650, 76);
+    store8(b + 651, 247);
+    store8(b + 652, 203);
+    store8(b + 653, 43);
+    store8(b + 654, 41);
+    store8(b + 655, 4);
+    store8(b + 656, 84);
+    store8(b + 657, 194);
+    store8(b + 658, 23);
+    store8(b + 659, 39);
+    store8(b + 660, 60);
+    store8(b + 661, 18);
+    store8(b + 662, 194);
+    store8(b + 663, 131);
+    store8(b + 664, 84);
+    store8(b + 665, 248);
+    store8(b + 666, 113);
+    store8(b + 667, 132);
+    store8(b + 668, 37);
+    store8(b + 669, 236);
+    store8(b + 670, 197);
+    store8(b + 671, 48);
+    store8(b + 672, 83);
+    store8(b + 673, 9);
+    store8(b + 674, 74);
+    store8(b + 675, 184);
+    store8(b + 676, 17);
+    store8(b + 677, 153);
+    store8(b + 678, 7);
+    store8(b + 679, 12);
+    store8(b + 680, 160);
+    store8(b + 681, 160);
+    store8(b + 682, 216);
+    store8(b + 683, 26);
+    store8(b + 684, 32);
+    store8(b + 685, 189);
+    store8(b + 686, 5);
+    store8(b + 687, 206);
+    store8(b + 688, 72);
+    store8(b + 689, 169);
+    store8(b + 690, 61);
+    store8(b + 691, 117);
+    store8(b + 692, 69);
+    store8(b + 693, 13);
+    store8(b + 694, 30);
+    store8(b + 695, 156);
+    store8(b + 696, 49);
+    store8(b + 697, 102);
+    store8(b + 698, 7);
+    store8(b + 699, 68);
+    store8(b + 700, 88);
+    store8(b + 701, 85);
+    store8(b + 702, 151);
+    store8(b + 703, 77);
+    store8(b + 704, 225);
+    store8(b + 705, 132);
+    store8(b + 706, 96);
+    store8(b + 707, 196);
+    store8(b + 708, 73);
+    store8(b + 709, 126);
+    store8(b + 710, 53);
+    store8(b + 711, 96);
+    store8(b + 712, 221);
+    store8(b + 713, 40);
+    store8(b + 714, 23);
+    store8(b + 715, 116);
+    store8(b + 716, 55);
+    store8(b + 717, 133);
+    store8(b + 718, 58);
+    store8(b + 719, 46);
+    store8(b + 720, 105);
+    store8(b + 721, 229);
+    store8(b + 722, 68);
+    store8(b + 723, 41);
+    store8(b + 724, 43);
+    store8(b + 725, 232);
+    store8(b + 726, 177);
+    store8(b + 727, 82);
+    store8(b + 728, 12);
+    store8(b + 729, 36);
+    store8(b + 730, 58);
+    store8(b + 731, 144);
+    store8(b + 732, 102);
+    store8(b + 733, 44);
+    store8(b + 734, 127);
+    store8(b + 735, 101);
+    store8(b + 736, 4);
+    store8(b + 737, 153);
+    store8(b + 738, 125);
+    store8(b + 739, 40);
+    store8(b + 740, 176);
+    store8(b + 741, 119);
+    store8(b + 742, 140);
+    store8(b + 743, 30);
+    store8(b + 744, 246);
+    store8(b + 745, 145);
+    store8(b + 746, 41);
+    store8(b + 747, 1);
+    store8(b + 748, 69);
+    store8(b + 749, 31);
+    store8(b + 750, 193);
+    store8(b + 751, 65);
+    store8(b + 752, 226);
+    store8(b + 753, 14);
+    store8(b + 754, 188);
+    store8(b + 755, 100);
+    store8(b + 756, 168);
+    store8(b + 757, 202);
+    store8(b + 758, 21);
+    store8(b + 759, 139);
+    store8(b + 760, 196);
+    store8(b + 761, 208);
+    store8(b + 762, 32);
+    store8(b + 763, 35);
+    store8(b + 764, 122);
+    store8(b + 765, 80);
+    store8(b + 766, 57);
+    store8(b + 767, 65);
+    store8(b + 768, 117);
+    store8(b + 769, 149);
+    store8(b + 770, 197);
+    store8(b + 771, 117);
+    store8(b + 772, 68);
+    store8(b + 773, 55);
+    store8(b + 774, 112);
+    store8(b + 775, 252);
+    store8(b + 776, 64);
+    store8(b + 777, 132);
+    store8(b + 778, 164);
+    store8(b + 779, 81);
+    store8(b + 780, 152);
+    store8(b + 781, 146);
+    store8(b + 782, 77);
+    store8(b + 783, 64);
+    store8(b + 784, 99);
+    store8(b + 785, 173);
+    store8(b + 786, 209);
+    store8(b + 787, 0);
+    store8(b + 788, 78);
+    store8(b + 789, 165);
+    store8(b + 790, 113);
+    store8(b + 791, 240);
+    store8(b + 792, 69);
+    store8(b + 793, 54);
+    store8(b + 794, 190);
+    store8(b + 795, 180);
+    store8(b + 796, 193);
+    store8(b + 797, 148);
+    store8(b + 798, 42);
+    store8(b + 799, 212);
+    store8(b + 800, 244);
+    store8(b + 801, 133);
+    store8(b + 802, 213);
+    store8(b + 803, 171);
+    store8(b + 804, 166);
+    store8(b + 805, 177);
+    store8(b + 806, 17);
+    store8(b + 807, 75);
+    store8(b + 808, 62);
+    store8(b + 809, 58);
+    store8(b + 810, 96);
+    store8(b + 811, 250);
+    store8(b + 812, 200);
+    store8(b + 813, 3);
+    store8(b + 814, 141);
+    store8(b + 815, 200);
+    store8(b + 816, 243);
+    store8(b + 817, 73);
+    store8(b + 818, 35);
+    store8(b + 819, 68);
+    store8(b + 820, 50);
+    store8(b + 821, 65);
+    store8(b + 822, 5);
+    store8(b + 823, 17);
+    store8(b + 824, 255);
+    store8(b + 825, 43);
+    store8(b + 826, 173);
+    store8(b + 827, 214);
+    store8(b + 828, 211);
+    store8(b + 829, 21);
+    store8(b + 830, 66);
+    store8(b + 831, 144);
+    store8(b + 832, 0);
+    store8(b + 833, 134);
+    store8(b + 834, 25);
+    store8(b + 835, 199);
+    store8(b + 836, 177);
+    store8(b + 837, 182);
+    store8(b + 838, 4);
+    store8(b + 839, 65);
+    store8(b + 840, 158);
+    store8(b + 841, 53);
+    store8(b + 842, 114);
+    store8(b + 843, 1);
+    store8(b + 844, 165);
+    store8(b + 845, 117);
+    store8(b + 846, 221);
+    store8(b + 847, 243);
+    store8(b + 848, 10);
+    store8(b + 849, 178);
+    store8(b + 850, 3);
+    store8(b + 851, 50);
+    store8(b + 852, 134);
+    store8(b + 853, 138);
+    store8(b + 854, 4);
+    store8(b + 855, 28);
+    store8(b + 856, 204);
+    store8(b + 857, 51);
+    store8(b + 858, 73);
+    store8(b + 859, 69);
+    store8(b + 860, 148);
+    store8(b + 861, 140);
+    store8(b + 862, 183);
+    store8(b + 863, 204);
+    store8(b + 864, 171);
+    store8(b + 865, 79);
+    store8(b + 866, 36);
+    store8(b + 867, 89);
+    store8(b + 868, 130);
+    store8(b + 869, 26);
+    store8(b + 870, 179);
+    store8(b + 871, 189);
+    store8(b + 872, 162);
+    store8(b + 873, 10);
+    store8(b + 874, 3);
+    store8(b + 875, 130);
+    store8(b + 876, 69);
+    store8(b + 877, 194);
+    store8(b + 878, 129);
+    store8(b + 879, 19);
+    store8(b + 880, 109);
+    store8(b + 881, 52);
+    store8(b + 882, 100);
+    store8(b + 883, 139);
+    store8(b + 884, 44);
+    store8(b + 885, 52);
+    store8(b + 886, 20);
+    store8(b + 887, 177);
+    store8(b + 888, 17);
+    store8(b + 889, 22);
+    store8(b + 890, 10);
+    store8(b + 891, 28);
+    store8(b + 892, 4);
+    store8(b + 893, 84);
+    store8(b + 894, 81);
+    store8(b + 895, 15);
+    store8(b + 896, 52);
+    store8(b + 897, 244);
+    store8(b + 898, 23);
+    store8(b + 899, 110);
+    store8(b + 900, 187);
+    store8(b + 901, 116);
+    store8(b + 902, 192);
+    store8(b + 903, 138);
+    store8(b + 904, 103);
+    store8(b + 905, 250);
+    store8(b + 906, 148);
+    store8(b + 907, 213);
+    store8(b + 908, 201);
+    store8(b + 909, 79);
+    store8(b + 910, 58);
+    store8(b + 911, 89);
+    store8(b + 912, 114);
+    store8(b + 913, 111);
+    store8(b + 914, 29);
+    store8(b + 915, 141);
+    store8(b + 916, 148);
+    store8(b + 917, 81);
+    store8(b + 918, 227);
+    store8(b + 919, 182);
+    store8(b + 920, 184);
+    store8(b + 921, 124);
+    store8(b + 922, 67);
+    store8(b + 923, 150);
+    store8(b + 924, 148);
+    store8(b + 925, 74);
+    store8(b + 926, 100);
+    store8(b + 927, 176);
+    store8(b + 928, 9);
+    store8(b + 929, 80);
+    store8(b + 930, 133);
+    store8(b + 931, 80);
+    store8(b + 932, 121);
+    store8(b + 933, 143);
+    store8(b + 934, 49);
+    store8(b + 935, 189);
+    store8(b + 936, 224);
+    store8(b + 937, 16);
+    store8(b + 938, 94);
+    store8(b + 939, 185);
+    store8(b + 940, 89);
+    store8(b + 941, 240);
+    store8(b + 942, 48);
+    store8(b + 943, 233);
+    store8(b + 944, 145);
+    store8(b + 945, 241);
+    store8(b + 946, 228);
+    store8(b + 947, 82);
+    store8(b + 948, 3);
+    store8(b + 949, 138);
+    store8(b + 950, 90);
+    store8(b + 951, 50);
+    store8(b + 952, 64);
+    store8(b + 953, 4);
+    store8(b + 954, 39);
+    store8(b + 955, 235);
+    store8(b + 956, 60);
+    store8(b + 957, 81);
+    store8(b + 958, 206);
+    store8(b + 959, 178);
+    store8(b + 960, 214);
+    store8(b + 961, 93);
+    store8(b + 962, 80);
+    store8(b + 963, 27);
+    store8(b + 964, 9);
+    store8(b + 965, 197);
+    store8(b + 966, 30);
+    store8(b + 967, 91);
+    store8(b + 968, 158);
+    store8(b + 969, 84);
+    store8(b + 970, 207);
+    store8(b + 971, 192);
+    store8(b + 972, 99);
+    store8(b + 973, 97);
+    store8(b + 974, 199);
+    store8(b + 975, 65);
+    store8(b + 976, 202);
+    store8(b + 977, 172);
+    store8(b + 978, 7);
+    store8(b + 979, 36);
+    store8(b + 980, 108);
+    store8(b + 981, 212);
+    store8(b + 982, 27);
+    store8(b + 983, 129);
+    store8(b + 984, 33);
+    store8(b + 985, 179);
+    store8(b + 986, 4);
+    store8(b + 987, 75);
+    store8(b + 988, 69);
+    store8(b + 989, 100);
+    store8(b + 990, 168);
+    store8(b + 991, 36);
+    store8(b + 992, 97);
+    store8(b + 993, 32);
+    store8(b + 994, 44);
+    store8(b + 995, 118);
+    store8(b + 996, 205);
+    store8(b + 997, 211);
+    store8(b + 998, 147);
+    store8(b + 999, 39);
+    store8(b + 1000, 255);
+    store8(b + 1001, 61);
+    store8(b + 1002, 1);
+    store8(b + 1003, 13);
+    store8(b + 1004, 165);
+    store8(b + 1005, 180);
+    store8(b + 1006, 2);
+    store8(b + 1007, 4);
+    store8(b + 1008, 154);
+    store8(b + 1009, 173);
+    store8(b + 1010, 164);
+    store8(b + 1011, 78);
+    store8(b + 1012, 146);
+    store8(b + 1013, 77);
+    store8(b + 1014, 167);
+    store8(b + 1015, 71);
+    store8(b + 1016, 177);
+    store8(b + 1017, 96);
+    store8(b + 1018, 171);
+    store8(b + 1019, 20);
+    store8(b + 1020, 55);
+    store8(b + 1021, 151);
+    store8(b + 1022, 243);
+    store8(b + 1023, 16);
+    store8(b + 1024, 147);
+    store8(b + 1025, 76);
+    store8(b + 1026, 85);
+    store8(b + 1027, 240);
+    store8(b + 1028, 176);
+    store8(b + 1029, 180);
+    store8(b + 1030, 34);
+    store8(b + 1031, 200);
+    store8(b + 1032, 218);
+    store8(b + 1033, 128);
+    store8(b + 1034, 9);
+    store8(b + 1035, 19);
+    store8(b + 1036, 112);
+    store8(b + 1037, 197);
+    store8(b + 1038, 96);
+    store8(b + 1039, 199);
+    store8(b + 1040, 86);
+    store8(b + 1041, 10);
+    store8(b + 1042, 81);
+    store8(b + 1043, 80);
+    store8(b + 1044, 44);
+    store8(b + 1045, 60);
+    store8(b + 1046, 148);
+    store8(b + 1047, 106);
+    store8(b + 1048, 3);
+    store8(b + 1049, 107);
+    store8(b + 1050, 134);
+    store8(b + 1051, 124);
+    store8(b + 1052, 18);
+    store8(b + 1053, 78);
+    store8(b + 1054, 121);
+    store8(b + 1055, 174);
+    store8(b + 1056, 185);
+    store8(b + 1057, 209);
+    store8(b + 1058, 220);
+    store8(b + 1059, 121);
+    store8(b + 1060, 185);
+    store8(b + 1061, 229);
+    store8(b + 1062, 5);
+    store8(b + 1063, 68);
+    store8(b + 1064, 104);
+    store8(b + 1065, 75);
+    store8(b + 1066, 55);
+    store8(b + 1067, 118);
+    store8(b + 1068, 131);
+    store8(b + 1069, 22);
+    store8(b + 1070, 80);
+    store8(b + 1071, 252);
+    store8(b + 1072, 240);
+    store8(b + 1073, 164);
+    store8(b + 1074, 127);
+    store8(b + 1075, 97);
+    store8(b + 1076, 105);
+    store8(b + 1077, 74);
+    store8(b + 1078, 145);
+    store8(b + 1079, 96);
+    store8(b + 1080, 39);
+    store8(b + 1081, 36);
+    store8(b + 1082, 6);
+    store8(b + 1083, 157);
+    store8(b + 1084, 102);
+    store8(b + 1085, 69);
+    store8(b + 1086, 141);
+    store8(b + 1087, 185);
+    store8(b + 1088, 65);
+    store8(b + 1089, 148);
+    store8(b + 1090, 180);
+    store8(b + 1091, 18);
+    store8(b + 1092, 109);
+    store8(b + 1093, 182);
+    store8(b + 1094, 132);
+    store8(b + 1095, 96);
+    store8(b + 1096, 96);
+    store8(b + 1097, 93);
+    store8(b + 1098, 58);
+    store8(b + 1099, 135);
+    store8(b + 1100, 204);
+    store8(b + 1101, 82);
+    store8(b + 1102, 105);
+    store8(b + 1103, 173);
+    store8(b + 1104, 5);
+    store8(b + 1105, 76);
+    store8(b + 1106, 114);
+    store8(b + 1107, 26);
+    store8(b + 1108, 225);
+    store8(b + 1109, 87);
+    store8(b + 1110, 133);
+    store8(b + 1111, 152);
+    store8(b + 1112, 203);
+    store8(b + 1113, 204);
+    store8(b + 1114, 107);
+    store8(b + 1115, 43);
+    store8(b + 1116, 93);
+    store8(b + 1117, 188);
+    store8(b + 1118, 146);
+    store8(b + 1119, 0);
+    store8(b + 1120, 0);
+    store8(b + 1121, 59);
+    return b;
+}
+
+# ================================================================
+# The contract gate — the same two invariants the other harnesses assert.
+# ================================================================
+fn _gif_contract(buf, n, label): i64 {
+    var err = 0;
+    var img = chitra_gif_decode(buf, n, &err);
+    if (img == 0) {
+        assert(err != 0, label);
+        if (err != 0) {
+            assert(chitra_err_code(err) != CHITRA_OK, label);
+            assert(chitra_err_name(chitra_err_code(err)) != 0, label);
+        }
+    }
+    if (img != 0) {
+        assert(err == 0, label);
+        assert(chitra_image_width(img) > 0, label);
+        assert(chitra_image_height(img) > 0, label);
+        assert(chitra_image_pixels(img) != 0, label);
+        assert(chitra_image_channels(img) == 4, label);
+        assert(chitra_image_source_color_type(img) > 768, label);
+    }
+    return 0;
+}
+
+fn _gif_router_contract(buf, n, label): i64 {
+    var err = 0;
+    var img = chitra_image_decode(buf, n, &err);
+    if (img == 0) { assert(err != 0, label); }
+    if (img != 0) {
+        assert(err == 0, label);
+        assert(chitra_image_pixels(img) != 0, label);
+    }
+    return 0;
+}
+
+# Locate the LZW min-code-size byte by scanning for the image descriptor, so
+# the entropy-targeting cases below cannot silently drift onto the wrong byte.
+fn _gif_lzw_start(b, lo): i64 {
+    var i = 0;
+    var at = 0 - 1;
+    while (i < lo) {
+        if (at < 0) {
+            if (load8(b + i) == 0x2C) { at = i; }
+        }
+        i = i + 1;
+    }
+    if (at < 0) { return 0 - 1; }
+    var ipacked = load8(b + at + 9);
+    var after = at + 10;
+    if ((ipacked & 0x80) != 0) { after = after + 3 * (1 << ((ipacked & 7) + 1)); }
+    return after;
+}
+
+# ---- 1. Pure random bytes -------------------------------------------
+fn fuzz_gif_random(seed, n): i64 {
+    _fuzz_seed(seed);
+    var buf[512];
+    var capped = n;
+    if (capped > 512) { capped = 512; }
+    if (capped < 0) { capped = 0; }
+    _fuzz_fill(&buf, capped);
+    _gif_contract(&buf, capped, "gif random bytes");
+    _gif_router_contract(&buf, capped, "router random bytes");
+    return 0;
+}
+
+# ---- 2. "GIF89a" prefix + random tail --------------------------------
+# Past the signature gate: the screen descriptor, the color-table sizing, the
+# block walk and the sub-block chains all get hostile input. The block walk is
+# the interesting part — a chain that never terminates, or one whose length
+# bytes march off the end, must not loop or overread.
+fn fuzz_gif_header(seed, n): i64 {
+    _fuzz_seed(seed);
+    var buf[512];
+    var capped = n;
+    if (capped > 506) { capped = 506; }
+    if (capped < 0) { capped = 0; }
+    store8(&buf + 0, 0x47);
+    store8(&buf + 1, 0x49);
+    store8(&buf + 2, 0x46);
+    store8(&buf + 3, 0x38);
+    store8(&buf + 4, 0x39);
+    store8(&buf + 5, 0x61);
+    _fuzz_fill(&buf + 6, capped);
+    _gif_contract(&buf, capped + 6, "gif GIF89a + random");
+    return 0;
+}
+
+# ---- 3. Bit-flipped valid fixture ------------------------------------
+# GIF, like BMP and JPEG, carries no checksum — every mutation reaches the
+# parser.
+fn fuzz_gif_mutate(seed, nmut): i64 {
+    _fuzz_seed(seed);
+    var lo = 0;
+    var b = fx_gif_big(&lo);
+    var m = 0;
+    var pos = 0;
+    while (m < nmut) {
+        pos = (_fuzz_next() * 256 + _fuzz_next()) % lo;
+        store8(b + pos, _fuzz_next());
+        m = m + 1;
+    }
+    _gif_contract(b, lo, "gif mutated fixture");
+    return 0;
+}
+
+# ---- 4. LZW-STREAM-ONLY mutation (the priority target) ----------------
+# The header is left intact so the block walk succeeds and hostile bits land
+# squarely in the decompressor: bad codes, codes past next_code, dictionary
+# chains that could cycle, and expansions that would run past the frame. LZW
+# is the one decompressor chitra implements itself — sankoch supplies DEFLATE,
+# not LZW — so this is the case this harness exists for.
+fn fuzz_gif_lzw(seed, nmut): i64 {
+    _fuzz_seed(seed);
+    var lo = 0;
+    var b = fx_gif_big(&lo);
+    var start = _gif_lzw_start(b, lo);
+    if (start < 0) { return 0; }
+    var span = lo - start;
+    if (span <= 0) { return 0; }
+    var m = 0;
+    var pos = 0;
+    while (m < nmut) {
+        pos = start + ((_fuzz_next() * 256 + _fuzz_next()) % span);
+        store8(b + pos, _fuzz_next());
+        m = m + 1;
+    }
+    _gif_contract(b, lo, "gif LZW-stream mutation");
+    return 0;
+}
+
+# ---- 5. Truncation + degenerate lengths ------------------------------
+fn fuzz_gif_truncate(): i64 {
+    var lo = 0;
+    var b = fx_gif_plain(&lo);
+    var cut = 0;
+    while (cut <= lo) {
+        _gif_contract(b, cut, "gif truncated prefix");
+        cut = cut + 1;
+    }
+    return 0;
+}
+
+fn fuzz_gif_degenerate(): i64 {
+    var lo = 0;
+    var b = fx_gif_plain(&lo);
+    _gif_contract(b, 0, "gif len 0");
+    _gif_contract(b, 6, "gif len 6 (signature only)");
+    _gif_contract(b, 13, "gif len 13 (screen descriptor only)");
+    _gif_contract(b, 0 - 1, "gif negative len");
+    _gif_contract(b, 0 - 1000000, "gif large negative len");
+    return 0;
+}
+
+# ---- Harness self-check ----------------------------------------------
+fn fuzz_gif_selfcheck(): i64 {
+    var lo = 0;
+    var b = fx_gif_plain(&lo);
+    var err = 0;
+    assert(chitra_gif_decode(b, lo, &err) != 0, "selfcheck: plain fixture decodes");
+
+    var blo = 0;
+    var bb = fx_gif_big(&blo);
+    var berr = 0;
+    var bimg = chitra_gif_decode(bb, blo, &berr);
+    assert(bimg != 0, "selfcheck: big fixture decodes");
+    if (bimg != 0) {
+        assert(chitra_image_width(bimg) == 48, "selfcheck: big fixture is 48 wide");
+    }
+    var start = _gif_lzw_start(bb, blo);
+    assert(start > 0, "selfcheck: LZW stream located");
+    assert(blo - start > 256, "selfcheck: LZW span is wide enough to fuzz");
+    return 0;
+}
+
+fn main(): i64 {
+    var seed = 1;
+
+    fuzz_gif_selfcheck();
+    println("fuzz_gif: harness self-check passed (fixtures valid, LZW reachable)");
+
+    seed = 1;
+    while (seed <= 100000) {
+        fuzz_gif_random(seed * 2654435761, (seed * 7) % 512);
+        seed = seed + 1;
+    }
+    println("fuzz_gif: 100000 random-byte cases survived");
+
+    seed = 1;
+    while (seed <= 150000) {
+        fuzz_gif_header(seed * 40503, (seed * 11) % 506);
+        seed = seed + 1;
+    }
+    println("fuzz_gif: 150000 GIF89a-prefixed header/block-walk cases survived");
+
+    seed = 1;
+    while (seed <= 60000) {
+        fuzz_gif_mutate(seed * 97, (seed % 4) + 1);
+        seed = seed + 1;
+    }
+    println("fuzz_gif: 60000 mutated-fixture cases survived");
+
+    seed = 1;
+    while (seed <= 60000) {
+        fuzz_gif_lzw(seed * 313, (seed % 6) + 1);
+        seed = seed + 1;
+    }
+    println("fuzz_gif: 60000 LZW-stream mutation cases survived");
+
+    fuzz_gif_truncate();
+    println("fuzz_gif: truncation sweep survived");
+
+    fuzz_gif_degenerate();
+    println("fuzz_gif: degenerate-length cases survived");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

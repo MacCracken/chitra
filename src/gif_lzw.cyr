@@ -1,0 +1,260 @@
+# gif_lzw.cyr — GIF's LZW decompressor (variable-width, LSB-first).
+#
+# This is the one piece of chitra that is a decompressor written from scratch.
+# PNG delegates DEFLATE to sankoch; JPEG's entropy decode is chitra's own but
+# is Huffman, not dictionary-based. GIF's LZW has no stdlib to delegate to —
+# `sankoch` supplies DEFLATE, not LZW — so this module is new attack surface in
+# exactly the sense the JPEG entropy decoder was, and is written accordingly.
+#
+# THE THREE WAYS A HOSTILE LZW STREAM ATTACKS, and what stops each:
+#
+#   1. Unbounded output. LZW is a compressor: a few hundred bytes can expand
+#      without limit. The decode is capped at `out_cap` — the caller passes
+#      the frame's exact pixel count, so expansion beyond one screenful is a
+#      rejection, not an allocation.
+#   2. A cyclic prefix chain. Emitting a code means walking its prefix chain
+#      backwards, and a corrupt dictionary whose entry points forward (or at
+#      itself) turns that walk into an infinite loop. Entries are only ever
+#      added with `prefix < the index being written`, so chains strictly
+#      decrease and cannot cycle — and the walk is *additionally* bounded by
+#      the dictionary size, because a guard you can reason about is worth less
+#      than one you cannot get past.
+#   3. An out-of-range code. A code above `next_code` has no dictionary entry.
+#      The single legal exception is `code == next_code`, the KwKwK case, which
+#      is handled explicitly; anything beyond it is rejected rather than read.
+#
+# GIF packs codes **LSB-first** — the opposite of JPEG's MSB-first bit reader —
+# and the code width GROWS as the dictionary fills, from `min_code_size + 1` up
+# to 12 bits. A Clear code resets both the dictionary and the width mid-stream.
+
+var GIF_LZW_MAX_CODES = 4096;    # 12-bit ceiling; the dictionary never exceeds this
+var GIF_LZW_MAX_WIDTH = 12;
+
+# ================================================================
+# Bit reader over the FLATTENED sub-block payload (see _gif_walk_blocks in
+# gif.cyr — the sub-block chain is concatenated before decode rather than
+# streamed across, so this reader never has to straddle a block boundary).
+#
+# State (32 bytes): +0 base, +8 len, +16 bit position, +24 (unused).
+# ================================================================
+var LZ_BASE = 0;
+var LZ_LEN  = 8;
+var LZ_BIT  = 16;
+var LZ_SIZE = 32;
+
+fn _gif_br_init(st, base, len): i64 {
+    store64(st + LZ_BASE, base);
+    store64(st + LZ_LEN, len);
+    store64(st + LZ_BIT, 0);
+    return 0;
+}
+
+# Read `n` bits LSB-first. Returns -1 when the stream is exhausted — a truncated
+# LZW stream is a rejection, not a zero-pad. (JPEG zero-pads past end-of-data
+# because a truncated scan still has a well-defined block to finish; LZW has no
+# such notion, and padding would fabricate dictionary entries.)
+fn _gif_br_bits(st, n): i64 {
+    var base = load64(st + LZ_BASE);
+    var len = load64(st + LZ_LEN);
+    var bit = load64(st + LZ_BIT);
+    if (bit + n > len * 8) { return 0 - 1; }
+    var v = 0;
+    var i = 0;
+    var byte_idx = 0;
+    var bit_idx = 0;
+    while (i < n) {
+        byte_idx = (bit + i) / 8;
+        bit_idx = (bit + i) & 7;
+        v = v | (((load8(base + byte_idx) >> bit_idx) & 1) << i);
+        i = i + 1;
+    }
+    store64(st + LZ_BIT, bit + n);
+    return v;
+}
+
+# ================================================================
+# _gif_lzw_decode — decompress into `out`, at most `out_cap` bytes.
+#
+# Returns the byte count written, or -1 with *err_out set. A short result is
+# NOT an error: a stream that hits its End code before filling the frame is
+# well-formed, and the caller decides what an under-filled frame means.
+# ================================================================
+fn _gif_lzw_decode(data, data_len, min_code_size, out, out_cap, err_out): i64 {
+    store64(err_out, 0);
+    # Spec § 22: the LZW minimum code size is 2..8. Below 2 there are not
+    # enough codes for Clear + End; above 8 exceeds a byte of palette index.
+    if (min_code_size < 2 || min_code_size > 8) {
+        store64(err_out, chitra_err(CHITRA_ERR_GIF_LZW));
+        return 0 - 1;
+    }
+
+    var clear_code = 1 << min_code_size;
+    var end_code = clear_code + 1;
+
+    var prefix = alloc(GIF_LZW_MAX_CODES * 8);
+    if (prefix == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0 - 1; }
+    var suffix = alloc(GIF_LZW_MAX_CODES * 8);
+    if (suffix == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0 - 1; }
+    # Expansion scratch: a chain can be at most one entry per dictionary slot.
+    var chain = alloc(GIF_LZW_MAX_CODES);
+    if (chain == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0 - 1; }
+
+    var i = 0;
+    while (i < clear_code) {
+        store64(prefix + i * 8, 0 - 1);
+        store64(suffix + i * 8, i);
+        i = i + 1;
+    }
+
+    var br[32];
+    _gif_br_init(&br, data, data_len);
+
+    var code_size = min_code_size + 1;
+    var next_code = clear_code + 2;
+    var prev = 0 - 1;
+    var written = 0;
+    var done = 0;
+    var rc = 0;
+
+    var code = 0;
+    var cur = 0;
+    var sp = 0;
+    var first = 0;
+    var guard = 0;
+
+    while (done == 0) {
+        code = _gif_br_bits(&br, code_size);
+        if (code < 0) {
+            # Ran out of bits without an End code. Tolerated as a clean end:
+            # real encoders in the wild omit the terminator, and the frame is
+            # already bounded by out_cap.
+            done = 1;
+        }
+        if (done == 0) {
+            if (code == clear_code) {
+                code_size = min_code_size + 1;
+                next_code = clear_code + 2;
+                prev = 0 - 1;
+            } else {
+                if (code == end_code) {
+                    done = 1;
+                } else {
+                    # ---- resolve the code to a byte string -----------------
+                    sp = 0;
+                    if (code > next_code) {
+                        rc = CHITRA_ERR_GIF_LZW;      # no such dictionary entry
+                        done = 1;
+                    }
+                    if (done == 0) {
+                        if (code == next_code) {
+                            # KwKwK: the entry being defined by this very code.
+                            # Only legal with a previous code to extend.
+                            if (prev < 0) {
+                                rc = CHITRA_ERR_GIF_LZW;
+                                done = 1;
+                            }
+                            if (done == 0) {
+                                # KwKwK emits string(prev) + first_char(prev).
+                                # `chain` is a REVERSE stack — the emit loop
+                                # below walks it from the top down — so the
+                                # trailing byte must sit at the BOTTOM, index 0.
+                                # It is not known until the chain walk finds the
+                                # root, so index 0 is reserved and filled after.
+                                sp = 1;
+                                cur = prev;
+                                guard = 0;
+                                while (cur >= clear_code) {
+                                    if (guard > GIF_LZW_MAX_CODES) {
+                                        rc = CHITRA_ERR_GIF_LZW;
+                                        cur = 0 - 1;
+                                    }
+                                    if (cur >= clear_code) {
+                                        store8(chain + sp, load64(suffix + cur * 8));
+                                        sp = sp + 1;
+                                        cur = load64(prefix + cur * 8);
+                                        guard = guard + 1;
+                                    }
+                                }
+                                if (rc != 0) { done = 1; }
+                                if (done == 0) {
+                                    if (cur < 0) { rc = CHITRA_ERR_GIF_LZW; done = 1; }
+                                }
+                                if (done == 0) {
+                                    first = load64(suffix + cur * 8);
+                                    store8(chain + sp, first);   # root: emitted FIRST
+                                    sp = sp + 1;
+                                    store8(chain + 0, first);    # repeat: emitted LAST
+                                }
+                            }
+                        } else {
+                            cur = code;
+                            guard = 0;
+                            while (cur >= clear_code) {
+                                if (guard > GIF_LZW_MAX_CODES) {
+                                    rc = CHITRA_ERR_GIF_LZW;
+                                    cur = 0 - 1;
+                                }
+                                if (cur >= clear_code) {
+                                    store8(chain + sp, load64(suffix + cur * 8));
+                                    sp = sp + 1;
+                                    cur = load64(prefix + cur * 8);
+                                    guard = guard + 1;
+                                }
+                            }
+                            if (rc != 0) { done = 1; }
+                            if (done == 0) {
+                                if (cur < 0) { rc = CHITRA_ERR_GIF_LZW; done = 1; }
+                            }
+                            if (done == 0) {
+                                first = load64(suffix + cur * 8);
+                                store8(chain + sp, first);
+                                sp = sp + 1;
+                            }
+                        }
+                    }
+
+                    # ---- emit (the chain was pushed in reverse) ------------
+                    if (done == 0) {
+                        if (written + sp > out_cap) {
+                            # Decompression bomb: more pixels than the frame has.
+                            rc = CHITRA_ERR_GIF_LZW;
+                            done = 1;
+                        }
+                    }
+                    if (done == 0) {
+                        i = sp - 1;
+                        while (i >= 0) {
+                            store8(out + written, load8(chain + i));
+                            written = written + 1;
+                            i = i - 1;
+                        }
+
+                        # ---- extend the dictionary ------------------------
+                        # The new entry's prefix is always the PREVIOUS code,
+                        # which is strictly less than the index being written —
+                        # that ordering is what makes a cyclic chain impossible.
+                        if (prev >= 0) {
+                            if (next_code < GIF_LZW_MAX_CODES) {
+                                store64(prefix + next_code * 8, prev);
+                                store64(suffix + next_code * 8, first);
+                                next_code = next_code + 1;
+                                if (next_code == (1 << code_size)) {
+                                    if (code_size < GIF_LZW_MAX_WIDTH) {
+                                        code_size = code_size + 1;
+                                    }
+                                }
+                            }
+                        }
+                        prev = code;
+                    }
+                }
+            }
+        }
+    }
+
+    if (rc != 0) {
+        store64(err_out, chitra_err(rc));
+        return 0 - 1;
+    }
+    return written;
+}

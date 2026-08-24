@@ -1,0 +1,776 @@
+# tests/tcyr/gif.tcyr — GIF decode: LZW, interlacing, transparency, palettes,
+# and the first-frame contract (0.5.0, ADR 0005).
+#
+# Fixtures are REAL GIFs produced by ImageMagick, embedded as byte arrays —
+# not hand-rolled by the same understanding that wrote the decoder. Expected
+# pixels are ImageMagick's own decode, independently corroborated by a
+# from-spec Python decoder; the two agree pixel-for-pixel on every fixture.
+#
+# That cross-check mattered: ImageMagick's `-interlace line` GIF *writer* does
+# not round-trip its own source (a writer quirk), so agreement between two
+# independent *readers* is what established the interlaced expectations rather
+# than assuming the encoder preserved row order.
+
+include "src/lib.cyr"
+include "lib/assert.cyr"
+fn fx_gif_plain(len_out): i64 {
+    var b = alloc(54);
+    store64(len_out, 54);
+    store8(b + 0, 71);
+    store8(b + 1, 73);
+    store8(b + 2, 70);
+    store8(b + 3, 56);
+    store8(b + 4, 57);
+    store8(b + 5, 97);
+    store8(b + 6, 4);
+    store8(b + 7, 0);
+    store8(b + 8, 4);
+    store8(b + 9, 0);
+    store8(b + 10, 241);
+    store8(b + 11, 0);
+    store8(b + 12, 0);
+    store8(b + 13, 255);
+    store8(b + 14, 0);
+    store8(b + 15, 0);
+    store8(b + 16, 0);
+    store8(b + 17, 255);
+    store8(b + 18, 0);
+    store8(b + 19, 255);
+    store8(b + 20, 255);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 0);
+    store8(b + 24, 255);
+    store8(b + 25, 33);
+    store8(b + 26, 249);
+    store8(b + 27, 4);
+    store8(b + 28, 0);
+    store8(b + 29, 0);
+    store8(b + 30, 0);
+    store8(b + 31, 0);
+    store8(b + 32, 0);
+    store8(b + 33, 44);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 0);
+    store8(b + 37, 0);
+    store8(b + 38, 4);
+    store8(b + 39, 0);
+    store8(b + 40, 4);
+    store8(b + 41, 0);
+    store8(b + 42, 0);
+    store8(b + 43, 2);
+    store8(b + 44, 7);
+    store8(b + 45, 68);
+    store8(b + 46, 38);
+    store8(b + 47, 39);
+    store8(b + 48, 128);
+    store8(b + 49, 182);
+    store8(b + 50, 87);
+    store8(b + 51, 0);
+    store8(b + 52, 0);
+    store8(b + 53, 59);
+    return b;
+}
+
+fn fx_gif_interlaced(len_out): i64 {
+    var b = alloc(54);
+    store64(len_out, 54);
+    store8(b + 0, 71);
+    store8(b + 1, 73);
+    store8(b + 2, 70);
+    store8(b + 3, 56);
+    store8(b + 4, 57);
+    store8(b + 5, 97);
+    store8(b + 6, 4);
+    store8(b + 7, 0);
+    store8(b + 8, 4);
+    store8(b + 9, 0);
+    store8(b + 10, 241);
+    store8(b + 11, 0);
+    store8(b + 12, 0);
+    store8(b + 13, 255);
+    store8(b + 14, 0);
+    store8(b + 15, 0);
+    store8(b + 16, 0);
+    store8(b + 17, 255);
+    store8(b + 18, 0);
+    store8(b + 19, 255);
+    store8(b + 20, 255);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 0);
+    store8(b + 24, 255);
+    store8(b + 25, 33);
+    store8(b + 26, 249);
+    store8(b + 27, 4);
+    store8(b + 28, 0);
+    store8(b + 29, 0);
+    store8(b + 30, 0);
+    store8(b + 31, 0);
+    store8(b + 32, 0);
+    store8(b + 33, 44);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 0);
+    store8(b + 37, 0);
+    store8(b + 38, 4);
+    store8(b + 39, 0);
+    store8(b + 40, 4);
+    store8(b + 41, 0);
+    store8(b + 42, 64);
+    store8(b + 43, 2);
+    store8(b + 44, 7);
+    store8(b + 45, 68);
+    store8(b + 46, 38);
+    store8(b + 47, 98);
+    store8(b + 48, 131);
+    store8(b + 49, 118);
+    store8(b + 50, 90);
+    store8(b + 51, 0);
+    store8(b + 52, 0);
+    store8(b + 53, 59);
+    return b;
+}
+
+fn fx_gif_interlaced8(len_out): i64 {
+    var b = alloc(62);
+    store64(len_out, 62);
+    store8(b + 0, 71);
+    store8(b + 1, 73);
+    store8(b + 2, 70);
+    store8(b + 3, 56);
+    store8(b + 4, 57);
+    store8(b + 5, 97);
+    store8(b + 6, 8);
+    store8(b + 7, 0);
+    store8(b + 8, 8);
+    store8(b + 9, 0);
+    store8(b + 10, 241);
+    store8(b + 11, 0);
+    store8(b + 12, 0);
+    store8(b + 13, 255);
+    store8(b + 14, 0);
+    store8(b + 15, 0);
+    store8(b + 16, 0);
+    store8(b + 17, 255);
+    store8(b + 18, 0);
+    store8(b + 19, 255);
+    store8(b + 20, 255);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 0);
+    store8(b + 24, 255);
+    store8(b + 25, 33);
+    store8(b + 26, 249);
+    store8(b + 27, 4);
+    store8(b + 28, 0);
+    store8(b + 29, 0);
+    store8(b + 30, 0);
+    store8(b + 31, 0);
+    store8(b + 32, 0);
+    store8(b + 33, 44);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 0);
+    store8(b + 37, 0);
+    store8(b + 38, 8);
+    store8(b + 39, 0);
+    store8(b + 40, 8);
+    store8(b + 41, 0);
+    store8(b + 42, 64);
+    store8(b + 43, 2);
+    store8(b + 44, 15);
+    store8(b + 45, 68);
+    store8(b + 46, 38);
+    store8(b + 47, 134);
+    store8(b + 48, 154);
+    store8(b + 49, 39);
+    store8(b + 50, 235);
+    store8(b + 51, 152);
+    store8(b + 52, 12);
+    store8(b + 53, 49);
+    store8(b + 54, 54);
+    store8(b + 55, 56);
+    store8(b + 56, 234);
+    store8(b + 57, 186);
+    store8(b + 58, 183);
+    store8(b + 59, 0);
+    store8(b + 60, 0);
+    store8(b + 61, 59);
+    return b;
+}
+
+fn fx_gif_animated(len_out): i64 {
+    var b = alloc(113);
+    store64(len_out, 113);
+    store8(b + 0, 71);
+    store8(b + 1, 73);
+    store8(b + 2, 70);
+    store8(b + 3, 56);
+    store8(b + 4, 57);
+    store8(b + 5, 97);
+    store8(b + 6, 4);
+    store8(b + 7, 0);
+    store8(b + 8, 4);
+    store8(b + 9, 0);
+    store8(b + 10, 241);
+    store8(b + 11, 0);
+    store8(b + 12, 0);
+    store8(b + 13, 255);
+    store8(b + 14, 0);
+    store8(b + 15, 0);
+    store8(b + 16, 0);
+    store8(b + 17, 255);
+    store8(b + 18, 0);
+    store8(b + 19, 255);
+    store8(b + 20, 255);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 0);
+    store8(b + 24, 255);
+    store8(b + 25, 33);
+    store8(b + 26, 255);
+    store8(b + 27, 11);
+    store8(b + 28, 78);
+    store8(b + 29, 69);
+    store8(b + 30, 84);
+    store8(b + 31, 83);
+    store8(b + 32, 67);
+    store8(b + 33, 65);
+    store8(b + 34, 80);
+    store8(b + 35, 69);
+    store8(b + 36, 50);
+    store8(b + 37, 46);
+    store8(b + 38, 48);
+    store8(b + 39, 3);
+    store8(b + 40, 1);
+    store8(b + 41, 0);
+    store8(b + 42, 0);
+    store8(b + 43, 0);
+    store8(b + 44, 33);
+    store8(b + 45, 249);
+    store8(b + 46, 4);
+    store8(b + 47, 0);
+    store8(b + 48, 0);
+    store8(b + 49, 0);
+    store8(b + 50, 0);
+    store8(b + 51, 0);
+    store8(b + 52, 44);
+    store8(b + 53, 0);
+    store8(b + 54, 0);
+    store8(b + 55, 0);
+    store8(b + 56, 0);
+    store8(b + 57, 4);
+    store8(b + 58, 0);
+    store8(b + 59, 4);
+    store8(b + 60, 0);
+    store8(b + 61, 0);
+    store8(b + 62, 2);
+    store8(b + 63, 7);
+    store8(b + 64, 68);
+    store8(b + 65, 38);
+    store8(b + 66, 39);
+    store8(b + 67, 128);
+    store8(b + 68, 182);
+    store8(b + 69, 87);
+    store8(b + 70, 0);
+    store8(b + 71, 0);
+    store8(b + 72, 33);
+    store8(b + 73, 249);
+    store8(b + 74, 4);
+    store8(b + 75, 0);
+    store8(b + 76, 0);
+    store8(b + 77, 0);
+    store8(b + 78, 0);
+    store8(b + 79, 0);
+    store8(b + 80, 44);
+    store8(b + 81, 0);
+    store8(b + 82, 0);
+    store8(b + 83, 0);
+    store8(b + 84, 0);
+    store8(b + 85, 4);
+    store8(b + 86, 0);
+    store8(b + 87, 4);
+    store8(b + 88, 0);
+    store8(b + 89, 129);
+    store8(b + 90, 89);
+    store8(b + 91, 126);
+    store8(b + 92, 64);
+    store8(b + 93, 179);
+    store8(b + 94, 130);
+    store8(b + 95, 55);
+    store8(b + 96, 156);
+    store8(b + 97, 128);
+    store8(b + 98, 71);
+    store8(b + 99, 0);
+    store8(b + 100, 0);
+    store8(b + 101, 0);
+    store8(b + 102, 2);
+    store8(b + 103, 7);
+    store8(b + 104, 68);
+    store8(b + 105, 124);
+    store8(b + 106, 2);
+    store8(b + 107, 160);
+    store8(b + 108, 146);
+    store8(b + 109, 80);
+    store8(b + 110, 0);
+    store8(b + 111, 0);
+    store8(b + 112, 59);
+    return b;
+}
+
+fn fx_gif_transparent(len_out): i64 {
+    var b = alloc(54);
+    store64(len_out, 54);
+    store8(b + 0, 71);
+    store8(b + 1, 73);
+    store8(b + 2, 70);
+    store8(b + 3, 56);
+    store8(b + 4, 57);
+    store8(b + 5, 97);
+    store8(b + 6, 4);
+    store8(b + 7, 0);
+    store8(b + 8, 4);
+    store8(b + 9, 0);
+    store8(b + 10, 241);
+    store8(b + 11, 0);
+    store8(b + 12, 0);
+    store8(b + 13, 0);
+    store8(b + 14, 0);
+    store8(b + 15, 0);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 255);
+    store8(b + 19, 170);
+    store8(b + 20, 170);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 0);
+    store8(b + 24, 0);
+    store8(b + 25, 33);
+    store8(b + 26, 249);
+    store8(b + 27, 4);
+    store8(b + 28, 1);
+    store8(b + 29, 0);
+    store8(b + 30, 0);
+    store8(b + 31, 0);
+    store8(b + 32, 0);
+    store8(b + 33, 44);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 0);
+    store8(b + 37, 0);
+    store8(b + 38, 4);
+    store8(b + 39, 0);
+    store8(b + 40, 4);
+    store8(b + 41, 0);
+    store8(b + 42, 0);
+    store8(b + 43, 2);
+    store8(b + 44, 7);
+    store8(b + 45, 132);
+    store8(b + 46, 34);
+    store8(b + 47, 128);
+    store8(b + 48, 41);
+    store8(b + 49, 109);
+    store8(b + 50, 87);
+    store8(b + 51, 0);
+    store8(b + 52, 0);
+    store8(b + 53, 59);
+    return b;
+}
+
+# ================================================================
+# Helpers
+# ================================================================
+fn _gpx(px, i, r, g, b, a, label) {
+    assert_eq(load8(px + i * 4 + 0), r, label);
+    assert_eq(load8(px + i * 4 + 1), g, label);
+    assert_eq(load8(px + i * 4 + 2), b, label);
+    assert_eq(load8(px + i * 4 + 3), a, label);
+    return 0;
+}
+
+fn _greject(bytes, lo, code, label) {
+    var err = 0;
+    var img = chitra_gif_decode(bytes, lo, &err);
+    assert(img == 0, label);
+    assert(err != 0, label);
+    if (err != 0) { assert_eq(chitra_err_code(err), code, label); }
+    return 0;
+}
+
+fn test_gif_signature() {
+    var buf[8];
+    store8(&buf + 0, 0x47); store8(&buf + 1, 0x49); store8(&buf + 2, 0x46);
+    store8(&buf + 3, 0x38); store8(&buf + 4, 0x39); store8(&buf + 5, 0x61);
+    assert_eq(chitra_gif_check_signature(&buf, 6), 1, "GIF89a recognised");
+    store8(&buf + 4, 0x37);
+    assert_eq(chitra_gif_check_signature(&buf, 6), 1, "GIF87a recognised");
+    store8(&buf + 4, 0x38);
+    assert_eq(chitra_gif_check_signature(&buf, 6), 0, "GIF88a rejected");
+    assert_eq(chitra_gif_check_signature(&buf, 5), 0, "short buffer -> 0, no read");
+    assert_eq(chitra_gif_check_signature(&buf, 0), 0, "len 0 -> 0");
+    return 0;
+}
+
+# Baseline: non-interlaced, global color table, GIF89a.
+# Expectations are ImageMagick's decode, independently corroborated by a
+# from-spec Python decoder (the two agree pixel-for-pixel on every fixture).
+fn test_gif_plain() {
+    var lo = 0;
+    var b = fx_gif_plain(&lo);
+    var err = 0;
+    var img = chitra_gif_decode(b, lo, &err);
+    assert(img != 0, "plain GIF decodes");
+    assert_eq(chitra_image_width(img), 4, "plain GIF width");
+    assert_eq(chitra_image_height(img), 4, "plain GIF height");
+    assert_eq(chitra_image_channels(img), 4, "plain GIF channels");
+    var px = chitra_image_pixels(img);
+    _gpx(px, 0, 255, 0, 0, 255, "plain GIF px0");
+    _gpx(px, 1, 0, 255, 0, 255, "plain GIF px1");
+    _gpx(px, 2, 0, 0, 255, 255, "plain GIF px2");
+    _gpx(px, 3, 255, 255, 0, 255, "plain GIF px3");
+    _gpx(px, 4, 0, 255, 0, 255, "plain GIF px4");
+    _gpx(px, 5, 0, 0, 255, 255, "plain GIF px5");
+    _gpx(px, 6, 255, 255, 0, 255, "plain GIF px6");
+    _gpx(px, 7, 255, 0, 0, 255, "plain GIF px7");
+    _gpx(px, 8, 0, 0, 255, 255, "plain GIF px8");
+    _gpx(px, 9, 255, 255, 0, 255, "plain GIF px9");
+    _gpx(px, 10, 255, 0, 0, 255, "plain GIF px10");
+    _gpx(px, 11, 0, 255, 0, 255, "plain GIF px11");
+    _gpx(px, 12, 255, 255, 0, 255, "plain GIF px12");
+    _gpx(px, 13, 255, 0, 0, 255, "plain GIF px13");
+    _gpx(px, 14, 0, 255, 0, 255, "plain GIF px14");
+    _gpx(px, 15, 0, 0, 255, 255, "plain GIF px15");
+    return 0;
+}
+
+# GIF interlacing is FOUR passes over rows only (starts 0/4/2/1, steps
+# 8/8/4/2) — a different schedule from PNG Adam7, which subsamples both axes.
+# At 4x4 only three passes are non-empty, which is itself worth covering.
+fn test_gif_interlaced() {
+    var lo = 0;
+    var b = fx_gif_interlaced(&lo);
+    var err = 0;
+    var img = chitra_gif_decode(b, lo, &err);
+    assert(img != 0, "interlaced GIF decodes");
+    assert_eq(chitra_image_width(img), 4, "interlaced GIF width");
+    assert_eq(chitra_image_height(img), 4, "interlaced GIF height");
+    assert_eq(chitra_image_channels(img), 4, "interlaced GIF channels");
+    var px = chitra_image_pixels(img);
+    _gpx(px, 0, 255, 0, 0, 255, "interlaced GIF px0");
+    _gpx(px, 1, 0, 255, 0, 255, "interlaced GIF px1");
+    _gpx(px, 2, 0, 0, 255, 255, "interlaced GIF px2");
+    _gpx(px, 3, 255, 255, 0, 255, "interlaced GIF px3");
+    _gpx(px, 4, 0, 0, 255, 255, "interlaced GIF px4");
+    _gpx(px, 5, 255, 255, 0, 255, "interlaced GIF px5");
+    _gpx(px, 6, 255, 0, 0, 255, "interlaced GIF px6");
+    _gpx(px, 7, 0, 255, 0, 255, "interlaced GIF px7");
+    _gpx(px, 8, 255, 255, 0, 255, "interlaced GIF px8");
+    _gpx(px, 9, 255, 0, 0, 255, "interlaced GIF px9");
+    _gpx(px, 10, 0, 255, 0, 255, "interlaced GIF px10");
+    _gpx(px, 11, 0, 0, 255, 255, "interlaced GIF px11");
+    _gpx(px, 12, 0, 255, 0, 255, "interlaced GIF px12");
+    _gpx(px, 13, 0, 0, 255, 255, "interlaced GIF px13");
+    _gpx(px, 14, 255, 255, 0, 255, "interlaced GIF px14");
+    _gpx(px, 15, 255, 0, 0, 255, "interlaced GIF px15");
+    return 0;
+}
+
+# 8x8 makes all FOUR interlace passes non-empty — the 4x4 case above cannot
+# reach pass 2 (start 4, step 8).
+fn test_gif_interlaced8() {
+    var lo = 0;
+    var b = fx_gif_interlaced8(&lo);
+    var err = 0;
+    var img = chitra_gif_decode(b, lo, &err);
+    assert(img != 0, "interlaced 8x8 GIF decodes");
+    assert_eq(chitra_image_width(img), 8, "interlaced 8x8 GIF width");
+    assert_eq(chitra_image_height(img), 8, "interlaced 8x8 GIF height");
+    assert_eq(chitra_image_channels(img), 4, "interlaced 8x8 GIF channels");
+    var px = chitra_image_pixels(img);
+    _gpx(px, 0, 255, 0, 0, 255, "interlaced 8x8 GIF px0");
+    _gpx(px, 1, 0, 255, 0, 255, "interlaced 8x8 GIF px1");
+    _gpx(px, 2, 0, 0, 255, 255, "interlaced 8x8 GIF px2");
+    _gpx(px, 3, 255, 255, 0, 255, "interlaced 8x8 GIF px3");
+    _gpx(px, 4, 255, 0, 0, 255, "interlaced 8x8 GIF px4");
+    _gpx(px, 5, 0, 255, 0, 255, "interlaced 8x8 GIF px5");
+    _gpx(px, 6, 0, 0, 255, 255, "interlaced 8x8 GIF px6");
+    _gpx(px, 7, 255, 255, 0, 255, "interlaced 8x8 GIF px7");
+    _gpx(px, 8, 0, 255, 0, 255, "interlaced 8x8 GIF px8");
+    _gpx(px, 9, 0, 0, 255, 255, "interlaced 8x8 GIF px9");
+    _gpx(px, 10, 255, 255, 0, 255, "interlaced 8x8 GIF px10");
+    _gpx(px, 11, 255, 0, 0, 255, "interlaced 8x8 GIF px11");
+    _gpx(px, 12, 0, 255, 0, 255, "interlaced 8x8 GIF px12");
+    _gpx(px, 13, 0, 0, 255, 255, "interlaced 8x8 GIF px13");
+    _gpx(px, 14, 255, 255, 0, 255, "interlaced 8x8 GIF px14");
+    _gpx(px, 15, 255, 0, 0, 255, "interlaced 8x8 GIF px15");
+    _gpx(px, 16, 0, 0, 255, 255, "interlaced 8x8 GIF px16");
+    _gpx(px, 17, 255, 255, 0, 255, "interlaced 8x8 GIF px17");
+    _gpx(px, 18, 255, 0, 0, 255, "interlaced 8x8 GIF px18");
+    _gpx(px, 19, 0, 255, 0, 255, "interlaced 8x8 GIF px19");
+    _gpx(px, 20, 0, 0, 255, 255, "interlaced 8x8 GIF px20");
+    _gpx(px, 21, 255, 255, 0, 255, "interlaced 8x8 GIF px21");
+    _gpx(px, 22, 255, 0, 0, 255, "interlaced 8x8 GIF px22");
+    _gpx(px, 23, 0, 255, 0, 255, "interlaced 8x8 GIF px23");
+    _gpx(px, 24, 255, 255, 0, 255, "interlaced 8x8 GIF px24");
+    _gpx(px, 25, 255, 0, 0, 255, "interlaced 8x8 GIF px25");
+    _gpx(px, 26, 0, 255, 0, 255, "interlaced 8x8 GIF px26");
+    _gpx(px, 27, 0, 0, 255, 255, "interlaced 8x8 GIF px27");
+    _gpx(px, 28, 255, 255, 0, 255, "interlaced 8x8 GIF px28");
+    _gpx(px, 29, 255, 0, 0, 255, "interlaced 8x8 GIF px29");
+    _gpx(px, 30, 0, 255, 0, 255, "interlaced 8x8 GIF px30");
+    _gpx(px, 31, 0, 0, 255, 255, "interlaced 8x8 GIF px31");
+    _gpx(px, 32, 255, 0, 0, 255, "interlaced 8x8 GIF px32");
+    _gpx(px, 33, 0, 255, 0, 255, "interlaced 8x8 GIF px33");
+    _gpx(px, 34, 0, 0, 255, 255, "interlaced 8x8 GIF px34");
+    _gpx(px, 35, 255, 255, 0, 255, "interlaced 8x8 GIF px35");
+    _gpx(px, 36, 255, 0, 0, 255, "interlaced 8x8 GIF px36");
+    _gpx(px, 37, 0, 255, 0, 255, "interlaced 8x8 GIF px37");
+    _gpx(px, 38, 0, 0, 255, 255, "interlaced 8x8 GIF px38");
+    _gpx(px, 39, 255, 255, 0, 255, "interlaced 8x8 GIF px39");
+    _gpx(px, 40, 0, 255, 0, 255, "interlaced 8x8 GIF px40");
+    _gpx(px, 41, 0, 0, 255, 255, "interlaced 8x8 GIF px41");
+    _gpx(px, 42, 255, 255, 0, 255, "interlaced 8x8 GIF px42");
+    _gpx(px, 43, 255, 0, 0, 255, "interlaced 8x8 GIF px43");
+    _gpx(px, 44, 0, 255, 0, 255, "interlaced 8x8 GIF px44");
+    _gpx(px, 45, 0, 0, 255, 255, "interlaced 8x8 GIF px45");
+    _gpx(px, 46, 255, 255, 0, 255, "interlaced 8x8 GIF px46");
+    _gpx(px, 47, 255, 0, 0, 255, "interlaced 8x8 GIF px47");
+    _gpx(px, 48, 0, 0, 255, 255, "interlaced 8x8 GIF px48");
+    _gpx(px, 49, 255, 255, 0, 255, "interlaced 8x8 GIF px49");
+    _gpx(px, 50, 255, 0, 0, 255, "interlaced 8x8 GIF px50");
+    _gpx(px, 51, 0, 255, 0, 255, "interlaced 8x8 GIF px51");
+    _gpx(px, 52, 0, 0, 255, 255, "interlaced 8x8 GIF px52");
+    _gpx(px, 53, 255, 255, 0, 255, "interlaced 8x8 GIF px53");
+    _gpx(px, 54, 255, 0, 0, 255, "interlaced 8x8 GIF px54");
+    _gpx(px, 55, 0, 255, 0, 255, "interlaced 8x8 GIF px55");
+    _gpx(px, 56, 255, 255, 0, 255, "interlaced 8x8 GIF px56");
+    _gpx(px, 57, 255, 0, 0, 255, "interlaced 8x8 GIF px57");
+    _gpx(px, 58, 0, 255, 0, 255, "interlaced 8x8 GIF px58");
+    _gpx(px, 59, 0, 0, 255, 255, "interlaced 8x8 GIF px59");
+    _gpx(px, 60, 255, 255, 0, 255, "interlaced 8x8 GIF px60");
+    _gpx(px, 61, 255, 0, 0, 255, "interlaced 8x8 GIF px61");
+    _gpx(px, 62, 0, 255, 0, 255, "interlaced 8x8 GIF px62");
+    _gpx(px, 63, 0, 0, 255, 255, "interlaced 8x8 GIF px63");
+    return 0;
+}
+
+# Transparency lives in a Graphic Control Extension BEFORE the image
+# descriptor and names a palette index; that index decodes to alpha 0.
+fn test_gif_transparent() {
+    var lo = 0;
+    var b = fx_gif_transparent(&lo);
+    var err = 0;
+    var img = chitra_gif_decode(b, lo, &err);
+    assert(img != 0, "transparent GIF decodes");
+    assert_eq(chitra_image_width(img), 4, "transparent GIF width");
+    assert_eq(chitra_image_height(img), 4, "transparent GIF height");
+    assert_eq(chitra_image_channels(img), 4, "transparent GIF channels");
+    var px = chitra_image_pixels(img);
+    _gpx(px, 0, 0, 0, 0, 0, "transparent GIF px0");
+    _gpx(px, 1, 170, 170, 0, 255, "transparent GIF px1");
+    _gpx(px, 2, 0, 0, 255, 255, "transparent GIF px2");
+    _gpx(px, 3, 170, 170, 0, 255, "transparent GIF px3");
+    _gpx(px, 4, 0, 0, 0, 0, "transparent GIF px4");
+    _gpx(px, 5, 0, 0, 255, 255, "transparent GIF px5");
+    _gpx(px, 6, 170, 170, 0, 255, "transparent GIF px6");
+    _gpx(px, 7, 170, 170, 0, 255, "transparent GIF px7");
+    _gpx(px, 8, 0, 0, 0, 0, "transparent GIF px8");
+    _gpx(px, 9, 170, 170, 0, 255, "transparent GIF px9");
+    _gpx(px, 10, 170, 170, 0, 255, "transparent GIF px10");
+    _gpx(px, 11, 170, 170, 0, 255, "transparent GIF px11");
+    _gpx(px, 12, 0, 0, 0, 0, "transparent GIF px12");
+    _gpx(px, 13, 170, 170, 0, 255, "transparent GIF px13");
+    _gpx(px, 14, 170, 170, 0, 255, "transparent GIF px14");
+    _gpx(px, 15, 0, 0, 255, 255, "transparent GIF px15");
+    return 0;
+}
+
+# ADR 0005: chitra decodes the FIRST frame of an animated GIF and returns it as
+# a single ChitraImage. It does not reject the file for having more frames, and
+# it does not composite them. This fixture has two frames; the expectation is
+# ImageMagick's decode of frame 0 specifically ("anim.gif[0]").
+
+fn test_gif_animated() {
+    var lo = 0;
+    var b = fx_gif_animated(&lo);
+    var err = 0;
+    var img = chitra_gif_decode(b, lo, &err);
+    assert(img != 0, "animated GIF first frame decodes");
+    assert_eq(chitra_image_width(img), 4, "animated GIF first frame width");
+    assert_eq(chitra_image_height(img), 4, "animated GIF first frame height");
+    assert_eq(chitra_image_channels(img), 4, "animated GIF first frame channels");
+    var px = chitra_image_pixels(img);
+    _gpx(px, 0, 255, 0, 0, 255, "animated GIF first frame px0");
+    _gpx(px, 1, 0, 255, 0, 255, "animated GIF first frame px1");
+    _gpx(px, 2, 0, 0, 255, 255, "animated GIF first frame px2");
+    _gpx(px, 3, 255, 255, 0, 255, "animated GIF first frame px3");
+    _gpx(px, 4, 0, 255, 0, 255, "animated GIF first frame px4");
+    _gpx(px, 5, 0, 0, 255, 255, "animated GIF first frame px5");
+    _gpx(px, 6, 255, 255, 0, 255, "animated GIF first frame px6");
+    _gpx(px, 7, 255, 0, 0, 255, "animated GIF first frame px7");
+    _gpx(px, 8, 0, 0, 255, 255, "animated GIF first frame px8");
+    _gpx(px, 9, 255, 255, 0, 255, "animated GIF first frame px9");
+    _gpx(px, 10, 255, 0, 0, 255, "animated GIF first frame px10");
+    _gpx(px, 11, 0, 255, 0, 255, "animated GIF first frame px11");
+    _gpx(px, 12, 255, 255, 0, 255, "animated GIF first frame px12");
+    _gpx(px, 13, 255, 0, 0, 255, "animated GIF first frame px13");
+    _gpx(px, 14, 0, 255, 0, 255, "animated GIF first frame px14");
+    _gpx(px, 15, 0, 0, 255, 255, "animated GIF first frame px15");
+    return 0;
+}
+
+# ================================================================
+# Rejections and bounds
+# ================================================================
+fn test_gif_reject_bad_signature() {
+    var buf[32];
+    var i = 0;
+    while (i < 32) { store8(&buf + i, 0x41); i = i + 1; }
+    _greject(&buf, 32, CHITRA_ERR_SIGNATURE, "non-GIF rejected at the signature");
+    return 0;
+}
+
+# Every prefix of a valid GIF must honour the CONTRACT — never read past the
+# end, and never return 0 without setting *err_out. Note the assertion is the
+# contract, not "must reject": chopping only the trailing 0x3B leaves the image
+# data complete, and that prefix legitimately decodes. chitra tolerates a
+# missing GIF trailer for the same reason it tolerates a missing PNG IEND.
+fn test_gif_truncation_sweep() {
+    var lo = 0;
+    var b = fx_gif_plain(&lo);
+    var cut = 0;
+    var err = 0;
+    var img = 0;
+    while (cut < lo) {
+        err = 0;
+        img = chitra_gif_decode(b, cut, &err);
+        if (img == 0) { assert(err != 0, "truncated GIF sets err_out"); }
+        if (img != 0) {
+            assert(err == 0, "successful truncated decode leaves err_out 0");
+            assert(chitra_image_pixels(img) != 0, "truncated decode has pixels");
+        }
+        cut = cut + 1;
+    }
+    # A cut inside the LZW data — not merely the trailer — must reject.
+    err = 0;
+    assert(chitra_gif_decode(b, lo / 2, &err) == 0, "mid-data truncation rejected");
+    assert(err != 0, "mid-data truncation sets err_out");
+    return 0;
+}
+
+fn test_gif_degenerate_lengths() {
+    var lo = 0;
+    var b = fx_gif_plain(&lo);
+    var err = 0;
+    assert(chitra_gif_decode(b, 0, &err) == 0, "len 0 rejected");
+    err = 0;
+    assert(chitra_gif_decode(b, 0 - 1, &err) == 0, "negative len rejected");
+    assert(err != 0, "negative len sets err_out");
+    return 0;
+}
+
+# A GIF whose stream ends at the trailer with no image descriptor is
+# structurally valid but has nothing to decode.
+fn test_gif_no_image() {
+    var b = alloc(14);
+    var lo = 14;
+    store8(b + 0, 0x47); store8(b + 1, 0x49); store8(b + 2, 0x46);
+    store8(b + 3, 0x38); store8(b + 4, 0x39); store8(b + 5, 0x61);
+    store8(b + 6, 4); store8(b + 7, 0);        # width 4
+    store8(b + 8, 4); store8(b + 9, 0);        # height 4
+    store8(b + 10, 0);                          # no GCT
+    store8(b + 11, 0); store8(b + 12, 0);
+    store8(b + 13, 0x3B);                       # trailer
+    _greject(b, lo, CHITRA_ERR_GIF_NO_IMAGE, "GIF with no image descriptor");
+    return 0;
+}
+
+# The LZW minimum code size is 2..8 (spec s22). Anything else is corrupt.
+# Locate the image descriptor by SCANNING rather than assuming an offset — the
+# fixture carries an extension block before it, and a hardcoded offset silently
+# patches the wrong byte and tests nothing.
+fn _gif_find_min_code_size(b, lo) {
+    var i = 0;
+    var at = 0 - 1;
+    while (i < lo) {
+        if (at < 0) {
+            if (load8(b + i) == 0x2C) { at = i; }
+        }
+        i = i + 1;
+    }
+    if (at < 0) { return 0 - 1; }
+    # image descriptor is 10 bytes; a local color table may follow
+    var ipacked = load8(b + at + 9);
+    var after = at + 10;
+    if ((ipacked & 0x80) != 0) { after = after + 3 * (1 << ((ipacked & 7) + 1)); }
+    return after;
+}
+
+# The LZW minimum code size is 2..8 (spec § 22). Anything else is corrupt.
+fn test_gif_reject_bad_min_code_size() {
+    var lo = 0;
+    var b = fx_gif_plain(&lo);
+    var at = _gif_find_min_code_size(b, lo);
+    assert(at > 0, "found the LZW min-code-size byte");
+    var orig = load8(b + at);
+    assert(orig >= 2, "fixture min code size is spec-legal");
+    store8(b + at, 1);
+    _greject(b, lo, CHITRA_ERR_GIF_LZW, "min code size 1 rejected");
+    store8(b + at, 9);
+    _greject(b, lo, CHITRA_ERR_GIF_LZW, "min code size 9 rejected");
+    store8(b + at, orig);
+    return 0;
+}
+
+# The router must now sniff four formats.
+fn test_gif_router() {
+    var lo = 0;
+    var b = fx_gif_plain(&lo);
+    var err = 0;
+    var img = chitra_image_decode(b, lo, &err);
+    assert(img != 0, "chitra_image_decode routes GIF");
+    assert_eq(chitra_image_width(img), 4, "router GIF width");
+    var px = chitra_image_pixels(img);
+    _gpx(px, 0, 255, 0, 0, 255, "router GIF px0");
+    return 0;
+}
+
+fn test_gif_rgba8_wrapper() {
+    var lo = 0;
+    var b = fx_gif_plain(&lo);
+    var w = 0;
+    var h = 0;
+    var px = chitra_gif_decode_rgba8(b, lo, &w, &h);
+    assert(px != 0, "gif _rgba8 returns pixels");
+    assert_eq(w, 4, "gif _rgba8 width");
+    assert_eq(h, 4, "gif _rgba8 height");
+    var w2 = 0;
+    var h2 = 0;
+    var buf[8];
+    store8(&buf + 0, 0x41);
+    assert_eq(chitra_gif_decode_rgba8(&buf, 8, &w2, &h2), 0, "gif _rgba8 rejects garbage");
+    assert_eq(w2, 0, "gif _rgba8 leaves w at 0 on failure");
+    return 0;
+}
+
+fn main() {
+    test_gif_signature();
+    test_gif_plain();
+    test_gif_interlaced();
+    test_gif_interlaced8();
+    test_gif_transparent();
+    test_gif_animated();
+    test_gif_reject_bad_signature();
+    test_gif_truncation_sweep();
+    test_gif_degenerate_lengths();
+    test_gif_no_image();
+    test_gif_reject_bad_min_code_size();
+    test_gif_router();
+    test_gif_rgba8_wrapper();
+    return assert_summary();
+}
+var exit_code = main();
+syscall(60, exit_code);

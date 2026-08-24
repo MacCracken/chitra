@@ -208,6 +208,47 @@ turn it away, so the header parser *is* the entire perimeter:
   been a multi-plane BMP in the wild, so accepting one would only widen the
   parser for no input that exists.
 
+### GIF (0.5.0)
+
+GIF, like BMP and JPEG, carries **no checksum**. It also carries the only
+decompressor chitra implements itself: `sankoch` supplies DEFLATE, not LZW, so
+there was nothing to delegate to. That makes `src/gif_lzw.cyr` the newest
+attack surface in the tree, and it is written against the three shapes a
+hostile LZW stream takes:
+
+- ✅ **Unbounded expansion.** LZW is a compressor — a few hundred bytes expand
+  without limit. Output is capped at the frame's exact pixel count, so
+  expansion past one screenful is a rejection, not an allocation. Failure →
+  `CHITRA_ERR_GIF_LZW`.
+- ✅ **Cyclic prefix chains.** Emitting a code walks its prefix chain
+  backwards; a corrupt dictionary pointing forward or at itself turns that into
+  an infinite loop. Entries are only ever added with `prefix < the index being
+  written`, so chains strictly decrease and cannot cycle — and the walk is
+  **additionally** bounded by the dictionary size, because a guard you can
+  reason about is worth less than one you cannot get past.
+- ✅ **Out-of-range codes.** A code above `next_code` has no entry and is
+  rejected; the single legal exception (`code == next_code`, the KwKwK case) is
+  handled explicitly rather than by reading past the dictionary.
+- ✅ **A truncated LZW stream rejects** rather than zero-padding. JPEG
+  zero-pads past end-of-data because a truncated scan still has a well-defined
+  block to finish; LZW has no such notion, and padding would fabricate
+  dictionary entries.
+- ✅ **Sub-block chains** — every length byte is bounds-checked against the
+  input, and the gathered payload is capped at the input length, so a chain
+  cannot make chitra hold more than the file itself. The same walk skips
+  unknown extension blocks, which is what makes an unrecognised extension
+  harmless rather than a parse failure.
+- ✅ **The frame rect must lie inside the logical screen** it claims to paint.
+  A frame hanging off the canvas edge is rejected, not clamped — clamping would
+  silently decode a different image than the file describes.
+- ✅ **Palette indices hard-rejected** against the table in force (a local
+  color table overrides the global one for its image).
+
+Note GIF has **not yet had a line-by-line audit** — see the audit history
+below. A real KwKwK ordering bug in the LZW expansion survived initial testing
+and was caught by a reference cross-check before release, which is a fair
+indication of where the remaining risk in this module sits.
+
 ## What chitra does NOT do
 
 For threat-modeling clarity, chitra has no:
@@ -275,10 +316,10 @@ beyond spec.
 
 > Coverage note: as of 0.3.3 both hardening gaps are closed. The fuzz gap
 > is closed — `make fuzz` drives both public decode entries
-> over ~1.5 M adversarial cases (5,284,328 assertions, 0 failures),
+> over ~1.9 M adversarial cases (6,543,842 assertions, 0 failures),
 > including JPEG entropy-segment mutation, and asserts the documented
 > `(0, *err_out set)` failure contract as well as survival; and `make bench`
-> measures decode latency for all three formats with a committed CSV history. Note
+> measures decode latency for all four formats with a committed CSV history. Note
 > that benchmarks are a performance signal, **not** a security one — they are
 > deliberately excluded from `make test-all` so a slow host cannot fail a
 > correctness gate. See
