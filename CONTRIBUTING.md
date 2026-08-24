@@ -99,17 +99,18 @@ Place each in the matching `tests/tcyr/` suite — `error.tcyr` (error paths),
 `interlace.tcyr` (Adam7), `jpeg.tcyr` (baseline JPEG decode + reject paths),
 `png.tcyr` (the core PNG decode matrix), or `subbyte.tcyr` (1/2/4-bit
 grayscale/palette). The suites are globbed by `make test`; each is a standalone
-`main()`. The current baseline is **784 assertions across 5 suites** — PRs that
+`main()`. The current baseline is **1,078 assertions across 6 suites** — PRs that
 lower coverage will be asked to add it.
 Confirm the count with `make count-assertions`.
 
-Beyond the suites, two harnesses landed in 0.3.3 and are worth running before
-you send a decode change:
+Beyond the suites, two harness kinds exist and are worth running before you
+send a decode change:
 
-- `make fuzz` — `fuzz/*.fcyr`, ~1,000,237 adversarial decode cases. Asserts
+- `make fuzz` — `fuzz/*.fcyr`, ~1.5 M adversarial decode cases across three
+  harnesses (PNG, JPEG, BMP — one per format). Asserts
   **both** survival and the documented `(0, *err_out set)` failure contract.
   A new decode path should gain a case here.
-- `make bench` — `tests/bcyr/chitra.bcyr`, 12 decode benchmarks. It generates
+- `make bench` — `tests/bcyr/chitra.bcyr`, 15 decode benchmarks. It generates
   its fixtures at 256×256 and decode-verifies each before timing it, so if you
   change the generator, keep the verification honest. Record with
   `make bench-record`; numbers are host-dependent, so compare within a host.

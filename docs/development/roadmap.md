@@ -62,8 +62,9 @@ surface freeze.
   in `src/error.cyr`).
 - [x] **In-tree fuzz harness at 10⁶ iterations clean** — **DONE in 0.3.3.**
   `fuzz/fuzz_png.fcyr` + `fuzz/fuzz_jpeg.fcyr`, run by `make fuzz` and wired
-  into `make test-all`: **~1,000,237 decode cases / 3,464,838 assertions, 0
-  failures**, in ~10 s. Both public decode entries are driven over random,
+  into `make test-all`. As of 0.4.0 there is one harness per format (PNG,
+  JPEG, BMP): **~1.5 M decode cases / 5,284,328 assertions, 0 failures**.
+  0.3.3 alone cleared the 10⁶ bar with the first two. Both public decode entries are driven over random,
   signature-prefixed, bit-flipped, truncated and degenerate-length input, plus
   **entropy-segment-only mutation** for JPEG — the surface that was previously
   unfuzzed, since its hardening was forked from the kii/PNG lineage rather
@@ -72,7 +73,7 @@ surface freeze.
   [`docs/audit/2026-08-23-audit.md`](../audit/2026-08-23-audit.md) § 5.
 - [x] **Benchmark harness + CSV history** — **DONE in 0.3.3.**
   `tests/bcyr/chitra.bcyr` (`make bench`) measures decode latency for both
-  formats across 12 benchmarks, and `scripts/bench-csv.sh`
+  formats across 15 benchmarks, and `scripts/bench-csv.sh`
   (`make bench-record`) appends stamped results to
   [`bench-history.csv`](../../bench-history.csv). The harness **generates its
   own fixtures at 256×256** — the in-tree test fixtures are 2×2..16×16 and
@@ -127,50 +128,82 @@ lands decode coverage (or surface stability) the previous one did not.
 
 ### ~~0.4.0 — BMP~~ — SHIPPED
 
-See the *Shipped* index above. Retained here for the deferral list, which is
-still the live scope boundary:
+See the *Shipped* index above. What it deliberately left undone is now
+sequenced into the 0.5.x arc below rather than parked here.
 
-Windows BMP into the same canonical RGBA8 surface PNG and JPEG already produce.
-BMP first because it is the simpler of the two remaining raster formats: no
-entropy coding, no DEFLATE, no DCT — a header, an optional palette, and rows of
-samples. The work is in the header variants, the bottom-up row order, the
-4-byte row padding, and the channel order (BMP is BGR(A), not RGB(A)).
+One scope note worth carrying forward, because it is a **judgment call, not a
+spec reading**: 32-bpp `BI_RGB` alpha. The fourth byte is formally undefined
+for `BI_RGB` — alpha only becomes official under `BI_BITFIELDS` / the V4 masks.
+chitra treats an all-zero alpha plane as padding (opaque) and otherwise honours
+it, because trusting it blindly renders padding-zero files invisible while
+ignoring it discards real alpha. ImageMagick makes the same call, which is what
+settled it. **0.5.2 supersedes this**: once the declared masks are read, the
+heuristic is replaced by the header's own answer and stops being a guess.
 
-In scope: `BITMAPINFOHEADER` (40-byte) and `BITMAPCOREHEADER` (12-byte) DIB
-headers; `BI_RGB` uncompressed at 1 / 4 / 8 bpp (palette-indexed), 24 bpp and
-32 bpp; bottom-up (positive height) and top-down (negative height) row order;
-the BGRA palette; 32-bpp alpha where the header declares it.
-
-Deferred with distinct error codes, per the defer-don't-half-implement posture
-([ADR 0004](../adr/0004-jpeg-decode-model.md) set the precedent): `BI_RLE8` /
-`BI_RLE4` run-length compression, `BI_BITFIELDS` custom channel masks, 16 bpp,
-`BI_JPEG` / `BI_PNG` embedded streams (which would be a decoder calling itself
-— a recursion surface worth refusing outright), and the `BITMAPV4` / `BITMAPV5`
-header extensions beyond the fields the 40-byte header already covers.
-
-One scope note worth carrying forward: **32-bpp `BI_RGB` alpha is a documented
-heuristic**, not a spec reading. The fourth byte is formally undefined for
-`BI_RGB`; chitra treats an all-zero alpha plane as padding (opaque) and
-otherwise honours it, because trusting it blindly renders padding-zero files
-invisible and ignoring it discards real alpha. ImageMagick makes the same call.
-A future cut that implements `BI_BITFIELDS` / V4 masks would replace the
-heuristic with the declared masks.
+**The 0.5.x arc** — 0.5.0 adds the last of the four common raster formats;
+0.5.1 and 0.5.2 pay off the BMP deferrals from 0.4.0. Splitting the BMP work
+into two cuts follows the bite discipline: RLE is a decode loop, masks are a
+header feature, and they share nothing.
 
 ### 0.5.0 — GIF
 
-GIF into the same surface. Deliberately after BMP because it is the harder of
-the two and raises a scope question BMP does not: **animation**. GIF carries LZW
-compression, a global and per-frame local palette, interlacing, and a frame
-sequence with disposal methods.
+GIF into the same canonical RGBA8 surface. Deliberately last of the four
+formats because it is the hardest and raises a scope question the others do
+not: **animation**. GIF carries LZW compression, a global palette plus optional
+per-frame local palettes, its own interlacing scheme, and a frame sequence with
+disposal methods.
 
-The scope decision to settle before this starts: whether `chitra_gif_decode`
-returns the **first frame only** (keeping the one-image-in/one-image-out
-contract every other format honours, and keeping `ChitraImage` unchanged), or
+The scope decision to settle **before** code: whether `chitra_gif_decode`
+returns the **first frame only** — keeping the one-image-in / one-image-out
+contract every other format honours, and keeping `ChitraImage` unchanged — or
 whether chitra grows a multi-frame surface. First-frame-only is the smaller,
 contract-preserving move and is the presumption unless a consumer needs
-otherwise; either way the decision earns an ADR before code.
+otherwise. Either way it earns an ADR before implementation, because a
+multi-frame surface would be the first change to the output contract since
+0.1.0.
 
-### 0.6.0 — deferred decode paths + surface work
+Note LZW is chitra's own work: `sankoch` provides DEFLATE, not LZW, so unlike
+the PNG path there is no dependency to delegate to. That makes the GIF
+decompressor new attack surface in the same sense the JPEG entropy decoder was
+— it wants a `fuzz/fuzz_gif.fcyr` from the first cut, not retrofitted.
+
+### 0.5.1 — BMP run-length compression
+
+`BI_RLE8` and `BI_RLE4`, deferred in 0.4.0 with
+`CHITRA_ERR_BMP_COMPRESSION`. RLE-compressed BMPs are a decode *loop* rather
+than a header feature, which is why they are their own cut.
+
+The hardening that matters here is not the codec but its termination: an RLE
+stream is a sequence of (count, value) pairs plus escape codes for
+end-of-line, end-of-bitmap and *delta* (a cursor jump by (dx, dy)). Each of
+those is an opportunity for a crafted stream to write outside the target row,
+loop without advancing, or skip the cursor past the buffer. The delta escape
+is the sharp one — it moves the write cursor by attacker-chosen amounts and
+must be bounds-checked against both dimensions on every use. Expect the
+guards, not the decode, to be the bulk of the work.
+
+### 0.5.2 — BMP channel masks, 16 bpp, and the V4/V5 headers
+
+The remaining 0.4.0 deferrals, which are one coherent piece of work because
+they are all the same feature seen from different angles:
+
+- **`BI_BITFIELDS`** — explicit per-channel bit masks, deferred in 0.4.0 with
+  `CHITRA_ERR_BMP_COMPRESSION`.
+- **16 bpp** — deferred with `CHITRA_ERR_BMP_DEPTH` precisely *because* of the
+  above: absent `BI_BITFIELDS`, 16-bpp channel layout is 5-5-5 by convention
+  only, and honouring a convention while refusing the header that declares it
+  would be the kind of guess this project rejects elsewhere. Reading the masks
+  is what makes 16 bpp decodable rather than assumed.
+- **`BITMAPV4HEADER` / `BITMAPV5HEADER`** (108 / 124 bytes) — deferred with
+  `CHITRA_ERR_BMP_HEADER`. These are where the masks and an explicit alpha
+  mask actually live, so they arrive with the same cut.
+
+Landing this also **retires the 32-bpp alpha heuristic** described under 0.4.0
+above: with a declared alpha mask, chitra stops inferring and reads.
+
+`BI_JPEG` / `BI_PNG` are **not** in this arc, or any arc — see *Out of scope*.
+
+### 0.6.0 — deferred JPEG geometry + surface work
 
 The two items previously parked as uncommitted, now sequenced:
 
@@ -193,6 +226,14 @@ Durable boundaries on what chitra is — not v1.0-only gates:
 
 - **Encoding** — chitra is **decode-only**. Encoded bytes → RGBA8, never the
   reverse. No PNG/JPEG/GIF/BMP writer.
+- **`BI_JPEG` / `BI_PNG` inside a BMP** — a BMP whose DIB body is an entire
+  embedded JPEG or PNG stream. Refused outright (`CHITRA_ERR_BMP_COMPRESSION`),
+  and **not deferred to any release**: honouring it would have `chitra_bmp_decode`
+  re-enter `chitra_jpeg_decode` / `chitra_png_decode`, and a decoder that can
+  call itself through attacker-controlled data is a recursion surface better
+  declined than bounded. A consumer that genuinely holds one of these can
+  extract the inner stream and call the inner decoder directly — which keeps
+  the recursion decision on the consumer's side, where it belongs.
 - **Non-baseline JPEG** — **progressive**, **arithmetic-coded**, 12-bit,
   hierarchical/lossless, and **CMYK** JPEG are **deferred**, not supported.
   chitra decodes JFIF baseline (SOF0 sequential Huffman, 8-bit) only; every

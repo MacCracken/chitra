@@ -12,8 +12,8 @@
 
 **chitra** (चित्र — Sanskrit: *image / picture*) — a pure-Cyrius CPU raster
 image decoder. Encoded image bytes → canonical RGBA8 pixels. No GPU, no C shim,
-no external binaries. The name is format-agnostic — PNG and JPEG already share
-it, and GIF / BMP can join later without a rename.
+no external binaries. The name is format-agnostic — PNG, JPEG and BMP already
+share it, and GIF can join later without a rename.
 
 - **Type**: Shared library (no CLI binary — consumers link `dist/chitra.cyr`)
 - **License**: GPL-3.0-only

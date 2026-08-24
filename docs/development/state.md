@@ -7,7 +7,7 @@
 
 ## Version
 
-**0.4.0** — cut 2026-08-24. **BMP decode.** chitra gains its third format,
+**0.4.0** — cut 2026-08-24, tagged. **BMP decode.** chitra gains its third format,
 normalizing Windows BMP to the same canonical RGBA8 `ChitraImage` that PNG and
 JPEG already produce — the format-agnostic name paying off, with no rename and
 no change to the existing surface.
@@ -357,7 +357,8 @@ Include chain: `lib.cyr` (64 L) pulls the stdlib set then
     enough to mutate — the first draft silently exercised a 4-byte span, and
     a harness that no-ops is worse than none.
 - `make bench` (= `cyrius bench tests/bcyr/chitra.bcyr`) → **15 benchmarks**,
-  ~2 s (12 landed in 0.3.3, +3 BMP in 0.4.0). The harness **generates its fixtures at realistic sizes**
+  ~2 s (12 landed in 0.3.3, +3 BMP in 0.4.0). The harness **generates its
+  fixtures at realistic sizes**
   (256×256) rather than timing the 2×2..16×16 test fixtures, which would
   measure fixed overhead rather than throughput: PNG scanlines go through
   sankoch's `zlib_compress` so the real inflate + unfilter path runs, Adam7
@@ -422,7 +423,7 @@ and it is exactly what drifted in 0.3.1.
 
 - **stdlib**: `string`, `fmt`, `alloc`, `io`, `vec`, `str`, `syscalls`,
   `assert`, `bench`, `args`, `flags`, `sankoch`, `thread` (unchanged across
-  0.3.0–0.3.3). `sankoch` = RFC 1950/1951 `zlib_decompress` + `crc32` +
+  0.3.0–0.4.0). `sankoch` = RFC 1950/1951 `zlib_decompress` + `crc32` +
   `adler32` (DEFLATE is sankoch's, not chitra's — it backs PNG IDAT inflate
   + chunk CRC); `thread` is the mutex pair sankoch's public-API lock wraps.
   The JPEG path takes **no** sankoch — its entropy (Huffman) decode is
@@ -433,39 +434,61 @@ and it is exactly what drifted in 0.3.1.
   decoder and adopted `dist/chitra.cyr` (see kii's ADR 0006). Lineage is a
   one-time fork of kii's `src/png.cyr` with **no live dependency** —
   bugfixes are manual backports in both directions.
-- **Downstream pins are behind.** 0.3.3 is tagged, so both can be bumped now
+- **Downstream pins are behind.** 0.4.0 is tagged, so both can be bumped now
   (chitra does not push, and neither pin auto-follows):
-  - mabda `[deps.chitra] tag = "0.3.1"` → 0.3.3
-  - kii `[deps.chitra] tag = "0.3.0"` → 0.3.3 (kii also carries
+  - mabda `[deps.chitra] tag = "0.3.1"` → 0.4.0
+  - kii `[deps.chitra] tag = "0.3.0"` → 0.4.0 (kii also carries
     `path = "../chitra"`, so a local kii build already resolves against this
     working tree)
 
-  The 0.3.3 dist is ABI-identical to 0.3.1's, so both bumps are mechanical
-  — but both consumers gain the 0.3.3 decode repairs, so the bump is worth
-  making rather than deferring.
+  Every cut since 0.3.1 has been ABI-additive — nothing removed, no offset
+  moved — so both bumps are mechanical. They are worth making rather than
+  deferring: the consumers gain the 0.3.3 decode repairs and BMP support with
+  no code change.
 
 ## Next
 
-Per [`docs/development/roadmap.md`](roadmap.md):
+Per [`docs/development/roadmap.md`](roadmap.md), which now sequences the
+0.5.x arc:
 
+- **0.5.0 — GIF**, the last of the four common raster formats. One scope
+  decision to settle *before* code, and it earns an ADR because it would be
+  the first change to the output contract since 0.1.0: does
+  `chitra_gif_decode` return the **first frame only** — preserving the
+  one-image-in / one-image-out shape every other format honours — or does
+  chitra grow a multi-frame surface? First-frame-only is the presumption.
+  Note LZW is chitra's own work: `sankoch` supplies DEFLATE, not LZW, so
+  there is no dependency to delegate to and the decompressor is new attack
+  surface in the same sense the JPEG entropy decoder was. It wants
+  `fuzz/fuzz_gif.fcyr` from the first cut, not retrofitted.
+- **0.5.1 — BMP `BI_RLE8` / `BI_RLE4`**, deferred in 0.4.0. The hardening is
+  the interesting part, not the codec: the *delta* escape moves the write
+  cursor by attacker-chosen (dx, dy) and must be bounds-checked against both
+  dimensions on every use.
+- **0.5.2 — BMP `BI_BITFIELDS`, 16 bpp, and the V4/V5 headers.** One coherent
+  piece of work: 16 bpp is deferred *because* of the masks (absent
+  `BI_BITFIELDS` its 5-5-5 layout is convention, not declaration), and the
+  masks live in the V4/V5 headers. Landing it **retires the 32-bpp alpha
+  heuristic** — with a declared alpha mask chitra stops inferring and reads.
+- **0.6.0 — deferred JPEG geometry + surface work**: the T.81 § A.2
+  non-interleaved layout (0.3.3 rejects it rather than mis-rendering), and a
+  streaming / byte-budget decode API.
+- **API/ABI freeze** toward **v1.0** — the one real blocker. Three concrete
+  prerequisites, all from the 0.3.3 audit and all deferred because each
+  changes the public surface: the missing `@public` markers on the two
+  signature predicates (three now, counting `chitra_bmp_check_signature`),
+  the misleading `INTERLACE` / `BIT_DEPTH` error-name strings, and whether
+  0.3.3's four newly-rejected input classes are the frozen behaviour.
+- `BI_JPEG` / `BI_PNG` inside a BMP is **out of scope permanently**, not
+  deferred — it would have a decoder re-enter itself through
+  attacker-controlled data.
 - Three audits have landed —
   [2026-06-26 (PNG)](../audit/2026-06-26-audit.md),
   [2026-06-27 (JPEG)](../audit/2026-06-27-audit.md) and
-  [2026-08-23 (P-1 sweep, both paths)](../audit/2026-08-23-audit.md).
-- **Both v1.0 hardening gates closed in 0.3.3** — the fuzz harness at 10⁶
-  iterations clean, and the benchmark harness with committed CSV history.
-  What stands between chitra and a v1.0 freeze is now the **API/ABI freeze
-  itself** and the next format, not hardening infrastructure.
-- **Non-interleaved JPEG scans** — 0.3.3 *rejects* single-component scans
-  with non-unit sampling factors rather than mis-rendering them
-  (`CHITRA_ERR_UNSUPPORTED`). Implementing the T.81 § A.2 layout so they
-  decode is tracked future work.
-- **GIF / BMP** — the format-agnostic name and the `chitra_image_decode`
-  router already leave room for them to join without a rename.
-- **API freeze** toward **v1.0** (the surface is still moving pre-1.0). Two
-  items to settle at the freeze: the missing `@public` markers on the two
-  signature predicates, and the misleading `INTERLACE` / `BIT_DEPTH` error
-  name strings (both described under *Surface* above).
+  [2026-08-23 (P-1 sweep, PNG + JPEG)](../audit/2026-08-23-audit.md). **BMP
+  has not been audited** — it shipped with 294 known-answer assertions and
+  ~500 k fuzz cases, but no line-by-line guard review. Worth one before the
+  freeze.
 - ~~Stale `src/error.cyr` enum comments~~ — **resolved in 0.3.2.**
-- ~~Fuzz harness~~ — **resolved in 0.3.3.**
-- ~~Benchmark harness~~ — **resolved in 0.3.3.**
+- ~~Fuzz harness~~ / ~~Benchmark harness~~ — **both resolved in 0.3.3.**
+- ~~BMP~~ — **shipped in 0.4.0.**

@@ -275,10 +275,10 @@ beyond spec.
 
 > Coverage note: as of 0.3.3 both hardening gaps are closed. The fuzz gap
 > is closed — `make fuzz` drives both public decode entries
-> over ~1,000,237 adversarial cases (3,464,838 assertions, 0 failures),
+> over ~1.5 M adversarial cases (5,284,328 assertions, 0 failures),
 > including JPEG entropy-segment mutation, and asserts the documented
 > `(0, *err_out set)` failure contract as well as survival; and `make bench`
-> measures decode latency for both formats with a committed CSV history. Note
+> measures decode latency for all three formats with a committed CSV history. Note
 > that benchmarks are a performance signal, **not** a security one — they are
 > deliberately excluded from `make test-all` so a slow host cannot fail a
 > correctness gate. See

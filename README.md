@@ -10,73 +10,66 @@ pixels with no GPU, no C shim, and no external binaries.
 The name is deliberately format-agnostic — PNG, JPEG and BMP already share
 it, and GIF can join later without a rename.
 
-## Scope
+## What it decodes
 
-- **v0.1.0 — PNG → canonical RGBA8.** Signature + chunk parse (IHDR /
-  IDAT-concat / IEND / PLTE / tRNS), color types 0/2/3/4/6 at bit depth
-  8, IDAT inflate via the stdlib `sankoch` (RFC 1950/1951
-  `zlib_decompress`), the five unfilter predictors, canonical-RGBA8
-  output, and the kii security guards (decompression-bomb caps,
-  lying-IHDR rejection, ratio caps). No Adam7 interlace (single-pass
-  only). The decoder is complete and inherits kii's fuzz-hardening
-  (chitra grew its own in-tree harness in v0.3.3) — the public
-  entry points are `chitra_png_decode` (→ an owned RGBA8 `ChitraImage`)
-  and the `chitra_png_decode_rgba8` convenience wrapper.
-- **v0.2.0 — bit depth 16 + hardening parity.** Adds 16-bit decode for
-  color types 0/2/4/6 (each big-endian sample truncates to its high byte;
-  color_type 3 + depth 16 stays rejected per spec § 11.2.2). Plus the kii
-  guard-parity backport: an IEND-must-be-zero-length check, a distinct
-  `CHITRA_ERR_NO_IDAT` code (split out of `_DIMENSIONS`), and two additive
-  `ChitraImage` fields — `chitra_image_seen_iend` (1 = IEND closed the
-  stream, 0 = tolerated IEND-less end) and `chitra_image_source_color_type`
-  (the pre-normalization color_type). The struct widen is ABI-additive
-  (width/height/pixels/channels keep their offsets — mabda-safe).
-- **v0.2.1 — sub-byte depths 1/2/4 + Adam7 interlace.** Completes the PNG
-  depth × color-type × interlace matrix. Sub-byte (MSB-first, byte-padded)
-  for grayscale + palette (the only types the spec allows below depth 8);
-  Adam7's 7 passes are deinterlaced into the same dense buffer the
-  non-interlaced path yields, so the color pass is interlace-agnostic.
-  Verified against ImageMagick + an interlaced-vs-non-interlaced
-  cross-check (the suite stood at 525 assertions at that cut).
-- **v0.3.0 — JFIF baseline JPEG.** Adds a baseline (SOF0) JPEG decoder:
-  grayscale + YCbCr, all chroma subsampling (4:4:4 / 4:2:2 / 4:2:0), and
-  restart markers — Huffman entropy decode, the integer `jpeg_idct_islow`
-  inverse DCT, dequant/zig-zag, and full-range BT.601 YCbCr→RGB, all
-  normalizing to the same canonical RGBA8 `ChitraImage`. Public entries
-  `chitra_jpeg_decode` / `chitra_jpeg_decode_rgba8`, plus the
-  format-sniffing `chitra_image_decode` (PNG-or-JPEG router). Output is
-  verified **byte-identical to ImageMagick** on a real baseline JPEG.
-  Non-baseline modes (progressive, arithmetic, 12-bit, hierarchical /
-  lossless, CMYK) are cleanly rejected with distinct error codes.
-- **v0.3.3 — P-1 audit, hardening and repair.** A ten-lens adversarial sweep
-  of both decode paths, every finding put to two independent skeptics, plus
-  the repair of everything confirmed. **No memory-safety defect was found**;
-  the repairs are correctness, conformance and resource hardening —
-  full-width depth-16 tRNS keying, rejection of single-component
-  non-interleaved JPEG scans, a JPEG decompression-bomb cap (the analogue of
-  the PNG inflate-ratio cap), a `chitra_err_new` that can no longer return 0,
-  T.81 fill-byte handling, and the PNG § 5.4 / § 5.6 chunk-ordering guards.
-  Adds chitra's **first in-tree fuzz harnesses** (`make fuzz`): ~1,000,237
-  adversarial decode cases, 0 failures, clearing the 10⁶-iteration v1.0 gate.
-  Adds the **first benchmark harness** (`make bench`) with committed CSV
-  history, closing the second gate — PNG rgba8 decodes at **83 ns/px**,
-  JPEG grayscale at **43 ns/px** (256×256, this host).
-  See [`docs/audit/2026-08-23-audit.md`](docs/audit/2026-08-23-audit.md).
-- **v0.4.0 — BMP.** The third format into the same canonical RGBA8 surface.
-  `BI_RGB` uncompressed at 1 / 4 / 8 bpp (palette), 24 bpp and 32 bpp;
-  `BITMAPINFOHEADER` and `BITMAPCOREHEADER` DIB headers; bottom-up *and*
-  top-down row order; the BGRA palette. New public
-  `chitra_bmp_decode` / `chitra_bmp_decode_rgba8` /
-  `chitra_bmp_check_signature`, and `chitra_image_decode` now sniffs three
-  formats. Output verified **identical to ImageMagick** on every valid
-  fixture. The simplest of the three paths, and it shows: **6 ns/px** at
-  24/32 bpp against PNG's 83 and JPEG's 43. RLE4/RLE8, BITFIELDS, 16 bpp,
-  V4/V5 headers and the `BI_JPEG` / `BI_PNG` embedded streams reject with
-  distinct codes.
-- **Staged (tracked, not silently dropped):** **GIF** → 0.5.0; the two
-  deferred decode paths → 0.6.0. Both v1.0 hardening gates — the fuzz
-  harness and the benchmark harness — landed in v0.3.3. PNG, baseline JPEG
-  and BMP are feature-complete for their scope.
+Three formats, one output contract: encoded bytes in, canonical **RGBA8** out —
+always 4 channels, always at the source dimensions, whatever went in.
+
+| Format | Coverage |
+|---|---|
+| **PNG** | Every spec-legal bit depth × color type: 1/2/4/8/16 across types 0/2/3/4/6 (§ 11.2.2 Table 11.1), plus **Adam7 interlace** for every cell. PLTE palettes, tRNS transparency (keyed and per-entry). IDAT inflate via `sankoch`. |
+| **JPEG** | JFIF **baseline** (SOF0 sequential Huffman, 8-bit): grayscale + YCbCr, chroma subsampling 4:4:4 / 4:2:2 / 4:2:0 and general `Hi,Vi` box upsampling, DRI / RST0–7 restart markers. Verified **byte-identical to ImageMagick**. |
+| **BMP** | `BI_RGB` uncompressed at 1 / 4 / 8 bpp (palette) and 24 / 32 bpp; `BITMAPINFOHEADER` + `BITMAPCOREHEADER`; bottom-up **and** top-down row order. Verified **identical to ImageMagick**. |
+
+```
+fn chitra_image_decode(src, len, err_out): i64
+```
+
+One entry point sniffs the signature — PNG magic, then JPEG SOI, then BMP
+`BM` — and routes. Bytes matching none of the three are rejected with
+`CHITRA_ERR_SIGNATURE`; it does not fall through to a default decoder. If you
+already know the format, `chitra_{png,jpeg,bmp}_decode` have the identical
+shape, each with a `_rgba8` convenience wrapper.
+
+## What it refuses, and why that is the point
+
+chitra **rejects loud rather than half-decoding**. A decoder that mis-renders
+one cell of its matrix is worse than one that declines it cleanly, so every
+unsupported mode gets its own `CHITRA_ERR_*` code instead of a guess:
+progressive / arithmetic / 12-bit / hierarchical / CMYK JPEG; BMP RLE4/RLE8,
+`BI_BITFIELDS`, 16 bpp and the V4/V5 headers; and any illegal PNG
+depth × color-type pair.
+
+Two refusals are permanent rather than deferred: **encoding** (chitra is
+decode-only, in both directions of that sentence) and **`BI_JPEG` / `BI_PNG`
+inside a BMP**, which would have a decoder re-enter itself through
+attacker-controlled data.
+
+## Hardening
+
+Untrusted bytes are the whole input surface, so the guards are the product:
+
+- **Bounds on every read**, a per-chunk CRC-32 on PNG, and
+  decompression-bomb caps on both compressed paths — PNG's inflate ratio and
+  JPEG's output:input amplification cap (which JPEG needs *more*, because its
+  bit-reader zero-pads past end-of-data and so needs no payload at all to
+  drive a full-size decode).
+- **`make fuzz`** — one harness per format, **~1.5 M adversarial decode cases,
+  5,284,328 assertions, 0 failures**. They assert *both* that the decoder
+  survives and that it honours the documented `(0, *err_out set)` contract —
+  the invariant a crash-only fuzzer misses.
+- **`make bench`** — 15 decode benchmarks with committed
+  [CSV history](bench-history.csv). BMP **6 ns/px**, JPEG grayscale
+  **43 ns/px**, PNG RGBA8 **83 ns/px** at 256×256.
+- Three security audits in [`docs/audit/`](docs/audit/); the most recent is a
+  ten-lens adversarial sweep of both compressed paths that found **no
+  memory-safety defect**.
+
+Per-release detail — including the four input classes 0.3.3 began rejecting
+deliberately — is in [`CHANGELOG.md`](CHANGELOG.md). Sequencing is in
+[`docs/development/roadmap.md`](docs/development/roadmap.md): **0.5.0** GIF,
+**0.5.1/0.5.2** the BMP deferrals, **0.6.0** deferred JPEG geometry plus a
+streaming API, then the v1.0 API/ABI freeze.
 
 ## Relationships
 
@@ -110,8 +103,8 @@ All deps are pinned in `cyrius.cyml`; the toolchain pin is
 cyrius deps          # resolve stdlib + sankoch + thread into lib/
 make build           # link-check the include chain (→ build/chitra_smoke)
 make test            # 1078 assertions across tests/tcyr/
-make fuzz            # ~10⁶ adversarial decode cases (fuzz/*.fcyr)
-make bench           # 12 decode benchmarks (tests/bcyr/chitra.bcyr)
+make fuzz            # ~1.5 M adversarial decode cases (fuzz/*.fcyr)
+make bench           # 15 decode benchmarks (tests/bcyr/chitra.bcyr)
 make dist            # regenerate dist/chitra.cyr — the artifact consumers link
 make test-all        # version-check + dist + test + fuzz (the pre-release gate)
 ```
@@ -128,13 +121,18 @@ current surface, sizes and decode matrix, then:
 - [`docs/architecture/`](docs/architecture/) — the non-obvious constraints
   (why `lib/` must not be a symlink, why domain modules stay flat for
   `distlib`, why the bump allocator never frees, how the JPEG pipeline fits
-  together).
+  together). Note the bump allocator is not a footnote: `chitra_image_free`
+  is a documented no-op, so decode cost is cumulative for the process — which
+  is why the amplification caps exist.
 - [`docs/adr/`](docs/adr/) — the decisions and their alternatives (forking
   kii's decoder, the security model, mabda ABI compatibility, the JPEG
   decode model).
 - [`docs/guides/getting-started.md`](docs/guides/getting-started.md) —
   consuming chitra from another package.
 - [`docs/audit/`](docs/audit/) — the security audit reports.
+- [`docs/sources.md`](docs/sources.md) — every spec section chitra implements,
+  mapped to the file that implements it, including the three places the
+  formats leave something undefined and chitra had to choose.
 
 The original package proposal lives in the mabda repo
 (`docs/proposals/v3.3-chitra-png-decoder-package.md`, the v3.3 "Asset
