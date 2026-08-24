@@ -338,10 +338,28 @@ fn chitra_gif_decode(src, len, err_out): i64 {
     # otherwise inflate the allowance and defeat the cap. Checked HERE, before
     # the index plane and the canvas are allocated — a cap that fires after the
     # allocation it is meant to prevent is decoration.
-    if (screen_w * screen_h * 4 > comp_len * CHITRA_MAX_GIF_RATIO) {
-        store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
-        return 0;
-    }
+    #
+    # The ratio bounds THE FRAME, which is what the LZW stream actually
+    # expands into. It deliberately does NOT bound the logical screen.
+    #
+    # 0.5.3 shipped a second check that did — `screen_w * screen_h * 4` against
+    # the same allowance — and it rejected valid files. An optimised animation
+    # names a large canvas and paints a small first frame into it; that is the
+    # normal shape of the format, not an attack. Measured: an 81-byte GIF with a
+    # 1920x1080 logical screen, which ImageMagick reads without complaint, was
+    # refused with CHITRA_ERR_DIMENSIONS, because the canvas needs 506 bytes of
+    # allowance at 16384:1 and the whole file is 81.
+    #
+    # The canvas and the frame are different quantities and need different
+    # bounds. A large canvas is not amplification — the file DECLARED those
+    # dimensions, exactly as a PNG's IHDR declares its own, and the honest bound
+    # is the same one PNG uses: CHITRA_MAX_DIM and CHITRA_MAX_PIXELS at the
+    # screen-descriptor parse above, plus CHITRA_MAX_RAW_BYTES on the output
+    # buffer below. A hostile GIF naming a 4096x4096 canvas and a 1x1 frame is
+    # therefore capped at 64 MB rather than rejected, and it is the same
+    # accepted risk PNG carries and SECURITY.md records: the bomb and the
+    # legitimate image are the same file shape, so a ratio cannot separate them
+    # and rejecting on one refuses real files.
     if (fw * fh > comp_len * CHITRA_MAX_GIF_RATIO) {
         store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
         return 0;

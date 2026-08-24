@@ -186,6 +186,35 @@ conformance, resource and defence-in-depth rather than exploit fixes:
   relaxation makes those files **decode to a wrong image with no error raised**
   — the silent-mis-decode class, not a crash. See
   [ADR 0006](docs/adr/0006-defer-jpeg-multiscan-resumption.md).
+- ✅ **The amplification denominator excludes bytes the decoder never reads
+  (0.6.1).** `CHITRA_MAX_JPEG_RATIO` divided by the whole file length, so an
+  attacker bought allowance with padding: a 16,556-byte file, 16,404 bytes of
+  which were APPn segments the marker walk skips wholesale, declared 4096×4096
+  and **decoded, spending 117,463,728 bytes**. That is the 0.5.3 BMP-RLE
+  wrong-denominator defect, live in the JPEG path. The denominator is now a
+  structural entropy-span walk that stops at the first marker which is neither
+  byte-stuffing nor RSTn, so padding before *or* after the scan buys nothing.
+- ✅ **The refusal path is cheap (0.6.1).** A JPEG refused for good reason cost
+  **22,160 bytes** on every call — the quantization store and eight Huffman
+  records, allocated before any check could reject the file, on an allocator
+  that never frees. That is ~1,400:1 amplification on the path a consumer under
+  attack takes most often. Tables now allocate when a DQT or DHT first defines
+  something: **400 bytes**. The `== 0` guard makes it at-most-once per frame,
+  which matters because a single DHT segment may carry **3,854 table
+  definitions** — allocating per definition would have replaced a flat cost
+  with one that scales with file size (9,496,704 bytes from a 64 KB file).
+- ✅ **A caller can bound one decode (0.6.1).** `chitra_image_decode_budget`
+  refuses before beginning any decode whose RGBA8 output would exceed
+  `max_bytes`, at a cost of 16 bytes (144 for BMP). It bounds the **output**,
+  not the peak, and it does not cover sankoch's allocations or the cumulative
+  total across calls — all stated on the function and in
+  [ADR 0008](docs/adr/0008-byte-budget-as-shipped.md), because a memory
+  guarantee that is not exact is not a guarantee.
+- ✅ **A 3-component JPEG is not assumed to be YCbCr (0.6.1).** The Adobe APP14
+  colour transform is read, then the SOF0 component ids, then the JFIF default.
+  Guessing produced a silent whole-image colour error on real `cjpeg -rgb`
+  output — 1,149 of 1,536 bytes wrong. An undefined transform is declined
+  rather than guessed at.
 - ✅ **The ΣHj·Vj ≤ 10 cap is conditioned, not relaxed (0.6.0)** — T.81 § B.2.3
   conditions it on `Ns > 1`, and it bounds an interleaved MCU. It stays at the
   SOF0 parse, once per file, before any geometry derives from those factors;

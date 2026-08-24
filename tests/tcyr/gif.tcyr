@@ -2382,6 +2382,137 @@ fn test_gif_bomb_resists_padding() {
     return 0;
 }
 
+# ================================================================
+# 0.6.1 — the optimised-animation shape the 0.5.3 canvas cap rejected
+#
+# An 8x8 ImageMagick GIF whose Logical Screen Descriptor has been patched to a
+# 1920x1080 canvas. The frame rect still lies inside the screen, so the file is
+# structurally valid, and `magick identify` reports it as
+# "GIF 8x8 1920x1080+0+0" without complaint.
+#
+# This is the ordinary shape of an optimised animation: name a large canvas,
+# paint a small first frame into it. 0.5.3 shipped an amplification check that
+# bounded `screen_w * screen_h * 4` against the FIRST FRAME's compressed bytes,
+# so this 81-byte file was refused with CHITRA_ERR_DIMENSIONS — it would have
+# needed 506 bytes of LZW to earn an 8 MB canvas. The canvas and the frame are
+# different quantities: the ratio now bounds only the frame, and the canvas is
+# bounded by CHITRA_MAX_DIM / CHITRA_MAX_PIXELS / CHITRA_MAX_RAW_BYTES like
+# every other format's declared dimensions.
+#
+# Regenerate:
+#   magick -size 8x8 gradient:red-blue GIF:small.gif
+#   python3 -c "d=bytearray(open('small.gif','rb').read()); \
+#       d[6:8]=(1920).to_bytes(2,'little'); d[8:10]=(1080).to_bytes(2,'little'); \
+#       open('bigcanvas.gif','wb').write(bytes(d))"
+# ================================================================
+fn fx_gif_big_canvas(len_out): i64 {
+    var b = alloc(81);
+    store64(len_out, 81);
+    store8(b + 0, 0x47);
+    store8(b + 1, 0x49);
+    store8(b + 2, 0x46);
+    store8(b + 3, 0x38);
+    store8(b + 4, 0x39);
+    store8(b + 5, 0x61);
+    store8(b + 6, 0x80);
+    store8(b + 7, 0x07);
+    store8(b + 8, 0x38);
+    store8(b + 9, 0x04);
+    store8(b + 10, 0xF2);
+    store8(b + 11, 0x00);
+    store8(b + 12, 0x00);
+    store8(b + 13, 0xFF);
+    store8(b + 14, 0x00);
+    store8(b + 15, 0x00);
+    store8(b + 16, 0xDB);
+    store8(b + 17, 0x00);
+    store8(b + 18, 0x24);
+    store8(b + 19, 0xB6);
+    store8(b + 20, 0x00);
+    store8(b + 21, 0x49);
+    store8(b + 22, 0x92);
+    store8(b + 23, 0x00);
+    store8(b + 24, 0x6D);
+    store8(b + 25, 0x6D);
+    store8(b + 26, 0x00);
+    store8(b + 27, 0x92);
+    store8(b + 28, 0x49);
+    store8(b + 29, 0x00);
+    store8(b + 30, 0xB6);
+    store8(b + 31, 0x24);
+    store8(b + 32, 0x00);
+    store8(b + 33, 0xDB);
+    store8(b + 34, 0x00);
+    store8(b + 35, 0x00);
+    store8(b + 36, 0xFF);
+    store8(b + 37, 0x21);
+    store8(b + 38, 0xF9);
+    store8(b + 39, 0x04);
+    store8(b + 40, 0x00);
+    store8(b + 41, 0x00);
+    store8(b + 42, 0x00);
+    store8(b + 43, 0x00);
+    store8(b + 44, 0x00);
+    store8(b + 45, 0x2C);
+    store8(b + 46, 0x00);
+    store8(b + 47, 0x00);
+    store8(b + 48, 0x00);
+    store8(b + 49, 0x00);
+    store8(b + 50, 0x08);
+    store8(b + 51, 0x00);
+    store8(b + 52, 0x08);
+    store8(b + 53, 0x00);
+    store8(b + 54, 0x00);
+    store8(b + 55, 0x03);
+    store8(b + 56, 0x16);
+    store8(b + 57, 0x08);
+    store8(b + 58, 0xBA);
+    store8(b + 59, 0x1A);
+    store8(b + 60, 0xFE);
+    store8(b + 61, 0x4E);
+    store8(b + 62, 0xC8);
+    store8(b + 63, 0x29);
+    store8(b + 64, 0x87);
+    store8(b + 65, 0xBD);
+    store8(b + 66, 0x96);
+    store8(b + 67, 0xE8);
+    store8(b + 68, 0xAD);
+    store8(b + 69, 0x8B);
+    store8(b + 70, 0xFF);
+    store8(b + 71, 0x9E);
+    store8(b + 72, 0x21);
+    store8(b + 73, 0x8E);
+    store8(b + 74, 0xE2);
+    store8(b + 75, 0x61);
+    store8(b + 76, 0x9E);
+    store8(b + 77, 0x66);
+    store8(b + 78, 0x02);
+    store8(b + 79, 0x00);
+    store8(b + 80, 0x3B);
+    return b;
+}
+
+fn test_gif_large_canvas_small_frame_decodes() {
+    # The regression cell for the 0.5.3 canvas cap. Before the repair this
+    # returned CHITRA_ERR_DIMENSIONS.
+    var lo = 0;
+    var b = fx_gif_big_canvas(&lo);
+    assert(lo < 200, "the fixture really is under 200 bytes");
+    var err = 0;
+    var img = chitra_gif_decode(b, lo, &err);
+    assert(img != 0, "1920x1080 canvas with an 8x8 first frame decodes");
+    assert_eq(err, 0, "large canvas, small frame: no error");
+    if (img != 0) {
+        assert_eq(chitra_image_width(img), 1920, "canvas width is the logical screen");
+        assert_eq(chitra_image_height(img), 1080, "canvas height is the logical screen");
+        # The canvas the frame does not paint stays transparent, per ADR 0005 —
+        # chitra decoded nothing there and alpha 0 says exactly that.
+        assert_eq(load8(chitra_image_pixels(img) + (1000 * 1920 + 1000) * 4 + 3), 0,
+          "unpainted canvas is transparent, not background-filled");
+    }
+    return 0;
+}
+
 fn main() {
     test_gif_signature();
     test_gif_plain();
@@ -2398,6 +2529,7 @@ fn main() {
     test_gif_rgba8_wrapper();
     test_gif_amplification_bomb();
     test_gif_cap_allows_real_files();
+    test_gif_large_canvas_small_frame_decodes();
     test_gif_bomb_resists_padding();
     return assert_summary();
 }

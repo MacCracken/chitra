@@ -273,9 +273,20 @@ fn test_scan_dqt() {
     var f = chitra_jpeg_scan_markers(b, lo, &err);
     assert(f != 0, "dqt+sof scan returns a frame");
     assert_eq(err, 0, "no error");
-    assert_eq(chitra_jpeg_frame_quant_present(f), 1, "quant table 0 present (bit 0)");
-    assert_eq(chitra_jpeg_frame_quant(f, 0, 0), 1, "quant[0][0] = 1");
-    assert_eq(chitra_jpeg_frame_quant(f, 0, 63), 64, "quant[0][63] = 64");
+    # Guard the table reads on the frame AND on the presence bit. assert_eq is
+    # print-and-continue (lib/assert.cyr:22), not a branch — so without this,
+    # a regression that stopped parsing the DQT would take the whole suite down
+    # with a SIGSEGV instead of printing the FAIL line that names it. Under the
+    # lazy table allocation added in 0.6.1 the store pointer is 0 until a DQT
+    # defines something, which makes the unguarded form a null dereference
+    # rather than a wrong answer.
+    if (f != 0) {
+        assert_eq(chitra_jpeg_frame_quant_present(f), 1, "quant table 0 present (bit 0)");
+        if (chitra_jpeg_frame_quant_present(f) != 0) {
+            assert_eq(chitra_jpeg_frame_quant(f, 0, 0), 1, "quant[0][0] = 1");
+            assert_eq(chitra_jpeg_frame_quant(f, 0, 63), 64, "quant[0][63] = 64");
+        }
+    }
     # SOF still parsed after the DQT
     assert_eq(chitra_jpeg_frame_width(f), 8, "width 8 after dqt");
     assert_eq(chitra_jpeg_frame_max_h(f), 2, "max_h 2 after dqt");
@@ -433,24 +444,30 @@ fn test_scan_dht() {
     var f = chitra_jpeg_scan_markers(b, lo, &err);
     assert(f != 0, "dht+sof scan returns a frame");
     assert_eq(err, 0, "no error");
+    # Same guard as test_scan_dqt above, and for the same reason.
     assert_eq(chitra_jpeg_frame_huff_present(f), 1, "DC table slot 0 present");
-    var t = chitra_jpeg_frame_huff(f, 0, 0);
-    assert_eq(_jpeg_huff_count(t), 12, "12 symbols");
-    # canonical codes for the Annex K.3.3 DC-luminance table
-    assert_eq(_jpeg_huff_maxcode(t, 1), 0 - 1, "L1 maxcode = -1 (no codes)");
-    assert_eq(_jpeg_huff_mincode(t, 2), 0, "L2 mincode = 0");
-    assert_eq(_jpeg_huff_maxcode(t, 2), 0, "L2 maxcode = 0");
-    assert_eq(_jpeg_huff_valptr(t, 2), 0, "L2 valptr = 0");
-    assert_eq(_jpeg_huff_mincode(t, 3), 2, "L3 mincode = 2 (0b010)");
-    assert_eq(_jpeg_huff_maxcode(t, 3), 6, "L3 maxcode = 6 (0b110)");
-    assert_eq(_jpeg_huff_valptr(t, 3), 1, "L3 valptr = 1");
-    assert_eq(_jpeg_huff_mincode(t, 4), 14, "L4 mincode = 14 (0b1110)");
-    assert_eq(_jpeg_huff_valptr(t, 4), 6, "L4 valptr = 6");
-    assert_eq(_jpeg_huff_mincode(t, 9), 510, "L9 mincode = 510");
-    assert_eq(_jpeg_huff_valptr(t, 9), 11, "L9 valptr = 11");
-    assert_eq(_jpeg_huff_val(t, 0), 0, "huffval[0] = 0");
-    assert_eq(_jpeg_huff_val(t, 11), 11, "huffval[11] = 11");
-    assert_eq(chitra_jpeg_frame_width(f), 8, "width 8 after dht");
+    var t = 0;
+    if (f != 0) {
+        if (chitra_jpeg_frame_huff_present(f) != 0) { t = chitra_jpeg_frame_huff(f, 0, 0); }
+    }
+    if (t != 0) {
+        assert_eq(_jpeg_huff_count(t), 12, "12 symbols");
+        # canonical codes for the Annex K.3.3 DC-luminance table
+        assert_eq(_jpeg_huff_maxcode(t, 1), 0 - 1, "L1 maxcode = -1 (no codes)");
+        assert_eq(_jpeg_huff_mincode(t, 2), 0, "L2 mincode = 0");
+        assert_eq(_jpeg_huff_maxcode(t, 2), 0, "L2 maxcode = 0");
+        assert_eq(_jpeg_huff_valptr(t, 2), 0, "L2 valptr = 0");
+        assert_eq(_jpeg_huff_mincode(t, 3), 2, "L3 mincode = 2 (0b010)");
+        assert_eq(_jpeg_huff_maxcode(t, 3), 6, "L3 maxcode = 6 (0b110)");
+        assert_eq(_jpeg_huff_valptr(t, 3), 1, "L3 valptr = 1");
+        assert_eq(_jpeg_huff_mincode(t, 4), 14, "L4 mincode = 14 (0b1110)");
+        assert_eq(_jpeg_huff_valptr(t, 4), 6, "L4 valptr = 6");
+        assert_eq(_jpeg_huff_mincode(t, 9), 510, "L9 mincode = 510");
+        assert_eq(_jpeg_huff_valptr(t, 9), 11, "L9 valptr = 11");
+        assert_eq(_jpeg_huff_val(t, 0), 0, "huffval[0] = 0");
+        assert_eq(_jpeg_huff_val(t, 11), 11, "huffval[11] = 11");
+    }
+    if (f != 0) { assert_eq(chitra_jpeg_frame_width(f), 8, "width 8 after dht"); }
     return 0;
 }
 
@@ -1590,6 +1607,937 @@ fn test_reject_dup_cs() {
     return 0;
 }
 
+# ================================================================
+# 0.6.1 — APP14 Adobe colour transform (T.81 has no opinion; Adobe TN 5116)
+#
+# A real `cjpeg -rgb -quality 90` file: baseline SOF0, three components whose
+# ids are 'R','G','B' (0x52/0x47/0x42), an Adobe APP14 declaring transform = 0
+# (RGB), and NO JFIF APP0. libjpeg-turbo 3.2.0 writes it on request and djpeg
+# reads it back. Through 0.6.0 chitra skipped every APPn and decoded all three
+# components as YCbCr, so this file came back hue-rotated with NO error at all:
+# 1149 of 1536 bytes wrong, max delta 235, a blue pixel returned dark red.
+#
+# Regenerate:
+#   cjpeg -rgb -quality 90 -outfile rgbjpeg.jpg r2.ppm
+# (r2.ppm is the 24x16 two-axis source in the header recipe of
+# tests/tcyr/jpeg_noninterleaved.tcyr.) Expected pixels are `djpeg -nosmooth`
+# output, which ImageMagick agrees with byte-for-byte — this fixture is 4:4:4,
+# so both oracles are valid for it.
+#
+# Byte map the tests below patch: the 'Adobe' tag at offset 6..10, and the
+# transform byte at offset 17.
+# ================================================================
+fn fx_jpeg_adobe_rgb(len_out): i64 {
+    var b = alloc(437);
+    store64(len_out, 437);
+    store8(b + 0, 0xFF);
+    store8(b + 1, 0xD8);
+    store8(b + 2, 0xFF);
+    store8(b + 3, 0xEE);
+    store8(b + 4, 0x00);
+    store8(b + 5, 0x0E);
+    store8(b + 6, 0x41);
+    store8(b + 7, 0x64);
+    store8(b + 8, 0x6F);
+    store8(b + 9, 0x62);
+    store8(b + 10, 0x65);
+    store8(b + 11, 0x00);
+    store8(b + 12, 0x64);
+    store8(b + 13, 0x00);
+    store8(b + 14, 0x00);
+    store8(b + 15, 0x00);
+    store8(b + 16, 0x00);
+    store8(b + 17, 0x00);
+    store8(b + 18, 0xFF);
+    store8(b + 19, 0xDB);
+    store8(b + 20, 0x00);
+    store8(b + 21, 0x43);
+    store8(b + 22, 0x00);
+    store8(b + 23, 0x03);
+    store8(b + 24, 0x02);
+    store8(b + 25, 0x02);
+    store8(b + 26, 0x03);
+    store8(b + 27, 0x02);
+    store8(b + 28, 0x02);
+    store8(b + 29, 0x03);
+    store8(b + 30, 0x03);
+    store8(b + 31, 0x03);
+    store8(b + 32, 0x03);
+    store8(b + 33, 0x04);
+    store8(b + 34, 0x03);
+    store8(b + 35, 0x03);
+    store8(b + 36, 0x04);
+    store8(b + 37, 0x05);
+    store8(b + 38, 0x08);
+    store8(b + 39, 0x05);
+    store8(b + 40, 0x05);
+    store8(b + 41, 0x04);
+    store8(b + 42, 0x04);
+    store8(b + 43, 0x05);
+    store8(b + 44, 0x0A);
+    store8(b + 45, 0x07);
+    store8(b + 46, 0x07);
+    store8(b + 47, 0x06);
+    store8(b + 48, 0x08);
+    store8(b + 49, 0x0C);
+    store8(b + 50, 0x0A);
+    store8(b + 51, 0x0C);
+    store8(b + 52, 0x0C);
+    store8(b + 53, 0x0B);
+    store8(b + 54, 0x0A);
+    store8(b + 55, 0x0B);
+    store8(b + 56, 0x0B);
+    store8(b + 57, 0x0D);
+    store8(b + 58, 0x0E);
+    store8(b + 59, 0x12);
+    store8(b + 60, 0x10);
+    store8(b + 61, 0x0D);
+    store8(b + 62, 0x0E);
+    store8(b + 63, 0x11);
+    store8(b + 64, 0x0E);
+    store8(b + 65, 0x0B);
+    store8(b + 66, 0x0B);
+    store8(b + 67, 0x10);
+    store8(b + 68, 0x16);
+    store8(b + 69, 0x10);
+    store8(b + 70, 0x11);
+    store8(b + 71, 0x13);
+    store8(b + 72, 0x14);
+    store8(b + 73, 0x15);
+    store8(b + 74, 0x15);
+    store8(b + 75, 0x15);
+    store8(b + 76, 0x0C);
+    store8(b + 77, 0x0F);
+    store8(b + 78, 0x17);
+    store8(b + 79, 0x18);
+    store8(b + 80, 0x16);
+    store8(b + 81, 0x14);
+    store8(b + 82, 0x18);
+    store8(b + 83, 0x12);
+    store8(b + 84, 0x14);
+    store8(b + 85, 0x15);
+    store8(b + 86, 0x14);
+    store8(b + 87, 0xFF);
+    store8(b + 88, 0xC0);
+    store8(b + 89, 0x00);
+    store8(b + 90, 0x11);
+    store8(b + 91, 0x08);
+    store8(b + 92, 0x00);
+    store8(b + 93, 0x10);
+    store8(b + 94, 0x00);
+    store8(b + 95, 0x18);
+    store8(b + 96, 0x03);
+    store8(b + 97, 0x52);
+    store8(b + 98, 0x11);
+    store8(b + 99, 0x00);
+    store8(b + 100, 0x47);
+    store8(b + 101, 0x11);
+    store8(b + 102, 0x00);
+    store8(b + 103, 0x42);
+    store8(b + 104, 0x11);
+    store8(b + 105, 0x00);
+    store8(b + 106, 0xFF);
+    store8(b + 107, 0xC4);
+    store8(b + 108, 0x00);
+    store8(b + 109, 0x1F);
+    store8(b + 110, 0x00);
+    store8(b + 111, 0x00);
+    store8(b + 112, 0x01);
+    store8(b + 113, 0x05);
+    store8(b + 114, 0x01);
+    store8(b + 115, 0x01);
+    store8(b + 116, 0x01);
+    store8(b + 117, 0x01);
+    store8(b + 118, 0x01);
+    store8(b + 119, 0x01);
+    store8(b + 120, 0x00);
+    store8(b + 121, 0x00);
+    store8(b + 122, 0x00);
+    store8(b + 123, 0x00);
+    store8(b + 124, 0x00);
+    store8(b + 125, 0x00);
+    store8(b + 126, 0x00);
+    store8(b + 127, 0x00);
+    store8(b + 128, 0x01);
+    store8(b + 129, 0x02);
+    store8(b + 130, 0x03);
+    store8(b + 131, 0x04);
+    store8(b + 132, 0x05);
+    store8(b + 133, 0x06);
+    store8(b + 134, 0x07);
+    store8(b + 135, 0x08);
+    store8(b + 136, 0x09);
+    store8(b + 137, 0x0A);
+    store8(b + 138, 0x0B);
+    store8(b + 139, 0xFF);
+    store8(b + 140, 0xC4);
+    store8(b + 141, 0x00);
+    store8(b + 142, 0xB5);
+    store8(b + 143, 0x10);
+    store8(b + 144, 0x00);
+    store8(b + 145, 0x02);
+    store8(b + 146, 0x01);
+    store8(b + 147, 0x03);
+    store8(b + 148, 0x03);
+    store8(b + 149, 0x02);
+    store8(b + 150, 0x04);
+    store8(b + 151, 0x03);
+    store8(b + 152, 0x05);
+    store8(b + 153, 0x05);
+    store8(b + 154, 0x04);
+    store8(b + 155, 0x04);
+    store8(b + 156, 0x00);
+    store8(b + 157, 0x00);
+    store8(b + 158, 0x01);
+    store8(b + 159, 0x7D);
+    store8(b + 160, 0x01);
+    store8(b + 161, 0x02);
+    store8(b + 162, 0x03);
+    store8(b + 163, 0x00);
+    store8(b + 164, 0x04);
+    store8(b + 165, 0x11);
+    store8(b + 166, 0x05);
+    store8(b + 167, 0x12);
+    store8(b + 168, 0x21);
+    store8(b + 169, 0x31);
+    store8(b + 170, 0x41);
+    store8(b + 171, 0x06);
+    store8(b + 172, 0x13);
+    store8(b + 173, 0x51);
+    store8(b + 174, 0x61);
+    store8(b + 175, 0x07);
+    store8(b + 176, 0x22);
+    store8(b + 177, 0x71);
+    store8(b + 178, 0x14);
+    store8(b + 179, 0x32);
+    store8(b + 180, 0x81);
+    store8(b + 181, 0x91);
+    store8(b + 182, 0xA1);
+    store8(b + 183, 0x08);
+    store8(b + 184, 0x23);
+    store8(b + 185, 0x42);
+    store8(b + 186, 0xB1);
+    store8(b + 187, 0xC1);
+    store8(b + 188, 0x15);
+    store8(b + 189, 0x52);
+    store8(b + 190, 0xD1);
+    store8(b + 191, 0xF0);
+    store8(b + 192, 0x24);
+    store8(b + 193, 0x33);
+    store8(b + 194, 0x62);
+    store8(b + 195, 0x72);
+    store8(b + 196, 0x82);
+    store8(b + 197, 0x09);
+    store8(b + 198, 0x0A);
+    store8(b + 199, 0x16);
+    store8(b + 200, 0x17);
+    store8(b + 201, 0x18);
+    store8(b + 202, 0x19);
+    store8(b + 203, 0x1A);
+    store8(b + 204, 0x25);
+    store8(b + 205, 0x26);
+    store8(b + 206, 0x27);
+    store8(b + 207, 0x28);
+    store8(b + 208, 0x29);
+    store8(b + 209, 0x2A);
+    store8(b + 210, 0x34);
+    store8(b + 211, 0x35);
+    store8(b + 212, 0x36);
+    store8(b + 213, 0x37);
+    store8(b + 214, 0x38);
+    store8(b + 215, 0x39);
+    store8(b + 216, 0x3A);
+    store8(b + 217, 0x43);
+    store8(b + 218, 0x44);
+    store8(b + 219, 0x45);
+    store8(b + 220, 0x46);
+    store8(b + 221, 0x47);
+    store8(b + 222, 0x48);
+    store8(b + 223, 0x49);
+    store8(b + 224, 0x4A);
+    store8(b + 225, 0x53);
+    store8(b + 226, 0x54);
+    store8(b + 227, 0x55);
+    store8(b + 228, 0x56);
+    store8(b + 229, 0x57);
+    store8(b + 230, 0x58);
+    store8(b + 231, 0x59);
+    store8(b + 232, 0x5A);
+    store8(b + 233, 0x63);
+    store8(b + 234, 0x64);
+    store8(b + 235, 0x65);
+    store8(b + 236, 0x66);
+    store8(b + 237, 0x67);
+    store8(b + 238, 0x68);
+    store8(b + 239, 0x69);
+    store8(b + 240, 0x6A);
+    store8(b + 241, 0x73);
+    store8(b + 242, 0x74);
+    store8(b + 243, 0x75);
+    store8(b + 244, 0x76);
+    store8(b + 245, 0x77);
+    store8(b + 246, 0x78);
+    store8(b + 247, 0x79);
+    store8(b + 248, 0x7A);
+    store8(b + 249, 0x83);
+    store8(b + 250, 0x84);
+    store8(b + 251, 0x85);
+    store8(b + 252, 0x86);
+    store8(b + 253, 0x87);
+    store8(b + 254, 0x88);
+    store8(b + 255, 0x89);
+    store8(b + 256, 0x8A);
+    store8(b + 257, 0x92);
+    store8(b + 258, 0x93);
+    store8(b + 259, 0x94);
+    store8(b + 260, 0x95);
+    store8(b + 261, 0x96);
+    store8(b + 262, 0x97);
+    store8(b + 263, 0x98);
+    store8(b + 264, 0x99);
+    store8(b + 265, 0x9A);
+    store8(b + 266, 0xA2);
+    store8(b + 267, 0xA3);
+    store8(b + 268, 0xA4);
+    store8(b + 269, 0xA5);
+    store8(b + 270, 0xA6);
+    store8(b + 271, 0xA7);
+    store8(b + 272, 0xA8);
+    store8(b + 273, 0xA9);
+    store8(b + 274, 0xAA);
+    store8(b + 275, 0xB2);
+    store8(b + 276, 0xB3);
+    store8(b + 277, 0xB4);
+    store8(b + 278, 0xB5);
+    store8(b + 279, 0xB6);
+    store8(b + 280, 0xB7);
+    store8(b + 281, 0xB8);
+    store8(b + 282, 0xB9);
+    store8(b + 283, 0xBA);
+    store8(b + 284, 0xC2);
+    store8(b + 285, 0xC3);
+    store8(b + 286, 0xC4);
+    store8(b + 287, 0xC5);
+    store8(b + 288, 0xC6);
+    store8(b + 289, 0xC7);
+    store8(b + 290, 0xC8);
+    store8(b + 291, 0xC9);
+    store8(b + 292, 0xCA);
+    store8(b + 293, 0xD2);
+    store8(b + 294, 0xD3);
+    store8(b + 295, 0xD4);
+    store8(b + 296, 0xD5);
+    store8(b + 297, 0xD6);
+    store8(b + 298, 0xD7);
+    store8(b + 299, 0xD8);
+    store8(b + 300, 0xD9);
+    store8(b + 301, 0xDA);
+    store8(b + 302, 0xE1);
+    store8(b + 303, 0xE2);
+    store8(b + 304, 0xE3);
+    store8(b + 305, 0xE4);
+    store8(b + 306, 0xE5);
+    store8(b + 307, 0xE6);
+    store8(b + 308, 0xE7);
+    store8(b + 309, 0xE8);
+    store8(b + 310, 0xE9);
+    store8(b + 311, 0xEA);
+    store8(b + 312, 0xF1);
+    store8(b + 313, 0xF2);
+    store8(b + 314, 0xF3);
+    store8(b + 315, 0xF4);
+    store8(b + 316, 0xF5);
+    store8(b + 317, 0xF6);
+    store8(b + 318, 0xF7);
+    store8(b + 319, 0xF8);
+    store8(b + 320, 0xF9);
+    store8(b + 321, 0xFA);
+    store8(b + 322, 0xFF);
+    store8(b + 323, 0xDA);
+    store8(b + 324, 0x00);
+    store8(b + 325, 0x0C);
+    store8(b + 326, 0x03);
+    store8(b + 327, 0x52);
+    store8(b + 328, 0x00);
+    store8(b + 329, 0x47);
+    store8(b + 330, 0x00);
+    store8(b + 331, 0x42);
+    store8(b + 332, 0x00);
+    store8(b + 333, 0x00);
+    store8(b + 334, 0x3F);
+    store8(b + 335, 0x00);
+    store8(b + 336, 0xF8);
+    store8(b + 337, 0x5F);
+    store8(b + 338, 0xC1);
+    store8(b + 339, 0x1F);
+    store8(b + 340, 0xF2);
+    store8(b + 341, 0xCE);
+    store8(b + 342, 0xBE);
+    store8(b + 343, 0x0E);
+    store8(b + 344, 0xFF);
+    store8(b + 345, 0x00);
+    store8(b + 346, 0x84);
+    store8(b + 347, 0x47);
+    store8(b + 348, 0xFD);
+    store8(b + 349, 0x8F);
+    store8(b + 350, 0xD2);
+    store8(b + 351, 0xBE);
+    store8(b + 352, 0xC0);
+    store8(b + 353, 0xAF);
+    store8(b + 354, 0xB5);
+    store8(b + 355, 0x7C);
+    store8(b + 356, 0x11);
+    store8(b + 357, 0xFF);
+    store8(b + 358, 0x00);
+    store8(b + 359, 0x2C);
+    store8(b + 360, 0xE8);
+    store8(b + 361, 0xFF);
+    store8(b + 362, 0x00);
+    store8(b + 363, 0x84);
+    store8(b + 364, 0x47);
+    store8(b + 365, 0xFD);
+    store8(b + 366, 0x8F);
+    store8(b + 367, 0xD2);
+    store8(b + 368, 0xBE);
+    store8(b + 369, 0x5F);
+    store8(b + 370, 0xAF);
+    store8(b + 371, 0xB5);
+    store8(b + 372, 0xBC);
+    store8(b + 373, 0x11);
+    store8(b + 374, 0xFF);
+    store8(b + 375, 0x00);
+    store8(b + 376, 0x2C);
+    store8(b + 377, 0xE8);
+    store8(b + 378, 0xFF);
+    store8(b + 379, 0x00);
+    store8(b + 380, 0x84);
+    store8(b + 381, 0x47);
+    store8(b + 382, 0xFD);
+    store8(b + 383, 0x8F);
+    store8(b + 384, 0xD2);
+    store8(b + 385, 0xBE);
+    store8(b + 386, 0x5F);
+    store8(b + 387, 0xAF);
+    store8(b + 388, 0xC5);
+    store8(b + 389, 0x4F);
+    store8(b + 390, 0x04);
+    store8(b + 391, 0x7F);
+    store8(b + 392, 0xCB);
+    store8(b + 393, 0x3A);
+    store8(b + 394, 0xFB);
+    store8(b + 395, 0xC3);
+    store8(b + 396, 0xFE);
+    store8(b + 397, 0x11);
+    store8(b + 398, 0x1F);
+    store8(b + 399, 0xF6);
+    store8(b + 400, 0x3F);
+    store8(b + 401, 0x4A);
+    store8(b + 402, 0xFB);
+    store8(b + 403, 0xC2);
+    store8(b + 404, 0xBE);
+    store8(b + 405, 0xD5);
+    store8(b + 406, 0xF0);
+    store8(b + 407, 0x47);
+    store8(b + 408, 0xFC);
+    store8(b + 409, 0xB3);
+    store8(b + 410, 0xA3);
+    store8(b + 411, 0xFE);
+    store8(b + 412, 0x11);
+    store8(b + 413, 0x1F);
+    store8(b + 414, 0xF6);
+    store8(b + 415, 0x3F);
+    store8(b + 416, 0x4A);
+    store8(b + 417, 0xF9);
+    store8(b + 418, 0x7E);
+    store8(b + 419, 0xBE);
+    store8(b + 420, 0xD6);
+    store8(b + 421, 0xF0);
+    store8(b + 422, 0x47);
+    store8(b + 423, 0xFC);
+    store8(b + 424, 0xB3);
+    store8(b + 425, 0xA3);
+    store8(b + 426, 0xFE);
+    store8(b + 427, 0x11);
+    store8(b + 428, 0x1F);
+    store8(b + 429, 0xF6);
+    store8(b + 430, 0x3F);
+    store8(b + 431, 0x4A);
+    store8(b + 432, 0xF9);
+    store8(b + 433, 0x7E);
+    store8(b + 434, 0xBF);
+    store8(b + 435, 0xFF);
+    store8(b + 436, 0xD9);
+    return b;
+}
+
+# Assert one RGB triple of the 24-wide colour fixture.
+fn _cs_px(img, x, y, r, g, b, name): i64 {
+    var p = chitra_image_pixels(img) + (y * 24 + x) * 4;
+    assert_eq(load8(p + 0), r, name);
+    assert_eq(load8(p + 1), g, name);
+    assert_eq(load8(p + 2), b, name);
+    return 0;
+}
+
+fn test_app14_rgb_decodes_without_the_ycbcr_transform() {
+    var lo = 0;
+    var b = fx_jpeg_adobe_rgb(&lo);
+    assert_eq(load8(b + 6), 0x41, "fixture: Adobe APP14 tag sits at offset 6");
+    assert_eq(load8(b + 17), 0x00, "fixture: transform byte sits at offset 17 and is 0 (RGB)");
+    var err = 0;
+    var img = chitra_jpeg_decode(b, lo, &err);
+    assert(img != 0, "cjpeg -rgb file decodes");
+    assert_eq(err, 0, "cjpeg -rgb: no error");
+    if (img != 0) {
+        assert_eq(chitra_image_width(img), 24, "cjpeg -rgb: width 24");
+        assert_eq(chitra_image_height(img), 16, "cjpeg -rgb: height 16");
+        # djpeg -nosmooth values. Before the repair px(0,0) came back
+        # (121, 6, 0) — dark red for a blue pixel.
+        _cs_px(img, 0, 0, 20, 20, 200, "adobe RGB px(0,0) = (20,20,200)");
+        _cs_px(img, 8, 0, 100, 20, 140, "adobe RGB px(8,0)");
+        _cs_px(img, 16, 0, 180, 20, 80, "adobe RGB px(16,0)");
+        _cs_px(img, 0, 8, 20, 110, 170, "adobe RGB px(0,8)");
+        _cs_px(img, 8, 8, 100, 110, 110, "adobe RGB px(8,8)");
+        _cs_px(img, 16, 8, 180, 110, 50, "adobe RGB px(16,8)");
+        _cs_px(img, 23, 15, 222, 145, 50, "adobe RGB px(23,15)");
+        # 0x113 = 0x100 | 3 components | the RGB bit. A consumer that sees
+        # 0x103 has been told "YCbCr", which for this file would be false.
+        assert_eq(chitra_image_source_color_type(img), 0x113,
+          "adobe RGB reports src_ctype 0x113, not 0x103");
+    }
+    return 0;
+}
+
+fn test_app14_transform1_still_applies_ycbcr() {
+    # Same bytes, transform patched to 1 (YCbCr). The result is nonsense — the
+    # samples really are RGB — but that is the point: the decoder must follow
+    # the DECLARED transform rather than the component ids, or the Adobe flag is
+    # decoration. So px(0,0) must be the BT.601 answer, not the RGB one.
+    var lo = 0;
+    var b = fx_jpeg_adobe_rgb(&lo);
+    store8(b + 17, 0x01);
+    var err = 0;
+    var img = chitra_jpeg_decode(b, lo, &err);
+    assert(img != 0, "transform=1 decodes");
+    assert_eq(err, 0, "transform=1: no error");
+    if (img != 0) {
+        _cs_px(img, 0, 0, 121, 6, 0, "transform=1 px(0,0) = BT.601 output");
+        assert_eq(chitra_image_source_color_type(img), 0x103,
+          "transform=1 reports src_ctype 0x103 (YCbCr)");
+    }
+    return 0;
+}
+
+fn test_rgb_component_ids_without_an_adobe_marker() {
+    # Metadata strippers drop APP segments. With the Adobe tag corrupted the
+    # segment is skipped as a non-Adobe APP14, and the SOF0 component ids
+    # 'R','G','B' are what is left to name the colour space — the same fallback
+    # libjpeg uses.
+    var lo = 0;
+    var b = fx_jpeg_adobe_rgb(&lo);
+    store8(b + 6, 0x58);        # 'A' -> 'X': no longer the Adobe tag
+    var err = 0;
+    var img = chitra_jpeg_decode(b, lo, &err);
+    assert(img != 0, "RGB component ids without APP14 decode");
+    assert_eq(err, 0, "RGB ids without APP14: no error");
+    if (img != 0) { _cs_px(img, 0, 0, 20, 20, 200, "RGB-by-component-id px(0,0)"); }
+    return 0;
+}
+
+fn test_app14_undefined_transform_rejected() {
+    # Adobe defines 0, 1 and 2 only. chitra implements 0 and 1; 2 is YCCK, which
+    # occurs only on the 4-component frames it already refuses. An undefined
+    # value is DECLINED rather than assumed to be YCbCr — assuming YCbCr is
+    # precisely the guess that produced the defect this parser exists to fix.
+    var lo = 0;
+    var b = fx_jpeg_adobe_rgb(&lo);
+    store8(b + 17, 0x03);
+    var err = 0;
+    var img = chitra_jpeg_decode(b, lo, &err);
+    assert(img == 0, "APP14 transform=3 rejected");
+    assert(err != 0, "APP14 transform=3 sets err_out");
+    if (err != 0) {
+        assert_eq(chitra_err_code(err), CHITRA_ERR_UNSUPPORTED, "APP14 transform=3 -> UNSUPPORTED");
+    }
+    var lo2 = 0;
+    var b2 = fx_jpeg_adobe_rgb(&lo2);
+    store8(b2 + 17, 0x02);
+    var err2 = 0;
+    assert(chitra_jpeg_decode(b2, lo2, &err2) == 0, "APP14 transform=2 (YCCK) rejected");
+    return 0;
+}
+
+# ================================================================
+# 0.6.1 — the JPEG amplification cap's denominator
+#
+# A geometry-only bomb: SOF0 declares 4096x4096x3 (exactly CHITRA_MAX_PIXELS),
+# the scan supplies two bytes, and the entropy reader zero-pads the rest — so
+# the declared geometry alone drives ~117 MB of allocation that the bump
+# allocator never reclaims.
+#
+# What makes this the regression cell rather than just another bomb is the
+# PADDING: 16,404 of these 16,556 bytes are APPn segments the marker walk skips
+# without decoding a single byte of. Through 0.6.0 CHITRA_MAX_JPEG_RATIO divided
+# by the whole file length, so those skipped bytes BOUGHT ALLOWANCE — the same
+# wrong-denominator defect the 0.5.3 BMP-RLE cap had. Measured before the
+# repair: DECODED 4096x4096, 117,463,728 bytes spent. After: rejected, 22,160.
+#
+# The bare 152-byte version was always rejected; it is the control that proves
+# the padding is what defeated the cap, not the geometry.
+# ================================================================
+fn fx_jpeg_bomb_padded(len_out): i64 {
+    var b = alloc(16556);
+    store64(len_out, 16556);
+    var i = 0;
+    while (i < 16556) {
+        store8(b + i, 0);
+        i = i + 1;
+    }
+    store8(b + 0, 0xFF);
+    store8(b + 1, 0xD8);
+    store8(b + 2, 0xFF);
+    store8(b + 3, 0xDB);
+    store8(b + 5, 0x43);
+    store8(b + 7, 0x10);
+    store8(b + 8, 0x10);
+    store8(b + 9, 0x10);
+    store8(b + 10, 0x10);
+    store8(b + 11, 0x10);
+    store8(b + 12, 0x10);
+    store8(b + 13, 0x10);
+    store8(b + 14, 0x10);
+    store8(b + 15, 0x10);
+    store8(b + 16, 0x10);
+    store8(b + 17, 0x10);
+    store8(b + 18, 0x10);
+    store8(b + 19, 0x10);
+    store8(b + 20, 0x10);
+    store8(b + 21, 0x10);
+    store8(b + 22, 0x10);
+    store8(b + 23, 0x10);
+    store8(b + 24, 0x10);
+    store8(b + 25, 0x10);
+    store8(b + 26, 0x10);
+    store8(b + 27, 0x10);
+    store8(b + 28, 0x10);
+    store8(b + 29, 0x10);
+    store8(b + 30, 0x10);
+    store8(b + 31, 0x10);
+    store8(b + 32, 0x10);
+    store8(b + 33, 0x10);
+    store8(b + 34, 0x10);
+    store8(b + 35, 0x10);
+    store8(b + 36, 0x10);
+    store8(b + 37, 0x10);
+    store8(b + 38, 0x10);
+    store8(b + 39, 0x10);
+    store8(b + 40, 0x10);
+    store8(b + 41, 0x10);
+    store8(b + 42, 0x10);
+    store8(b + 43, 0x10);
+    store8(b + 44, 0x10);
+    store8(b + 45, 0x10);
+    store8(b + 46, 0x10);
+    store8(b + 47, 0x10);
+    store8(b + 48, 0x10);
+    store8(b + 49, 0x10);
+    store8(b + 50, 0x10);
+    store8(b + 51, 0x10);
+    store8(b + 52, 0x10);
+    store8(b + 53, 0x10);
+    store8(b + 54, 0x10);
+    store8(b + 55, 0x10);
+    store8(b + 56, 0x10);
+    store8(b + 57, 0x10);
+    store8(b + 58, 0x10);
+    store8(b + 59, 0x10);
+    store8(b + 60, 0x10);
+    store8(b + 61, 0x10);
+    store8(b + 62, 0x10);
+    store8(b + 63, 0x10);
+    store8(b + 64, 0x10);
+    store8(b + 65, 0x10);
+    store8(b + 66, 0x10);
+    store8(b + 67, 0x10);
+    store8(b + 68, 0x10);
+    store8(b + 69, 0x10);
+    store8(b + 70, 0x10);
+    store8(b + 71, 0xFF);
+    store8(b + 72, 0xC4);
+    store8(b + 74, 0x14);
+    store8(b + 76, 0x01);
+    store8(b + 93, 0xFF);
+    store8(b + 94, 0xC4);
+    store8(b + 96, 0x14);
+    store8(b + 97, 0x10);
+    store8(b + 98, 0x01);
+    store8(b + 115, 0xFF);
+    store8(b + 116, 0xC0);
+    store8(b + 118, 0x11);
+    store8(b + 119, 0x08);
+    store8(b + 120, 0x10);
+    store8(b + 122, 0x10);
+    store8(b + 124, 0x03);
+    store8(b + 125, 0x01);
+    store8(b + 126, 0x11);
+    store8(b + 128, 0x02);
+    store8(b + 129, 0x11);
+    store8(b + 131, 0x03);
+    store8(b + 132, 0x11);
+    store8(b + 134, 0xFF);
+    store8(b + 135, 0xE7);
+    store8(b + 136, 0x40);
+    store8(b + 137, 0x12);
+    store8(b + 16538, 0xFF);
+    store8(b + 16539, 0xDA);
+    store8(b + 16541, 0x0C);
+    store8(b + 16542, 0x03);
+    store8(b + 16543, 0x01);
+    store8(b + 16545, 0x02);
+    store8(b + 16547, 0x03);
+    store8(b + 16550, 0x3F);
+    store8(b + 16554, 0xFF);
+    store8(b + 16555, 0xD9);
+    return b;
+}
+
+# The same bomb without the APPn padding — rejected before AND after the repair.
+# A test that only asserts this one proves nothing about the denominator.
+fn fx_jpeg_bomb_bare(len_out): i64 {
+    var b = alloc(152);
+    store64(len_out, 152);
+    var i = 0;
+    while (i < 152) {
+        store8(b + i, 0);
+        i = i + 1;
+    }
+    store8(b + 0, 0xFF);
+    store8(b + 1, 0xD8);
+    store8(b + 2, 0xFF);
+    store8(b + 3, 0xDB);
+    store8(b + 5, 0x43);
+    store8(b + 7, 0x10);
+    store8(b + 8, 0x10);
+    store8(b + 9, 0x10);
+    store8(b + 10, 0x10);
+    store8(b + 11, 0x10);
+    store8(b + 12, 0x10);
+    store8(b + 13, 0x10);
+    store8(b + 14, 0x10);
+    store8(b + 15, 0x10);
+    store8(b + 16, 0x10);
+    store8(b + 17, 0x10);
+    store8(b + 18, 0x10);
+    store8(b + 19, 0x10);
+    store8(b + 20, 0x10);
+    store8(b + 21, 0x10);
+    store8(b + 22, 0x10);
+    store8(b + 23, 0x10);
+    store8(b + 24, 0x10);
+    store8(b + 25, 0x10);
+    store8(b + 26, 0x10);
+    store8(b + 27, 0x10);
+    store8(b + 28, 0x10);
+    store8(b + 29, 0x10);
+    store8(b + 30, 0x10);
+    store8(b + 31, 0x10);
+    store8(b + 32, 0x10);
+    store8(b + 33, 0x10);
+    store8(b + 34, 0x10);
+    store8(b + 35, 0x10);
+    store8(b + 36, 0x10);
+    store8(b + 37, 0x10);
+    store8(b + 38, 0x10);
+    store8(b + 39, 0x10);
+    store8(b + 40, 0x10);
+    store8(b + 41, 0x10);
+    store8(b + 42, 0x10);
+    store8(b + 43, 0x10);
+    store8(b + 44, 0x10);
+    store8(b + 45, 0x10);
+    store8(b + 46, 0x10);
+    store8(b + 47, 0x10);
+    store8(b + 48, 0x10);
+    store8(b + 49, 0x10);
+    store8(b + 50, 0x10);
+    store8(b + 51, 0x10);
+    store8(b + 52, 0x10);
+    store8(b + 53, 0x10);
+    store8(b + 54, 0x10);
+    store8(b + 55, 0x10);
+    store8(b + 56, 0x10);
+    store8(b + 57, 0x10);
+    store8(b + 58, 0x10);
+    store8(b + 59, 0x10);
+    store8(b + 60, 0x10);
+    store8(b + 61, 0x10);
+    store8(b + 62, 0x10);
+    store8(b + 63, 0x10);
+    store8(b + 64, 0x10);
+    store8(b + 65, 0x10);
+    store8(b + 66, 0x10);
+    store8(b + 67, 0x10);
+    store8(b + 68, 0x10);
+    store8(b + 69, 0x10);
+    store8(b + 70, 0x10);
+    store8(b + 71, 0xFF);
+    store8(b + 72, 0xC4);
+    store8(b + 74, 0x14);
+    store8(b + 76, 0x01);
+    store8(b + 93, 0xFF);
+    store8(b + 94, 0xC4);
+    store8(b + 96, 0x14);
+    store8(b + 97, 0x10);
+    store8(b + 98, 0x01);
+    store8(b + 115, 0xFF);
+    store8(b + 116, 0xC0);
+    store8(b + 118, 0x11);
+    store8(b + 119, 0x08);
+    store8(b + 120, 0x10);
+    store8(b + 122, 0x10);
+    store8(b + 124, 0x03);
+    store8(b + 125, 0x01);
+    store8(b + 126, 0x11);
+    store8(b + 128, 0x02);
+    store8(b + 129, 0x11);
+    store8(b + 131, 0x03);
+    store8(b + 132, 0x11);
+    store8(b + 134, 0xFF);
+    store8(b + 135, 0xDA);
+    store8(b + 137, 0x0C);
+    store8(b + 138, 0x03);
+    store8(b + 139, 0x01);
+    store8(b + 141, 0x02);
+    store8(b + 143, 0x03);
+    store8(b + 146, 0x3F);
+    store8(b + 150, 0xFF);
+    store8(b + 151, 0xD9);
+    return b;
+}
+
+fn test_jpeg_bomb_padding_does_not_buy_allowance() {
+    var lo = 0;
+    var b = fx_jpeg_bomb_padded(&lo);
+    var err = 0;
+    var img = chitra_jpeg_decode(b, lo, &err);
+    assert(img == 0, "APPn-padded geometry bomb rejected");
+    assert(err != 0, "APPn-padded bomb sets err_out");
+    if (err != 0) {
+        assert_eq(chitra_err_code(err), CHITRA_ERR_DIMENSIONS,
+          "APPn-padded bomb -> DIMENSIONS");
+    }
+    return 0;
+}
+
+fn test_jpeg_bare_bomb_still_rejected() {
+    var lo = 0;
+    var b = fx_jpeg_bomb_bare(&lo);
+    var err = 0;
+    assert(chitra_jpeg_decode(b, lo, &err) == 0, "bare geometry bomb rejected");
+    return 0;
+}
+
+fn test_jpeg_entropy_span_denominator_allows_real_files() {
+    # The cap must not reject real images now that its denominator is smaller.
+    # A 372-byte grayscale file has ~50 bytes of entropy data against a
+    # 24x16 output — the ratio has orders of magnitude of headroom, and this
+    # cell is what would catch a denominator tightened too far.
+    var lo = 0;
+    var err = 0;
+    assert(chitra_jpeg_decode(fx_jpeg_real_gradient(&lo), lo, &err) != 0,
+      "entropy-span denominator still allows the real gradient");
+    assert_eq(err, 0, "real gradient: no error");
+    return 0;
+}
+
+fn test_jpeg_refusal_allocation_is_bounded() {
+    # 0.6.1 lazy table allocation. A 15-byte JPEG whose SOF0 declares 12-bit
+    # precision is refused, correctly and permanently — and through 0.6.0 it
+    # still cost 22,160 bytes that the bump allocator never reclaims, on EVERY
+    # call, because chitra_jpeg_scan_markers allocated the quantization store
+    # and all eight Huffman records before any check could refuse the file.
+    # That is the path a consumer under attack takes most often.
+    var b = alloc(15);
+    store8(b + 0, 0xFF);
+    store8(b + 1, 0xD8);
+    store8(b + 2, 0xFF);
+    store8(b + 3, 0xC0);
+    store8(b + 4, 0x00);
+    store8(b + 5, 0x0B);
+    store8(b + 6, 0x0C);        # precision 12 -> JPEG_PRECISION
+    store8(b + 7, 0x00);
+    store8(b + 8, 0x08);
+    store8(b + 9, 0x00);
+    store8(b + 10, 0x08);
+    store8(b + 11, 0x01);
+    store8(b + 12, 0x01);
+    store8(b + 13, 0x11);
+    store8(b + 14, 0x00);
+    var before = alloc_used();
+    var err = 0;
+    var img = chitra_jpeg_decode(b, 15, &err);
+    var spent = alloc_used() - before;
+    assert(img == 0, "15-byte precision-12 JPEG refused");
+    if (err != 0) {
+        assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_PRECISION, "refused with JPEG_PRECISION");
+    }
+    # Measured at 400 bytes (frame 384 + ChitraErr 16). The bound is set just
+    # above that: loosen it past ~2 KB and the cell can no longer tell lazy
+    # allocation from eager.
+    assert_lte(spent, 1024, "refusing a table-less JPEG costs <= 1024 B");
+    # And it must stay cheap on repeat — the eager version was unmemoized, so a
+    # flood of refusals accumulated 22 KB apiece.
+    var before2 = alloc_used();
+    var err2 = 0;
+    chitra_jpeg_decode(b, 15, &err2);
+    assert_lte(alloc_used() - before2, 1024, "the second refusal is just as cheap");
+    return 0;
+}
+
+fn test_dht_table_storage_allocated_at_most_once() {
+    # A single DHT segment may carry up to 3,854 table definitions, and
+    # _jpeg_huff_build accepts an all-zero BITS table, so every one of them is
+    # a real definition. Allocating a 2,464-byte record per DEFINITION rather
+    # than one block per FRAME would trade a flat refusal cost for one that
+    # SCALES with file size — 384 + 64 + 3854 * 2464 = 9,496,704 bytes from a
+    # 64 KB file. The `== 0` test in _jpeg_parse_dht is what makes that
+    # unreachable by construction rather than by a bound.
+    var n = 3854;
+    var total = 4 + n * 17 + 2 + 2;
+    var b = alloc(total);
+    store8(b + 0, 0xFF);
+    store8(b + 1, 0xD8);
+    store8(b + 2, 0xFF);
+    store8(b + 3, 0xC4);
+    var seglen = 2 + n * 17;
+    store8(b + 4, (seglen >> 8) & 255);
+    store8(b + 5, seglen & 255);
+    var i = 0;
+    var base = 0;
+    var k = 0;
+    while (i < n) {
+        base = 6 + i * 17;
+        store8(b + base, 0x00);          # Tc = 0, Th = 0 — the SAME slot each time
+        k = 0;
+        while (k < 16) {
+            store8(b + base + 1 + k, 0); # 16 zero BITS counts, 0 symbols
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    var end = 6 + n * 17;
+    store8(b + end, 0xFF);
+    store8(b + end + 1, 0xD9);
+    var before = alloc_used();
+    var err = 0;
+    chitra_jpeg_decode(b, end + 2, &err);
+    var spent = alloc_used() - before;
+    # One quant-free frame plus ONE 19,712-byte Huffman block. Anything above
+    # ~64 KB means a record was allocated per definition.
+    assert_lte(spent, 65536, "3854 DHT definitions allocate one table block, not 3854");
+    return 0;
+}
+
 fn main() {
     test_cur_u16_be();
     test_signature();
@@ -1618,6 +2566,15 @@ fn main() {
     test_decode_restart();
     test_decode_real_gradient();
     test_decode_single_component_noninterleaved_bounds();
+    test_app14_rgb_decodes_without_the_ycbcr_transform();
+    test_app14_transform1_still_applies_ycbcr();
+    test_rgb_component_ids_without_an_adobe_marker();
+    test_app14_undefined_transform_rejected();
+    test_jpeg_bomb_padding_does_not_buy_allowance();
+    test_jpeg_bare_bomb_still_rejected();
+    test_jpeg_entropy_span_denominator_allows_real_files();
+    test_jpeg_refusal_allocation_is_bounded();
+    test_dht_table_storage_allocated_at_most_once();
     test_reject_jpeg_amplification_bomb();
     test_reject_nonsegment_markers();
     test_amplification_cap_allows_real_images();

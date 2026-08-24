@@ -5,6 +5,130 @@ All notable changes to chitra are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.1] - 2026-08-24
+
+**A repair cut, and the byte-budget surface ADR 0007 deferred.** A tree-wide
+sweep for deferred and half-done work turned up four shipped defects that
+outranked the release's planned content — three of them **silent wrong output
+or wrongly refused input on files standard tools produce**. Those are fixed
+first; the budget surface then lands on top, at two names instead of the eight
+ADR 0007 reserved.
+
+**2,802 test assertions** across **9 suites** (up from 2,719), 8,072,804 fuzz
+assertions, 0 failures. Every repair carries a regression test verified to fail
+against the pre-repair code.
+
+### Fixed
+
+- **A `cjpeg -rgb` file decoded to a hue-rotated image with no error raised.**
+  libjpeg-turbo writes baseline JPEGs whose three components *are RGB*: ids
+  `'R','G','B'`, an Adobe APP14 declaring `transform = 0`, no JFIF APP0.
+  chitra skipped every APPn marker and applied the BT.601 inverse anyway —
+  **1,149 of 1,536 bytes wrong, max delta 235**, a blue pixel `(20,20,200)`
+  returned as dark red `(121,6,0)`. Now byte-identical to `djpeg -nosmooth`,
+  with ImageMagick agreeing byte-for-byte. Colour space is taken from the Adobe
+  transform, else the component ids, else YCbCr; an undefined transform is
+  declined rather than guessed. `source_color_type` gains **`0x113`** so a
+  consumer can tell which space was decoded. See
+  [ADR 0009](docs/adr/0009-jpeg-colour-transform.md).
+- **The GIF amplification cap refused valid files.** 0.5.3 bounded the whole
+  logical screen against the *first frame's* compressed bytes — but naming a
+  large canvas and painting a small first frame into it is the ordinary shape
+  of an optimised animation, not an attack. An **81-byte** GIF with a
+  1920×1080 canvas, which `magick identify` reads without complaint, was
+  rejected with `CHITRA_ERR_DIMENSIONS`. The ratio now bounds only the frame,
+  which is what the LZW stream actually expands into; the canvas is bounded by
+  `CHITRA_MAX_DIM` / `CHITRA_MAX_PIXELS` / `CHITRA_MAX_RAW_BYTES`, exactly as
+  every other format's declared dimensions are. The 0.5.3 bomb fixtures still
+  reject, unchanged.
+- **A JPEG refused for good reason still cost 22,160 bytes.**
+  `chitra_jpeg_scan_markers` allocated the quantization store and all eight
+  Huffman records up front, before any check could refuse the file, and did it
+  again on every call. A 15-byte file with a 12-bit SOF0 — rejected correctly
+  and permanently — spent 22,160 bytes the bump allocator never reclaims, which
+  is ~1,400:1 amplification on the path a consumer under attack takes most.
+  The stores are now allocated when a DQT or DHT first defines something:
+  **400 bytes**, and a real file pays exactly what it paid before, one segment
+  later.
+
+### Security
+
+- **The JPEG amplification cap divided by the whole file length**, so an
+  attacker bought allowance with bytes the decoder never decodes — the same
+  wrong-denominator defect the 0.5.3 BMP-RLE cap had, live in the JPEG path.
+  Demonstrated rather than argued: a **16,556-byte** file, of which 16,404 are
+  APPn segments the marker walk skips wholesale, declared 4096×4096 and
+  **decoded, spending 117,463,728 bytes**. The denominator is now a real
+  entropy-span walk (`_jpeg_entropy_span`) that stops at the first marker which
+  is neither stuffing nor RSTn — so padding before *or* after the scan buys
+  nothing. Same file, after: rejected, 22,160 bytes. (Now 400, with lazy
+  allocation.)
+- **The lazy allocation is guarded `== 0`, and that guard is the whole thing.**
+  A single DHT segment may carry up to **3,854 table definitions**
+  (`_jpeg_huff_build` accepts an all-zero BITS table, so each one counts), so
+  allocating per *definition* rather than per *frame* would have traded a flat
+  22 KB refusal cost for one that **scales with file size** — 9,496,704 bytes
+  from a 64 KB file. Measured with the guard: 20,112. A regression test builds
+  that exact file.
+- Two reads of `JF_QUANT` / `JF_HUFF` in `tests/tcyr/jpeg.tcyr` were not
+  guarded by the presence bitmask. `assert_eq` is print-and-continue, not a
+  branch, so a parse regression would have taken the suite down with a SIGSEGV
+  instead of printing the FAIL line that names it — and under lazy allocation
+  those reads become null dereferences. Both now guarded.
+
+### Added
+
+- **`chitra_image_decode_budget(src, len, max_bytes, err_out)`** and
+  **`CHITRA_ERR_BUDGET` (34)** — the surface [ADR 0007](docs/adr/0007-byte-budget-surface-deferred.md)
+  deferred, shipped at two names rather than eight. See
+  [ADR 0008](docs/adr/0008-byte-budget-as-shipped.md) for why the other six
+  were dropped, chiefly that a published byte *count* gets consumed as a
+  number and this very release moves the JPEG figure by ~21 KB.
+
+  **The contract:** chitra will not *begin* a decode whose RGBA8 output would
+  exceed `max_bytes`. A refusal allocates **16 bytes** — the `ChitraErr` — for
+  PNG, JPEG and GIF, and **144** for BMP, whose dimension read goes through the
+  real header parser rather than a private copy of the layout. Measured, not
+  estimated. It does **not** cover working buffers during a decode that is
+  begun, sankoch's allocations (~41 KB one-time on the first PNG decode, plus
+  **32 bytes per `zlib_decompress` call** — an exclusion ADR 0007 missed), or
+  the cumulative total across calls. `max_bytes <= 0` refuses.
+
+  A budget refusal is **never a validity opinion**: a file whose header cannot
+  be read is handed to the router, which reports the real reason. That is what
+  keeps the check from becoming a second parser that can disagree with the
+  decoder, and a test asserts it.
+- `tests/tcyr/budget.tcyr` — a 9th suite. Its cells assert allocation **costs**
+  with real numeric bounds, not just return values: a budget test that only
+  checked the error code would pass with the exhaustion vector wide open, which
+  is the exact failure ADR 0007 held the surface back over.
+
+### Behaviour changes
+
+- An Adobe APP14 declaring `transform >= 2` now rejects with
+  `CHITRA_ERR_UNSUPPORTED`. Such a file decoded to garbage before, so this is a
+  correction, but it is a change.
+- `source_color_type` returns `0x113` for an RGB-component JPEG where it
+  previously returned `0x103`. Additive — `0x101` and `0x103` are unchanged —
+  but a consumer testing `== 0x103` to mean "3-component JPEG" must test the
+  low nibble instead.
+- A GIF with a large logical screen and a small first frame now decodes where
+  it was rejected. This is the repair, stated as a behaviour change because a
+  consumer may have been relying on the rejection.
+
+### Notes
+
+- **The roadmap gains a 0.7.x arc built from the sweep**, not invented: 84
+  deferments were catalogued across the decoders, the harnesses, CI and the doc
+  tree, and each is now scheduled, marked a permanent scope guard, or marked a
+  doc fix. See [`docs/development/roadmap.md`](docs/development/roadmap.md).
+- **Not fixed here, and scheduled instead:** a JPEG truncated inside its
+  entropy stream still decodes to fabricated MCUs, returns success, and reports
+  `seen_iend = 1` — a field hardcoded to `1` on the JPEG, BMP and GIF paths, so
+  the one accessor that exists to say "the stream ended cleanly" is a constant
+  on three formats of four. Making it honest is a public behaviour change and
+  belongs in a cut whose theme is the surface.
+
 ## [0.6.0] - 2026-08-24
 
 **T.81 § A.2 non-interleaved JPEG scans decode — for a one-component frame.**

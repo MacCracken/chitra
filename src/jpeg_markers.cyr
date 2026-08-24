@@ -80,7 +80,15 @@ var JF_COMP_V           = 16;
 var JF_COMP_TQ          = 24;
 var JF_COMP_TD          = 32;    # SOS scan fields: DC Huffman table selector
 var JF_COMP_TA          = 40;    #                  AC Huffman table selector
-var CHITRA_JPEG_FRAME_SIZE = 320;
+# +296 adobe_transform — the APP14 Adobe colour-transform code, or -1 when no
+# Adobe marker was seen. Sits after the 4 x 48-byte component specs (104 + 192).
+var JF_ADOBE_TRANSFORM  = 296;
+# Grown 320 -> 384 in 0.6.1 for the field above. This record is @internal and
+# heap-allocated per decode, so growing it costs 8 bytes a decode and nothing
+# else — but the 0.7.0 multi-scan work needs a per-component coverage bitmask
+# and a resume position (ADR 0006), so the slack is left deliberately generous
+# rather than shaved to fit.
+var CHITRA_JPEG_FRAME_SIZE = 384;
 
 fn chitra_jpeg_frame_width(f): i64          { return load64(f + JF_WIDTH); }
 fn chitra_jpeg_frame_height(f): i64         { return load64(f + JF_HEIGHT); }
@@ -102,6 +110,9 @@ fn chitra_jpeg_frame_comp_tq(f, i): i64 { return load64(f + JF_COMP + i * JF_COM
 fn chitra_jpeg_frame_comp_td(f, i): i64 { return load64(f + JF_COMP + i * JF_COMP_STRIDE + JF_COMP_TD); }
 fn chitra_jpeg_frame_comp_ta(f, i): i64 { return load64(f + JF_COMP + i * JF_COMP_STRIDE + JF_COMP_TA); }
 fn chitra_jpeg_frame_sos_offset(f): i64  { return load64(f + JF_SOS_OFFSET); }
+# -1 = no Adobe APP14 segment was present; 0 = RGB (or CMYK at 4 components),
+# 1 = YCbCr, 2 = YCCK.
+fn chitra_jpeg_frame_adobe_transform(f): i64 { return load64(f + JF_ADOBE_TRANSFORM); }
 
 # Quant-table entry t (0..3), zig-zag position k (0..63). De-zig-zag happens at
 # dequant time (bite 5); this stores the raw spec order.
@@ -131,8 +142,8 @@ fn chitra_jpeg_check_signature(src, len): i64 {
 # ================================================================
 # Marker classifier. Returns an ACTION (1=SOF0/parse, 2=SOS/stop,
 # 3=standalone/no-length, 4=length-bearing/skip, 5=DQT/parse, 6=DHT/parse,
-# 7=DRI/parse) or a CHITRA_ERR_* reject code (>=13) for any non-baseline mode.
-# Action values 1..7 never collide with the JPEG error codes (13..23).
+# 7=DRI/parse, 8=APP14/parse) or a CHITRA_ERR_* reject code (>=13) for any non-baseline mode.
+# Action values 1..8 never collide with the JPEG error codes (13..23).
 # ================================================================
 fn _jpeg_marker_action(m): i64 {
     if (m == 0xC0) { return 1; }                          # SOF0 baseline — parse
@@ -140,6 +151,7 @@ fn _jpeg_marker_action(m): i64 {
     if (m == 0xDB) { return 5; }                          # DQT — parse
     if (m == 0xC4) { return 6; }                          # DHT — parse
     if (m == 0xDD) { return 7; }                          # DRI — parse restart interval
+    if (m == 0xEE) { return 8; }                          # APP14 — may carry the Adobe colour transform
     if (m == 0xC2) { return CHITRA_ERR_JPEG_PROGRESSIVE; }
     if (m == 0xC9) { return CHITRA_ERR_JPEG_ARITHMETIC; } # SOF9 ext-seq arithmetic
     if (m == 0xCA) { return CHITRA_ERR_JPEG_ARITHMETIC; } # SOF10 progressive arithmetic
@@ -168,6 +180,51 @@ fn _jpeg_marker_action(m): i64 {
 }
 
 # ================================================================
+# Lazy table storage (0.6.1).
+#
+# Through 0.6.0 chitra_jpeg_scan_markers allocated the quantization store
+# (2,048 B) and all eight Huffman records (8 x 2,464 = 19,712 B) up front, on
+# every call, BEFORE any validation that could refuse the file. So a 15-byte
+# JPEG whose SOF0 declares 12-bit precision — refused, correctly, and
+# permanently — still cost 22,160 bytes that the bump allocator never reclaims,
+# unmemoized, every call. That is ~1,400:1 amplification on the REFUSAL path,
+# which is the path a consumer under attack takes most.
+#
+# Allocating on first use drops that to 400 bytes (the frame record plus the
+# ChitraErr), and costs a real file nothing: a JPEG that defines tables pays
+# exactly what it paid before, one segment later.
+# ================================================================
+fn _jpeg_alloc_quant(frame): i64 {
+    var quant = alloc(CHITRA_MAX_QUANT_TABLES * 64 * 8);
+    if (quant == 0) { return 0; }
+    store64(frame + JF_QUANT, quant);
+    var z = 0;
+    while (z < CHITRA_MAX_QUANT_TABLES * 64) {
+        store64(quant + z * 8, 0);
+        z = z + 1;
+    }
+    return quant;
+}
+
+fn _jpeg_alloc_huff(frame): i64 {
+    var huff = alloc(8 * HT_SIZE);
+    if (huff == 0) { return 0; }
+    store64(frame + JF_HUFF, huff);
+    # Zero the Huffman storage exactly as the quant storage above is zeroed.
+    # JF_HUFF_PRESENT already gates every table selector against a table a DHT
+    # actually defined, so this is defence in depth rather than a live bug — but
+    # an un-zeroed table reached through any future path would decode from
+    # whatever the bump allocator last left there. 8 * HT_SIZE bytes is
+    # 8 * 2464 = 19712, i.e. HT_SIZE i64 slots.
+    var z = 0;
+    while (z < HT_SIZE) {
+        store64(huff + z * 8, 0);
+        z = z + 1;
+    }
+    return huff;
+}
+
+# ================================================================
 # Parse a DQT segment (T.81 § B.2.4). Cursor is at the 2-byte length field.
 # A DQT may carry multiple tables. Baseline allows 8-bit precision only (Pq=0).
 # Values are stored in spec (zig-zag) order; de-zig-zag is deferred to dequant.
@@ -179,7 +236,15 @@ fn _jpeg_parse_dqt(cur, frame): i64 {
     if (seglen < 2) { return CHITRA_ERR_JPEG_DQT; }
     var remaining = seglen - 2;
     if (_cur_can_read(cur, remaining) == 0) { return CHITRA_ERR_TRUNCATED; }
+    # Allocate the quantization store the first time a DQT actually defines
+    # something (0.6.1 — see _jpeg_alloc_quant). The `== 0` test is what makes
+    # this at-most-once: a file carrying twenty DQT segments allocates one
+    # store, not twenty.
     var quant = load64(frame + JF_QUANT);
+    if (quant == 0) {
+        quant = _jpeg_alloc_quant(frame);
+        if (quant == 0) { return CHITRA_ERR_OOM; }
+    }
     var rc = 0;
     var done = 0;
     var pqtq = 0;
@@ -232,7 +297,18 @@ fn _jpeg_parse_dht(cur, frame): i64 {
     if (seglen < 2) { return CHITRA_ERR_JPEG_DHT; }
     var remaining = seglen - 2;
     if (_cur_can_read(cur, remaining) == 0) { return CHITRA_ERR_TRUNCATED; }
+    # As in _jpeg_parse_dqt: allocate on first real use, at most once. The
+    # at-most-once property is not a tidiness point, it is the whole guard —
+    # a single DHT segment may carry up to 3,854 table definitions, and
+    # allocating a 2,464-byte record per DEFINITION rather than per FRAME would
+    # trade this cut's flat 22 KB refusal cost for one that SCALES with file
+    # size (~9.5 MB from a 64 KB segment). Allocating the whole 8-slot block
+    # once makes that unreachable by construction rather than by a bound.
     var huff = load64(frame + JF_HUFF);
+    if (huff == 0) {
+        huff = _jpeg_alloc_huff(frame);
+        if (huff == 0) { return CHITRA_ERR_OOM; }
+    }
     var bits[136];           # 17 i64 (index 1..16 = BITS counts)
     var rc = 0;
     var done = 0;
@@ -299,6 +375,68 @@ fn _jpeg_parse_dht(cur, frame): i64 {
         }
     }
     return rc;
+}
+
+# ================================================================
+# Parse an APP14 segment (0xFFEE), which is where Adobe records the COLOUR
+# TRANSFORM applied to the component data. This is not decoration: for a
+# 3-component frame the transform is the difference between YCbCr (apply the
+# BT.601 inverse) and RGB (apply nothing), and guessing wrong hue-rotates the
+# whole image.
+#
+# chitra skipped every APPn through 0.6.0, so `cjpeg -rgb` output — a real
+# baseline JPEG with SOF0 component ids 'R','G','B', an Adobe APP14 carrying
+# transform = 0, and no JFIF APP0 — decoded as YCbCr with NO error raised:
+# 1149 of 1536 bytes wrong on a 24x16 fixture, max delta 235. A blue pixel came
+# back dark red. That is the silent-wrong-output class this project treats as
+# the most serious kind of defect, and a fuzzer cannot see it.
+#
+# Payload layout (Adobe TN 5116): 'A','d','o','b','e', version (2 bytes),
+# flags0 (2), flags1 (2), transform (1) = 12 bytes, so a conforming segment is
+# 14 bytes including its own length field. An APP14 that is NOT Adobe's (the
+# marker is not reserved to them) is skipped exactly as before.
+# Returns 0 on success, or a CHITRA_ERR_* code.
+# ================================================================
+fn _jpeg_parse_app14(cur, frame): i64 {
+    if (_cur_can_read(cur, 2) == 0) { return CHITRA_ERR_TRUNCATED; }
+    var seglen = _cur_u16_be(cur);
+    if (seglen < 2) { return CHITRA_ERR_JPEG_MARKER; }
+    var remaining = seglen - 2;
+    if (_cur_can_read(cur, remaining) == 0) { return CHITRA_ERR_TRUNCATED; }
+    # Anything shorter than the Adobe payload cannot be one; skip it whole.
+    if (remaining < 12) {
+        _cur_skip(cur, remaining);
+        return 0;
+    }
+    var b0 = _cur_u8(cur);
+    var b1 = _cur_u8(cur);
+    var b2 = _cur_u8(cur);
+    var b3 = _cur_u8(cur);
+    var b4 = _cur_u8(cur);
+    var is_adobe = 0;
+    if (b0 == 0x41) {
+        if (b1 == 0x64) {
+            if (b2 == 0x6F) {
+                if (b3 == 0x62) {
+                    if (b4 == 0x65) { is_adobe = 1; }
+                }
+            }
+        }
+    }
+    if (is_adobe == 0) {
+        _cur_skip(cur, remaining - 5);
+        return 0;
+    }
+    _cur_skip(cur, 6);                  # version (2) + flags0 (2) + flags1 (2)
+    var transform = _cur_u8(cur);
+    _cur_skip(cur, remaining - 12);     # any trailing bytes in an over-long segment
+    # Only 0, 1 and 2 are defined. chitra implements 0 and 1; 2 is YCCK, which
+    # only occurs on the 4-component frames it already refuses. An undefined
+    # value is declined rather than guessed at — assuming YCbCr is exactly the
+    # guess that produced the defect this parser exists to fix.
+    if (transform > 1) { return CHITRA_ERR_UNSUPPORTED; }
+    store64(frame + JF_ADOBE_TRANSFORM, transform);
+    return 0;
 }
 
 # ================================================================
@@ -449,28 +587,12 @@ fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
     store64(frame + JF_QUANT_PRESENT, 0);
     store64(frame + JF_HUFF_PRESENT, 0);
     store64(frame + JF_SOS_OFFSET, 0);
-    var quant = alloc(CHITRA_MAX_QUANT_TABLES * 64 * 8);
-    if (quant == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
-    store64(frame + JF_QUANT, quant);
-    var z = 0;
-    while (z < CHITRA_MAX_QUANT_TABLES * 64) {
-        store64(quant + z * 8, 0);
-        z = z + 1;
-    }
-    var huff = alloc(8 * HT_SIZE);
-    if (huff == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
-    store64(frame + JF_HUFF, huff);
-    # Zero the Huffman storage exactly as the quant storage above is zeroed.
-    # JF_HUFF_PRESENT already gates every table selector against a table that
-    # a DHT actually defined, so this is defence in depth rather than a live
-    # bug — but an un-zeroed table reached through any future path would decode
-    # from whatever the bump allocator last left there. 8 * HT_SIZE bytes is
-    # 8 * 2464 = 19712, i.e. HT_SIZE i64 slots.
-    z = 0;
-    while (z < HT_SIZE) {
-        store64(huff + z * 8, 0);
-        z = z + 1;
-    }
+    store64(frame + JF_ADOBE_TRANSFORM, 0 - 1);   # -1 = no Adobe APP14 seen
+    # The quantization and Huffman stores are NOT allocated here — see
+    # _jpeg_alloc_quant / _jpeg_alloc_huff. A file that never defines a table
+    # never pays for one, which is what makes the refusal path cheap.
+    store64(frame + JF_QUANT, 0);
+    store64(frame + JF_HUFF, 0);
 
     var cur[24];
     _cur_init(&cur, src, len);
@@ -523,6 +645,10 @@ fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
             }
             if (act == 7) {
                 rc = _jpeg_parse_dri(&cur, frame);
+                if (rc != 0) { done = 1; }
+            }
+            if (act == 8) {
+                rc = _jpeg_parse_app14(&cur, frame);
                 if (rc != 0) { done = 1; }
             }
             if (act == 2) {

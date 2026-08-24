@@ -158,6 +158,79 @@ fn _jpeg_parse_sos(frame, src, len, err_out): i64 {
 }
 
 # ================================================================
+# _jpeg_entropy_span — how many bytes of ENTROPY-CODED DATA the scan actually
+# carries, starting at `start`.
+#
+# This exists to be the denominator of the amplification cap below, and the
+# reason it has to be computed rather than taken as `len` is a measured defect:
+# through 0.6.0 the cap divided by the WHOLE FILE LENGTH, so an attacker bought
+# allowance with bytes the decoder never decodes. A 16,556-byte file whose
+# padding was 16,404 bytes of APPn segments — skipped wholesale by the marker
+# walk — declared 4096x4096x3 and allocated **117,463,728 bytes**, none of which
+# the bump allocator reclaims. That is the wrong-denominator defect the 0.5.3
+# BMP-RLE cap had, in the JPEG path: padding is free, so measuring the file
+# lets the attacker raise their own allowance. Padding AFTER the scan would
+# have worked just as well, which is why this walks to the end of the entropy
+# data rather than simply subtracting the header.
+#
+# The walk is the same rule the entropy bit-reader uses (T.81 § B.1.1.2 and
+# § F.1.2.3): inside entropy-coded data a 0xFF is always followed by 0x00
+# (byte stuffing) or by an RSTn marker; any other marker ENDS the scan. Fill
+# bytes (runs of 0xFF) are collapsed, exactly as the reader collapses them.
+# Reads only — nothing is decoded, and every access is bounded by `len`.
+# ================================================================
+fn _jpeg_entropy_span(src, len, start): i64 {
+    var i = start;
+    var j = 0;
+    var b2 = 0;
+    var done = 0;
+    var scanning = 0;
+    while (done == 0) {
+        if (i >= len) { done = 1; }
+        if (done == 0) {
+            if (load8(src + i) != 0xFF) {
+                i = i + 1;
+                continue;
+            }
+            # Collapse a run of 0xFF fill bytes (T.81 § B.1.1.2) to find the
+            # marker code they precede.
+            # ONE bounds-checked read per iteration. The first draft of this
+            # loop tested load8(src + j) again after advancing j, which reads at
+            # j == len on a file ending in 0xFF — an out-of-bounds read inside
+            # the guard being added to prevent one.
+            j = i + 1;
+            scanning = 1;
+            while (scanning == 1) {
+                scanning = 0;
+                if (j < len) {
+                    if (load8(src + j) == 0xFF) {
+                        j = j + 1;
+                        scanning = 1;
+                    }
+                }
+            }
+            if (j >= len) { done = 1; }
+            if (done == 0) {
+                b2 = load8(src + j);
+                if (b2 == 0x00) {
+                    i = j + 1;          # 0xFF00 is stuffed entropy data
+                    continue;
+                }
+                if (b2 >= 0xD0) {
+                    if (b2 <= 0xD7) {
+                        i = j + 1;      # RSTn belongs to the scan
+                        continue;
+                    }
+                }
+                done = 1;               # any other marker ends the scan
+            }
+        }
+    }
+    if (i < start) { return 0; }
+    return i - start;
+}
+
+# ================================================================
 # Decode a baseline scan (1 or 3 components, any chroma subsampling) into a
 # ChitraImage. The MCU is max_h x max_v data units wide/tall; each component i
 # contributes Hi x Vi 8x8 blocks per MCU at its own (subsampled) plane
@@ -222,7 +295,12 @@ fn _jpeg_decode_scan(frame, src, len, entropy_start, err_out): i64 {
     # block (~98 KB, ~685:1), so 4096:1 leaves ~6x headroom over the most
     # compressible real image while rejecting the geometry-only bomb by
     # three orders of magnitude.
-    if (w * h * 4 > len * CHITRA_MAX_JPEG_RATIO) {
+    # 0.6.1: the denominator is the ENTROPY SPAN, not `len`. Measuring the file
+    # let an attacker buy allowance with bytes the decoder never decodes —
+    # a 16,556-byte file padded with 16,404 bytes of skipped APPn segments
+    # allocated 117,463,728 bytes. See _jpeg_entropy_span above.
+    var espan = _jpeg_entropy_span(src, len, entropy_start);
+    if (w * h * 4 > espan * CHITRA_MAX_JPEG_RATIO) {
         store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
         return 0;
     }
@@ -439,6 +517,33 @@ fn _jpeg_decode_scan(frame, src, len, entropy_start, err_out): i64 {
             y = y + 1;
         }
     }
+    # ---- which colour space are these three components in? ----------------
+    # A 3-component baseline JPEG is USUALLY YCbCr, and chitra assumed so
+    # unconditionally through 0.6.0. It is not always: `cjpeg -rgb` emits RGB
+    # components, and applying the BT.601 inverse to them hue-rotates the whole
+    # image with no error raised (measured: 1149 of 1536 bytes wrong, max delta
+    # 235 — a blue pixel returned dark red).
+    #
+    # The decision order matches libjpeg's, most authoritative first:
+    #   1. An Adobe APP14 transform, if the file carries one. It is an explicit
+    #      statement by the encoder, so nothing overrides it.
+    #   2. Otherwise the SOF0 component ids: 'R','G','B' (0x52/0x47/0x42) names
+    #      the space outright. This is the fallback libjpeg uses, and it is what
+    #      catches an RGB file whose APP14 was stripped by a metadata tool.
+    #   3. Otherwise YCbCr — the JFIF default, and what component ids 1,2,3 mean.
+    var is_rgb = 0;
+    var adobe = chitra_jpeg_frame_adobe_transform(frame);
+    if (ncomp == 3) {
+        if (adobe == 0) { is_rgb = 1; }
+        if (adobe < 0) {
+            if (chitra_jpeg_frame_comp_id(frame, 0) == 0x52) {
+                if (chitra_jpeg_frame_comp_id(frame, 1) == 0x47) {
+                    if (chitra_jpeg_frame_comp_id(frame, 2) == 0x42) { is_rgb = 1; }
+                }
+            }
+        }
+    }
+
     if (ncomp == 3) {
         p1 = load64(&planes + 8);
         p2 = load64(&planes + 16);
@@ -456,7 +561,14 @@ fn _jpeg_decode_scan(frame, src, len, entropy_start, err_out): i64 {
                 cb = load8(p1 + (y * v1 / max_v) * pw1 + (x * h1 / max_h));
                 cr = load8(p2 + (y * v2 / max_v) * pw2 + (x * h2 / max_h));
                 o = (y * w + x) * 4;
-                _jpeg_ycc_to_rgb(yy, cb, cr, rgba + o);
+                # For RGB components the samples ARE the output — the transform
+                # to apply is the identity, not BT.601.
+                if (is_rgb == 1) {
+                    store8(rgba + o + 0, yy);
+                    store8(rgba + o + 1, cb);
+                    store8(rgba + o + 2, cr);
+                }
+                if (is_rgb == 0) { _jpeg_ycc_to_rgb(yy, cb, cr, rgba + o); }
                 store8(rgba + o + 3, 255);
                 x = x + 1;
             }
@@ -471,7 +583,14 @@ fn _jpeg_decode_scan(frame, src, len, entropy_start, err_out): i64 {
     store64(img + IMAGE_PIXELS_OFFSET, rgba);
     store64(img + IMAGE_CHANNELS_OFFSET, 4);
     store64(img + IMAGE_SEEN_IEND_OFFSET, 1);
-    store64(img + IMAGE_SRC_CTYPE_OFFSET, 256 + ncomp);   # JPEG sentinel: 0x101 gray / 0x103 YCbCr
+    # JPEG sentinel: 0x100 | ncomp, with bit 4 set when the components are RGB
+    # rather than YCbCr — so 0x101 gray, 0x103 YCbCr, 0x113 RGB. Without the
+    # distinction an Adobe transform=0 file reports 0x103 and a consumer has no
+    # way to learn that chitra applied no colour transform to it, which is
+    # exactly the fact the 0.6.1 repair exists to establish.
+    var sentinel = 256 + ncomp;
+    if (is_rgb == 1) { sentinel = sentinel + 16; }
+    store64(img + IMAGE_SRC_CTYPE_OFFSET, sentinel);
     return img;
 }
 
@@ -505,6 +624,180 @@ fn chitra_jpeg_decode_rgba8(src, len, w_out, h_out): i64 {
     store64(w_out, chitra_image_width(img));
     store64(h_out, chitra_image_height(img));
     return chitra_image_pixels(img);
+}
+
+# ================================================================
+# _jpeg_declared_dims — the dimensions SOF0 declares, without decoding or
+# allocating anything.
+#
+# This walks segments structurally, exactly as chitra_jpeg_scan_markers does —
+# by length, honouring standalone markers and § B.1.1.2 fill bytes — but it
+# parses nothing and stores nothing. It is not a second header parser: it
+# validates no field, builds no table, and its only output is (w, h). Anything
+# it does not understand returns 0, and the real parser then has the final say
+# on the same bytes.
+#
+# The reason it exists rather than reusing chitra_jpeg_scan_markers: that
+# function allocates the quantization and Huffman stores as it meets DQT and
+# DHT segments, so using it to answer "how big is this image?" costs ~22 KB for
+# any real JPEG — on a budget REFUSAL, which is the path this API exists to
+# make cheap. Reading the geometry alone costs nothing.
+# Returns 1 with *w_out / *h_out set, or 0.
+# ================================================================
+fn _jpeg_declared_dims(src, len, w_out, h_out): i64 {
+    store64(w_out, 0);
+    store64(h_out, 0);
+    var cur[24];
+    _cur_init(&cur, src, len);
+    _cur_skip(&cur, 2);                     # SOI, already checked by the caller
+    var done = 0;
+    var found = 0;
+    var b = 0;
+    var m = 0;
+    var seglen = 0;
+    while (done == 0) {
+        if (_cur_can_read(&cur, 2) == 0) { done = 1; }
+        if (done == 0) {
+            b = _cur_u8(&cur);
+            if (b != 0xFF) { done = 1; }
+        }
+        if (done == 0) {
+            # Collapse a run of fill bytes (T.81 § B.1.1.2).
+            m = _cur_u8(&cur);
+            while (m == 0xFF) {
+                if (_cur_can_read(&cur, 1) == 0) { m = 0; }
+                if (m == 0xFF) { m = _cur_u8(&cur); }
+            }
+            if (m == 0xC0) {
+                # SOF0: length(2) precision(1) height(2) width(2)
+                if (_cur_can_read(&cur, 7) == 0) { done = 1; }
+                if (done == 0) {
+                    seglen = _cur_u16_be(&cur);
+                    _cur_skip(&cur, 1);
+                    store64(h_out, _cur_u16_be(&cur));
+                    store64(w_out, _cur_u16_be(&cur));
+                    found = 1;
+                    done = 1;
+                }
+            }
+            if (done == 0) {
+                if (m == 0xD9) { done = 1; }        # EOI before any SOF0
+                if (m == 0xDA) { done = 1; }        # SOS before any SOF0
+            }
+            if (done == 0) {
+                # Standalone markers carry no length.
+                if (m == 0x01) { continue; }
+                if (m >= 0xD0) {
+                    if (m <= 0xD7) { continue; }
+                }
+                if (_cur_can_read(&cur, 2) == 0) { done = 1; }
+                if (done == 0) {
+                    seglen = _cur_u16_be(&cur);
+                    if (seglen < 2) { done = 1; }
+                }
+                if (done == 0) {
+                    if (_cur_can_read(&cur, seglen - 2) == 0) { done = 1; }
+                }
+                if (done == 0) { _cur_skip(&cur, seglen - 2); }
+            }
+        }
+    }
+    return found;
+}
+
+# ================================================================
+# _chitra_declared_rgba_bytes — the size of the RGBA8 buffer the file SAYS it
+# will decode to, or 0 if that cannot be read from the header.
+#
+# Every format states its own dimensions in its header, and the output contract
+# is always `w * h * 4`. Nothing here validates and nothing here allocates —
+# the decoder still does all of that, so an unreadable or hostile header simply
+# returns 0 and the caller's decode reports the real error. That asymmetry is
+# what keeps this from being "a probe that accepts what the decoder refuses":
+# it can only be consulted, never obeyed.
+# ================================================================
+fn _chitra_declared_rgba_bytes(src, len): i64 {
+    var cur[24];
+    var w = 0;
+    var h = 0;
+    if (chitra_png_check_signature(src, len) == 1) {
+        # IHDR is the first chunk: 8-byte signature, 4-byte length, 4-byte type,
+        # then width and height as big-endian u32 (PNG § 11.2.2).
+        _cur_init(&cur, src, len);
+        _cur_skip(&cur, 16);
+        if (_cur_can_read(&cur, 8) == 0) { return 0; }
+        w = _cur_u32_be(&cur);
+        h = _cur_u32_be(&cur);
+    }
+    if (chitra_jpeg_check_signature(src, len) == 1) {
+        if (_jpeg_declared_dims(src, len, &w, &h) == 0) { return 0; }
+    }
+    if (chitra_bmp_check_signature(src, len) == 1) {
+        var berr = 0;
+        var hdr = _bmp_parse_header(src, len, &berr);
+        if (hdr == 0) { return 0; }
+        w = chitra_bmp_hdr_width(hdr);
+        h = chitra_bmp_hdr_height(hdr);
+        if (h < 0) { h = 0 - h; }        # negative height = top-down rows
+    }
+    if (chitra_gif_check_signature(src, len) == 1) {
+        # The Logical Screen Descriptor follows the 6-byte signature, and the
+        # canvas — not the first frame's rect — is what chitra returns.
+        if (len < 10) { return 0; }
+        w = _gif_u16_le(src + 6);
+        h = _gif_u16_le(src + 8);
+    }
+    if (w <= 0 || h <= 0) { return 0; }
+    if (w > CHITRA_MAX_DIM || h > CHITRA_MAX_DIM) { return 0; }
+    return w * h * 4;
+}
+
+# ================================================================
+# chitra_image_decode_budget — decode, unless the image is bigger than the
+# caller is willing to spend on it.
+#
+# THE CONTRACT, stated in full because a memory guarantee that is not exact is
+# not a guarantee:
+#
+#   chitra will not BEGIN a decode whose RGBA8 output would exceed `max_bytes`.
+#   A refusal returns 0 with *err_out = CHITRA_ERR_BUDGET, having allocated
+#   16 bytes — the ChitraErr itself — for PNG, JPEG and GIF, and 144 for BMP.
+#   MEASURED, not estimated. BMP is the outlier because its dimension read goes
+#   through _bmp_parse_header, the real parser, rather than through a private
+#   copy of the header layout; 128 bytes is the right price for having no
+#   second opinion about what a BMP header says.
+#
+# What the budget does NOT cover, named rather than glossed:
+#   - Working buffers during a decode that IS begun. These are bounded by the
+#     format's own caps (CHITRA_MAX_PIXELS, CHITRA_MAX_RAW_BYTES and the four
+#     amplification ratios), not by `max_bytes`. Budgeting N bounds the OUTPUT
+#     at N; peak working set is a small multiple of it.
+#   - sankoch's allocations, which chitra does not route: ~41 KB of one-time
+#     table setup on the process's first PNG decode, plus 32 bytes per
+#     zlib_decompress call thereafter. Neither is chitra's to predict.
+#   - The cumulative total across calls. The bump allocator never frees
+#     (architecture/003), so this bounds ONE decode, not a process. A caller
+#     decoding untrusted input in a loop still needs its own accounting.
+#
+# A file whose header cannot be read is NOT refused here — it is handed to the
+# router, which reports the real reason. Refusing it would make this function
+# a second opinion on validity, which is exactly what it must never be.
+#
+# `max_bytes <= 0` is a refusal, not "unlimited" — a budget of zero means zero.
+# Callers who want no ceiling call chitra_image_decode.
+# ================================================================
+# @public
+fn chitra_image_decode_budget(src, len, max_bytes, err_out): i64 {
+    store64(err_out, 0);
+    if (max_bytes <= 0) {
+        store64(err_out, chitra_err(CHITRA_ERR_BUDGET));
+        return 0;
+    }
+    if (_chitra_declared_rgba_bytes(src, len) > max_bytes) {
+        store64(err_out, chitra_err(CHITRA_ERR_BUDGET));
+        return 0;
+    }
+    return chitra_image_decode(src, len, err_out);
 }
 
 # ================================================================
