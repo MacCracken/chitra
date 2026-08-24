@@ -31,6 +31,22 @@
 
 var GIF_MAX_COLORS = 256;
 
+# Output:input amplification ceiling, the GIF analogue of PNG's inflate ratio
+# and JPEG's output:input cap. Without it a ~800-byte file declaring a
+# 4096x4096 logical screen allocated ~67 MB of canvas that the bump allocator
+# never reclaims.
+#
+# This one is DELIBERATELY looser than PNG's 1100:1, and the reason is worth
+# stating rather than hiding in a round number: LZW's legitimate compression of
+# degenerate content is close to the bomb ratio. One full dictionary cycle
+# (codes 258..4095) encodes ~7.4 M identical pixels in ~5.8 KB, so a SOLID
+# 4096x4096 GIF is a real ~13 KB file — about 5100:1. A PNG-tight cap would
+# reject it. 16384:1 admits anything down to 4 KB, keeping ~3x headroom over
+# that floor while still rejecting the observed 797-byte bomb by two orders of
+# magnitude. The honest summary: this bounds the extreme case, not the merely
+# aggressive one, because for LZW those are nearer together than for DEFLATE.
+var CHITRA_MAX_GIF_RATIO = 16384;
+
 # Block introducers (spec § 15-27).
 var GIF_BLOCK_IMAGE     = 0x2C;   # Image Descriptor
 var GIF_BLOCK_EXTENSION = 0x21;   # Extension Introducer
@@ -199,12 +215,34 @@ fn chitra_gif_decode(src, len, err_out): i64 {
                     if (walking == 1) {
                         label = load8(src + pos + 1);
                         if (label == GIF_EXT_GRAPHIC_CTL) {
-                            # GCE: block size (4), packed, delay(2), transparent index
+                            # GCE layout (spec § 23): block size, packed,
+                            # delay(2), transparent index, terminator. The
+                            # block size is fixed at 4 and IS CHECKED — every
+                            # field after it is addressed by a fixed offset, so
+                            # a GCE declaring any other size would have chitra
+                            # read the packed byte and the transparent index
+                            # from bytes that are not those fields.
                             if (pos + 7 > len) { rcode = CHITRA_ERR_TRUNCATED; walking = 0; }
                             if (walking == 1) {
+                                if (load8(src + pos + 2) != 4) {
+                                    rcode = CHITRA_ERR_GIF_HEADER;
+                                    walking = 0;
+                                }
+                            }
+                            if (walking == 1) {
                                 gce_packed = load8(src + pos + 3);
+                                # A GCE applies to the graphic that FOLLOWS it,
+                                # so the last one before the image descriptor
+                                # governs — including one that turns
+                                # transparency OFF. `transparent` is
+                                # function-scoped, so it must be cleared
+                                # explicitly; leaving it set let an earlier
+                                # GCE's index survive a later GCE that revoked
+                                # it, keying pixels the file said were opaque.
                                 if ((gce_packed & 1) != 0) {
                                     transparent = load8(src + pos + 6);
+                                } else {
+                                    transparent = 0 - 1;
                                 }
                             }
                         }
@@ -291,6 +329,21 @@ fn chitra_gif_decode(src, len, err_out): i64 {
     next = _gif_walk_blocks(src, len, pos, comp, len, &comp_len);
     if (next < 0) {
         store64(err_out, chitra_err(CHITRA_ERR_TRUNCATED));
+        return 0;
+    }
+
+    # ---- amplification cap ----------------------------------------------
+    # Measured against `comp_len`, the LZW bytes actually gathered, NOT the
+    # file length: appending ignored trailing junk after the trailer would
+    # otherwise inflate the allowance and defeat the cap. Checked HERE, before
+    # the index plane and the canvas are allocated — a cap that fires after the
+    # allocation it is meant to prevent is decoration.
+    if (screen_w * screen_h * 4 > comp_len * CHITRA_MAX_GIF_RATIO) {
+        store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
+        return 0;
+    }
+    if (fw * fh > comp_len * CHITRA_MAX_GIF_RATIO) {
+        store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
         return 0;
     }
 

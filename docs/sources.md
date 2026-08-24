@@ -194,6 +194,13 @@ whole crate. The full guard-to-source mapping is in
     declared, 0.5.2 reads it; where none is (plain `BI_RGB`), chitra treats an
     all-zero alpha plane as padding and otherwise honours it. ImageMagick
     agrees, which is what settled the heuristic.
+    Two corollaries 0.5.3 had to repair, both of which read the *"valid only
+    if the compression member is set to `BI_BITFIELDS`"* clause too loosely:
+    the V4/V5 mask fields must be **ignored** under `BI_RGB` — real writers
+    populate them anyway, and honouring a stale alpha mask over padding bytes
+    decoded a file fully transparent — and, conversely, `BI_RGB` defaults must
+    not be injected into a bitfields file, which invents a layout the file
+    never declared.
   - 16-bpp layout is X1R5G5B5 for `BI_RGB` — **documented**, not merely
     conventional — and declared outright under `BI_BITFIELDS`. Supported since
     0.5.2; the 0.4.0 deferral was on the grounds that the mask machinery did
@@ -220,7 +227,12 @@ whole crate. The full guard-to-source mapping is in
     Used by: `src/gif.cyr`.
   - § 23 Graphic Control Extension — the transparent color index, which is why
     transparency is read from a block *preceding* the image rather than from
-    the image itself. Used by: `src/gif.cyr`.
+    the image itself. Used by: `src/gif.cyr`. Two details 0.5.3 had to
+    honour: the block size is **fixed at 4** and must be validated, since
+    every field after it is addressed by a fixed offset; and a GCE governs the
+    graphic that *follows* it, so the last one before the image descriptor
+    wins — **including one that turns transparency off**, which means the
+    index has to be cleared rather than merely overwritten when present.
   - § 15-16 sub-block chains — how every unbounded payload is framed. Used by:
     `src/gif.cyr` `_gif_walk_blocks`, which is both the skip path for unknown
     extensions and the gather path for LZW data.

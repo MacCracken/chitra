@@ -77,14 +77,26 @@ decode. Each maps to a `ChitraErrCode`
 - ✅ **Decompression-bomb ratio cap** — the ratio of inflated output to
   compressed IDAT input is bounded by `CHITRA_MAX_INFLATE_RATIO = 1100`
   (constant in [`src/png_chunks.cyr:43`](src/png_chunks.cyr); checked at
-  [`src/png_filter.cyr:551`](src/png_filter.cyr)), just above DEFLATE's
+  [`src/png_filter.cyr:562`](src/png_filter.cyr)), just above DEFLATE's
   theoretical 1032:1 maximum (RFC 1951 § 3.2.5), so a zip-bomb-style input is
   rejected instead of expanded. Failure → `CHITRA_ERR_DIMENSIONS`.
+  ⚠️ **Accepted risk, stated rather than quietly fixed**: this ratio bounds
+  *inflated:IDAT*, and the final RGBA8 buffer is up to 32× the inflated
+  scanlines, so a **2,116-byte** 1-bit PNG declaring 4096×4096 decodes to
+  64 MB and no ratio cap fires. The 0.5.3 audit examined this and chose **not**
+  to repair it: that file is a complete, valid encoding of a solid image, so
+  the bomb and the legitimate image are the same file shape and an
+  output-ratio cap would reject valid PNGs. What distinguished the BMP and GIF
+  cases capped in that cut is that those bombs supplied *nothing* — 2 and 4
+  bytes for 16.7 M pixels. **The operative bound for PNG is
+  `CHITRA_MAX_PIXELS`**: a caller decoding untrusted PNGs should budget 64 MB
+  per decode as the worst case, not the file size, and remember that the bump
+  allocator makes that cumulative.
 - ✅ **Raw-buffer ceiling** — every derived buffer size is bounded by
   `CHITRA_MAX_RAW_BYTES = 268435456` (256 MB)
   ([`src/png_chunks.cyr:38`](src/png_chunks.cyr)), and every allocation is
   null-checked. The IHDR-derived inflated/pixel buffer sizes over the ceiling
-  fail as `CHITRA_ERR_DIMENSIONS` ([`src/png_filter.cyr:532-539`](src/png_filter.cyr));
+  fail as `CHITRA_ERR_DIMENSIONS` ([`src/png_filter.cyr:543-550`](src/png_filter.cyr));
   the IDAT-accumulator over the ceiling and any allocation that returns null
   fail as `CHITRA_ERR_OOM` ([`src/png_filter.cyr:445`](src/png_filter.cyr)).
 - ✅ **Inflate exact-size second line of defense** — the inflated stream size
@@ -219,6 +231,24 @@ turn it away, so the header parser *is* the entire perimeter:
   pixel names nothing. All reject at parse with `CHITRA_ERR_BMP_MASK` — an
   unvalidated width feeds a shift, and an unvalidated shift is how a decoder
   reads outside its own pixel.
+  **0.5.3 corrected three defects in that machinery**, none of which a fuzzer
+  could see because none crash: the validated masks were then **ignored** at
+  32 bpp unless the file also declared an alpha mask (a real file decoded with
+  red and blue swapped); masks were honoured under `BI_RGB`, where Microsoft
+  states they are *"valid only if compression is `BI_BITFIELDS`"*, so a V4
+  file with a stale alpha mask over padding decoded **fully transparent**; and
+  `BI_RGB` defaults were injected into bitfields files, which made the
+  "at least one colour channel" guard **unreachable dead code** — the defaults
+  erased exactly the condition it tests. A guard that cannot fire is worse
+  than no guard, because it also documents a protection you do not have.
+- ✅ **RLE amplification cap (0.5.3)** — `CHITRA_MAX_BMP_RLE_RATIO` = 4096
+  bounds decoded output against RLE bytes **consumed**. Demonstrated, not
+  argued: a **1,082-byte** RLE8 file declaring 4096×4096 decoded into ~64 MB
+  the bump allocator never reclaims. Measuring *consumed* rather than *file
+  size* is the whole guard — the first version measured the file, and
+  appending 512 KB of padding raised the attacker's own allowance. A solid
+  4096×4096 image genuinely needs ~137 KB of RLE, so the cap leaves 8.5×
+  headroom over the format's own best case. Failure → `CHITRA_ERR_DIMENSIONS`.
 - ✅ **Accepted DIB header sizes are an allow-list**, not a lower bound:
   12 / 40 / 52 / 56 / 108 / 124. An unrecognised size rejects rather than being
   treated as "at least an INFO header". **`BI_JPEG` and `BI_PNG` are refused outright** — honouring them
@@ -263,11 +293,31 @@ hostile LZW stream takes:
   silently decode a different image than the file describes.
 - ✅ **Palette indices hard-rejected** against the table in force (a local
   color table overrides the global one for its image).
+- ✅ **Amplification cap (0.5.3)** — `CHITRA_MAX_GIF_RATIO` = 16384 bounds
+  decoded output against the compressed stream, checked **before** the
+  allocation it exists to prevent (the first version fired after it). A
+  **797-byte** GIF declaring 4096×4096 decoded into ~64 MB. The cap is
+  deliberately looser than PNG's 1100:1 because **LZW's legitimate compression
+  of degenerate content is close to the bomb ratio** — a solid 4096×4096
+  really does compress to ~13 KB — so it bounds the extreme case, not the
+  merely aggressive one. Failure → `CHITRA_ERR_DIMENSIONS`.
+- ✅ **Graphic Control Extension block size validated (0.5.3)** — it is fixed
+  at 4, and every field after it was addressed by a fixed offset. A GCE
+  declaring another size had chitra read the packed byte and transparent index
+  from bytes that are not those fields. Failure → `CHITRA_ERR_GIF_HEADER`.
+- ✅ **The transparent index is per-GCE (0.5.3)** — a GCE governs the graphic
+  that follows it, including one that turns transparency **off**. The index
+  was only ever set, never cleared, so an earlier GCE's value survived a later
+  one revoking it and keyed pixels the file said were opaque. Cyrius `var`
+  declarations are function-scoped, and this is what that costs in a long
+  function.
 
-Note GIF has **not yet had a line-by-line audit** — see the audit history
-below. A real KwKwK ordering bug in the LZW expansion survived initial testing
-and was caught by a reference cross-check before release, which is a fair
-indication of where the remaining risk in this module sits.
+GIF's line-by-line audit landed in **0.5.3**
+([report](docs/audit/2026-08-24-audit.md)). It found no memory-safety defect
+in the LZW decompressor; the one memory finding was a prefix-chain guard set
+**one looser than the buffer it protected** (4097 possible stores into 4096
+bytes) — unreachable in practice, since the longest real chain is ~4092, but a
+guard one looser than its buffer is a latent overflow, not a margin.
 
 ## What chitra does NOT do
 
@@ -308,8 +358,8 @@ We will:
 
 For format-specific issues (e.g. a known libpng / lodepng / stb_image / libjpeg
 vulnerability), please cite the CVE ID. If chitra inherits an issue by faithfully
-implementing the PNG, JPEG or BMP spec, the fix may involve hardening chitra's parser
-beyond spec.
+implementing the PNG, JPEG, BMP or GIF spec, the fix may involve hardening
+chitra's parser beyond spec.
 
 ## Audit history
 
@@ -333,8 +383,21 @@ beyond spec.
   defect** — the confirmed findings were correctness, conformance, resource
   and defence-in-depth, and all were repaired in that cut. Introduced the
   in-tree fuzz harnesses.
+- [`docs/audit/2026-08-24-audit.md`](docs/audit/2026-08-24-audit.md) — the
+  P-1 sweep of **BMP and GIF** ([`src/bmp.cyr`](src/bmp.cyr),
+  [`src/gif.cyr`](src/gif.cyr), [`src/gif_lzw.cyr`](src/gif_lzw.cyr)), gating
+  0.5.3. Verdict: **no memory-safety defect** — no reachable out-of-bounds, no
+  overflow into an allocation, no unterminated loop. **Seven of the nine
+  confirmed findings were silent wrong output**, which is the finding about
+  the *method* rather than the code: four fuzz harnesses and ~2.2 M cases had
+  passed over every one of them, because none of them crash. Each was
+  confirmed by decoding the same bytes with ImageMagick. Added the BMP-RLE and
+  GIF amplification caps.
 
-> Coverage note: as of 0.3.3 both hardening gaps are closed. The fuzz gap
+  **With this report every decode path has been audited.**
+
+> Coverage note: as of 0.5.3 every format has been audited, and both
+> hardening gates have been closed since 0.3.3. The fuzz gap
 > is closed — `make fuzz` drives both public decode entries
 > over ~2.2 M adversarial cases (7,482,610 assertions, 0 failures),
 > including JPEG entropy-segment mutation, and asserts the documented

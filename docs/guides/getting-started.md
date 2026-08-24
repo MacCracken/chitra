@@ -2,7 +2,7 @@
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder. It turns encoded image bytes into canonical
-RGBA8 pixels — no GPU, no C shim, no external binaries. As of v0.4.0 it
+RGBA8 pixels — no GPU, no C shim, no external binaries. As of v0.5.3 it
 decodes **PNG** (every spec-legal bit depth 1/2/4/8/16 across color types
 0/2/3/4/6, Adam7 interlace, PLTE/tRNS), **baseline JPEG** (JFIF SOF0,
 grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0 chroma subsampling, restart
@@ -29,7 +29,7 @@ isn't on your PATH yet, see the agnosticos bootstrap.
 ```bash
 cyrius deps        # resolve stdlib + sankoch + thread into lib/
 make build         # link-check: builds build/chitra_smoke from programs/smoke.cyr
-make test          # 2416 assertions across tests/tcyr/
+make test          # 2478 assertions across tests/tcyr/
 make fuzz          # ~10⁶ adversarial decode cases across fuzz/*.fcyr
 make bench         # 17 decode benchmarks (tests/bcyr/chitra.bcyr)
 make dist          # = cyrius distlib → dist/chitra.cyr
@@ -75,7 +75,7 @@ released tag and pulling that one module:
 ```toml
 [deps.chitra]
 git     = "https://github.com/MacCracken/chitra"
-tag     = "0.5.2"
+tag     = "0.5.3"
 modules = ["dist/chitra.cyr"]
 ```
 
@@ -171,7 +171,7 @@ no-op: the stdlib `alloc` is a bump allocator with no per-block free —
 see [architecture note 003](../architecture/003-bump-allocator-no-free.md).
 
 You can probe the linked version at runtime with `chitra_version()`,
-which returns `502` for 0.5.2 (`major*10000 + minor*100 + patch`).
+which returns `503` for 0.5.3 (`major*10000 + minor*100 + patch`).
 `make version-check` gates that literal against `VERSION`, so it cannot
 drift silently again.
 
@@ -201,7 +201,7 @@ the pixels. A *malformed* IEND (e.g. non-zero length) is a hard error.
 | Code | Value | Triggers when |
 |---|---|---|
 | `CHITRA_OK` | 0 | No error (success path) |
-| `CHITRA_ERR_SIGNATURE` | 1 | Bytes match neither the 8-byte PNG signature nor the JPEG SOI marker |
+| `CHITRA_ERR_SIGNATURE` | 1 | Bytes match none of the four signatures — the 8-byte PNG magic, the JPEG SOI marker, BMP's `BM`, or `GIF87a`/`GIF89a` |
 | `CHITRA_ERR_TRUNCATED` | 2 | Stream ends mid-chunk / mid-field |
 | `CHITRA_ERR_BAD_CHUNK` | 3 | Chunk framing is malformed |
 | `CHITRA_ERR_UNSUPPORTED` | 4 | A construct chitra does not handle |
@@ -210,7 +210,7 @@ the pixels. A *malformed* IEND (e.g. non-zero length) is a hard error.
 | `CHITRA_ERR_CRC` | 7 | Per-chunk CRC32 mismatch (corruption / tampering) |
 | `CHITRA_ERR_INTERLACE` | 8 | Illegal interlace method (Adam7 itself is supported) |
 | `CHITRA_ERR_BIT_DEPTH` | 9 | Bit depth illegal for the color type (e.g. ct3 + depth16) |
-| `CHITRA_ERR_DIMENSIONS` | 10 | IHDR dimensions exceed policy / are invalid |
+| `CHITRA_ERR_DIMENSIONS` | 10 | Declared dimensions exceed policy / are invalid — also the amplification caps on all four formats, where the decoded size is implausible against the compressed bytes consumed |
 | `CHITRA_ERR_FILTER` | 11 | Filter byte ∉ {0,1,2,3,4} (spec § 9) |
 | `CHITRA_ERR_NO_IDAT` | 12 | Structurally valid PNG with zero pixel data |
 | `CHITRA_ERR_JPEG_MARKER` | 13 | Malformed/misplaced marker or bad 16-bit segment length |
@@ -224,7 +224,7 @@ the pixels. A *malformed* IEND (e.g. non-zero length) is a hard error.
 | `CHITRA_ERR_JPEG_PRECISION` | 21 | Sample precision other than 8-bit |
 | `CHITRA_ERR_JPEG_MODE` | 22 | Hierarchical / lossless / differential mode |
 | `CHITRA_ERR_JPEG_COMPONENTS` | 23 | Unsupported component count (e.g. 4-component CMYK / YCCK) |
-| `CHITRA_ERR_BMP_HEADER` | 24 | Malformed BMP file/DIB header (size, planes, offsets), or a deferred V4/V5 header |
+| `CHITRA_ERR_BMP_HEADER` | 24 | Malformed BMP file/DIB header — size outside the {12,40,52,56,108,124} allow-list, `planes != 1`, or a bad offset |
 | `CHITRA_ERR_BMP_DEPTH` | 25 | BMP bpp outside {1,4,8,16,24,32} |
 | `CHITRA_ERR_BMP_COMPRESSION` | 26 | BMP compression chitra refuses — only the embedded `BI_JPEG` / `BI_PNG` streams, which are permanently out of scope |
 | `CHITRA_ERR_BMP_PALETTE` | 27 | BMP palette missing, short, or an index outside it |

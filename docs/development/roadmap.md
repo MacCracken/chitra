@@ -1,10 +1,10 @@
 # chitra — Roadmap
 
-> **Last Updated**: 2026-08-24 (0.5.2)
+> **Last Updated**: 2026-08-24 (0.5.3)
 >
 > Sequencing — what ships, in what order, against what gates. Volatile state
 > (current version, sizes, assertion counts, in-flight work) lives in
-> [`state.md`](state.md), not here. **chitra is pre-v1** (current: 0.5.2) and
+> [`state.md`](state.md), not here. **chitra is pre-v1** (current: 0.5.3) and
 > all four decode paths are **feature-complete for their scope** — every spec-legal
 > PNG depth × color-type × interlace combination, and JFIF **baseline** JPEG
 > (grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0, restart markers), decode to
@@ -32,6 +32,7 @@ Per-release detail, per-bite provenance, and deferrals live in
 | [0.3.0](../../CHANGELOG.md#030--2026-06-27) | **JFIF baseline JPEG → the same canonical RGBA8.** A full baseline (SOF0) sequential-Huffman 8-bit decoder: grayscale (1 comp) + YCbCr (3 comp), chroma subsampling 4:4:4 / 4:2:2 / 4:2:0 (and general Hi,Vi box upsampling), and DRI / RST0–7 restart markers. Pipeline = marker walk (DQT/DHT/SOF0/DRI) → per-component MCU loop (bit-reader + `DECODE`/`RECEIVE`/`EXTEND`, libjpeg islow integer IDCT, level-shift+clamp) → box upsample → BT.601 YCbCr→RGB. New public `chitra_jpeg_decode` / `chitra_jpeg_decode_rgba8` / `chitra_jpeg_check_signature` plus a signature-sniffing `chitra_image_decode` PNG-vs-JPEG router. Output verified **byte-identical to ImageMagick** on a real 16×16 baseline gradient (real Annex K Huffman tables + AC entropy). Non-baseline modes (progressive / arithmetic / 12-bit / hierarchical/lossless / CMYK) reject loud with distinct codes (ADR [0004](../adr/0004-jpeg-decode-model.md)). |
 | [0.3.1](../../CHANGELOG.md#031---2026-08-17) | **Toolchain bump** — cyrius pin 6.2.44 → 6.5.27, matching the rest of the AGNOS desktop stack. No decode change. |
 | [0.3.2](../../CHANGELOG.md#032---2026-08-23) | **Toolchain catch-up + version-probe fix** — cyrius pin 6.5.27 → 6.5.35 with `lib/` re-vendored, clearing the shadow-lib and pin-drift build warnings. Fixes `chitra_version()`, which 0.3.1 left at its 0.3.0 value while bumping every other version source; `make version-check` now gates that literal so it cannot drift silently again. No decode change. |
+| [0.5.3](../../CHANGELOG.md#053---2026-08-24) | **P-1 audit and repair — the first line-by-line review of BMP and GIF.** Both shipped across 0.4.0–0.5.2 with known-answer suites, reference cross-checks and heavy fuzzing, but no guard review. **No memory-safety defect was found** — no reachable OOB, no overflow into an allocation, no unterminated loop — so the sweep weighted **wrong-output** defects as heavily as memory safety, and seven of nine confirmed findings are exactly that. **Every one was confirmed by decoding the same bytes with ImageMagick**, after millions of fuzz cases had passed over them. Repairs: 32-bpp `BI_BITFIELDS` masks were parsed, validated, then **ignored** unless an alpha mask was also declared (red/blue swapped on a real file); mask fields were honoured under `BI_RGB`, where Microsoft says they are meaningless, decoding a V4 file **fully transparent**; `BI_RGB` defaults were injected into bitfields files, making the "at least one colour channel" guard **unreachable dead code**; the GIF transparent index was a stale function-scoped `var` that survived a later GCE revoking it; the GCE block size was never validated though every field after it is addressed by fixed offset; the LZW chain guard was one looser than the buffer it protected; and two gaps left by 0.3.3's own tRNS repairs (sub-byte keying compared at the wrong width, tRNS-before-PLTE accepted). Adds **amplification caps for BMP-RLE and GIF** — a 1,082-byte RLE8 file and a 797-byte GIF each decoded into ~64 MB — with PNG's equivalent documented as **accepted risk**, since there the bomb and a legitimate solid image are the same file shape. +62 test assertions, every repair carrying a regression test verified to fail against the pre-repair code. Audit: [`2026-08-24`](../audit/2026-08-24-audit.md). |
 | [0.5.2](../../CHANGELOG.md#052---2026-08-24) | **BMP channel masks, 16 bpp, and the V4/V5 headers** — the last of the 0.4.0 deferrals, landed as one cut because they are the same feature from three angles. `BI_BITFIELDS` / `BI_ALPHABITFIELDS` masks at 16 and 32 bpp, read from inside the header for V2+ or from the DWORDs after a 40-byte one; 16 bpp (`BI_RGB` defaulting to the **documented** X1R5G5B5, not a convention); and the V2/V3/V4/V5 headers, whose color-space, gamma and ICC fields are **skipped rather than guessed at** — chitra does no color management, so honouring a color space would claim a transform it does not perform. **Retires the 32-bpp alpha heuristic for files that declare a mask** (plain `BI_RGB` still has no mask to read, so the heuristic still governs there). Masks are validated as attacker input: contiguous, non-overlapping, inside the pixel word, at least one color channel. Two real bugs found by reference cross-check and fixed: channel widening is **bit replication**, not `v*255/max` (which was a whole-image color shift), and 16 bpp was falling into the palette path because `bpp < 24` had silently stopped meaning "indexed". New `CHITRA_ERR_BMP_MASK` (33). +155 test assertions, +100 k fuzz cases. **The BMP deferral list is now empty.** |
 | [0.5.1](../../CHANGELOG.md#051---2026-08-24) | **BMP run-length compression.** `BI_RLE8` and `BI_RLE4`, deferred in 0.4.0, now decode: encoded runs, absolute mode with word-boundary padding, end-of-line, end-of-bitmap and delta. As predicted, the **guards outweigh the codec** — termination is structural (every opcode consumes ≥ 2 bytes and the cursor only advances), every write is bounds-checked individually rather than per-run (a run past the row end is **rejected, not clipped**), and delta is checked against both dimensions **at the jump**, since a delta past the end followed by no writes is still malformed. Top-down RLE rejected (MS: top-down DIBs cannot be compressed — the end-of-line escape counts from the bottom); depth mismatch rejected (`BI_RLE8`⇒8 bpp, `BI_RLE4`⇒4 bpp). New `CHITRA_ERR_BMP_RLE` (32) separates "your file is broken" from "chitra won't". +561 test assertions, +200 k fuzz cases incl. a delta-splice mode, +1 benchmark (18 ns/px — slower than uncompressed BMP's 6, since per-opcode branching costs more than the bytes it saves). |
 | [0.5.0](../../CHANGELOG.md#050---2026-08-24) | **GIF → the same canonical RGBA8, first frame only.** The fourth and last common raster format. `src/gif_lzw.cyr` is the **only decompressor chitra implements itself** — `sankoch` has no LZW to delegate to — with the three LZW attack shapes defended at the point each arises: expansion capped at the frame's pixel count, prefix chains that cannot cycle (entries added only with `prefix < index`, plus a size bound), and out-of-range codes rejected with the one legal KwKwK exception handled explicitly. `src/gif.cyr` carries GIF87a/89a headers, global **and** local color tables, the 4-pass row interlace, GCE transparency, and sub-block chains bounded by the input length. First-frame-only is [ADR 0005](../adr/0005-gif-first-frame-only.md): `ChitraImage` keeps its shape, so consumers gain GIF on a re-pin. Fixtures are real ImageMagick GIFs, expectations corroborated by a second independent decoder. A KwKwK ordering bug was found by that cross-check and fixed pre-release. +622 test assertions, +1,259,514 fuzz assertions, +1 benchmark (43 ns/px). |
@@ -64,6 +65,16 @@ surface freeze.
   full guard parity with the kii lineage and no real OOB / overflow gap;
   open items are cosmetic doc-drift only (see audit + the stale enum comments
   in `src/error.cyr`).
+- [x] **Every format audited** — **DONE in 0.5.3.** Four reports now cover the
+  four decode paths: [PNG](../audit/2026-06-26-audit.md),
+  [JPEG](../audit/2026-06-27-audit.md),
+  [the P-1 sweep of both](../audit/2026-08-23-audit.md), and
+  [the P-1 sweep of BMP + GIF](../audit/2026-08-24-audit.md). The last closes
+  the gap 0.4.0–0.5.2 opened by shipping two formats faster than they could be
+  reviewed. Its lesson is worth keeping: **fuzzing does not find wrong output**
+  — seven of the nine confirmed findings were silent mis-decodes that millions
+  of fuzz cases had passed over, and each was caught by cross-checking against
+  ImageMagick.
 - [x] **In-tree fuzz harness at 10⁶ iterations clean** — **DONE in 0.3.3.**
   `fuzz/fuzz_png.fcyr` + `fuzz/fuzz_jpeg.fcyr`, run by `make fuzz` and wired
   into `make test-all`. As of 0.4.0 there is one harness per format (PNG,
@@ -113,11 +124,12 @@ surface freeze.
   kii's PNG re-fold (its v1.2.0 deleted its own decoder and adopted
   `dist/chitra.cyr`; ADR 0006 on kii's side) both build and pass against the
   frozen surface. Track until the freeze lands. **Both pins are currently
-  behind**: mabda at `0.3.1`, kii at `0.3.0`, against a released `0.3.3`. The
-  0.3.3 dist is ABI-identical — no public signature, struct offset or symbol
-  changed — so both bumps are mechanical, but until they land neither consumer
-  has the 0.3.3 decode repairs, and kii is two cuts behind on a path it uses
-  in anger.
+  behind, and further behind than at 0.5.2**: mabda at `0.3.1`, kii at
+  `0.3.0`, against a released `0.5.3`. Every cut since 0.3.1 has been
+  ABI-additive — nothing removed, no offset moved — so both bumps are
+  mechanical, but until they land neither consumer has BMP, GIF, the 0.3.3
+  decode repairs or the nine 0.5.3 ones, and kii is six cuts behind on a path
+  it uses in anger.
 - [x] **Root docs + doc tree complete** — CLAUDE.md, README, CHANGELOG,
   CONTRIBUTING, SECURITY, ADRs ([`../adr/README.md`](../adr/README.md)),
   architecture notes ([`../architecture/README.md`](../architecture/README.md)),
@@ -145,9 +157,12 @@ settled it. **0.5.2 supersedes this**: once the declared masks are read, the
 heuristic is replaced by the header's own answer and stops being a guess.
 
 **The 0.5.x arc** — 0.5.0 added the last of the four common raster formats;
-0.5.1 and 0.5.2 pay off the BMP deferrals from 0.4.0. Splitting the BMP work
-into two cuts follows the bite discipline: RLE is a decode loop, masks are a
-header feature, and they share nothing.
+0.5.1 and 0.5.2 pay off the BMP deferrals from 0.4.0; 0.5.3 pays off the
+**review** debt all three incurred. Splitting the BMP work into two cuts
+follows the bite discipline: RLE is a decode loop, masks are a header feature,
+and they share nothing. Ending the arc with an audit was not planned at 0.4.0
+— it became obviously right once 0.5.2 found two silent mis-decodes in code
+that had already passed half a million fuzz cases.
 
 ### ~~0.5.0 — GIF~~ — SHIPPED
 
@@ -199,6 +214,32 @@ meaning "indexed" the moment 16 bpp was added.
 
 **The BMP deferral list is now empty.** `BI_JPEG` / `BI_PNG` are not in this
 arc, or any arc — see *Out of scope*.
+
+### ~~0.5.3 — P-1 audit and repair (BMP + GIF)~~ — SHIPPED
+
+See the *Shipped* index above, and the report at
+[`../audit/2026-08-24-audit.md`](../audit/2026-08-24-audit.md).
+
+Three things from this cut are worth carrying forward as durable lessons
+rather than release notes:
+
+- **Fuzzing does not find wrong output.** Four harnesses and ~2.2 M cases had
+  run over this code; seven of the nine confirmed findings were silent
+  mis-decodes none of them could flag, because none of them crash. The check
+  that found every one was decoding the same bytes with ImageMagick. The
+  practical consequence: **a reference cross-check is not optional coverage**,
+  it is the only instrument that sees this class of defect.
+- **A guard that cannot fire is worse than no guard**, because it also
+  documents a protection you do not have. The BMP "at least one colour
+  channel" check was unreachable dead code from the day it shipped — the
+  defaults injected upstream erased exactly the condition it tested — and the
+  0.5.2 CHANGELOG advertised it anyway. Reachability is now part of what
+  "verified to fail against the pre-repair code" has to mean.
+- **A cap must be measured on what the attacker spent, not what they
+  supplied.** The first BMP amplification cap was defeated by appending
+  padding: junk bytes raised the attacker's own allowance. Measuring bytes
+  actually *consumed* fixes it, and the same question — *what exactly is the
+  denominator?* — should be asked of any future ratio guard.
 
 ### 0.6.0 — deferred JPEG geometry + surface work
 

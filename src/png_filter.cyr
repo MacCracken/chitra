@@ -470,6 +470,17 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
                     # color type is known.
                     if (seen_trns == 1) { store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK)); return 0; }
                     if (seen_idat == 1) { store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK)); return 0; }
+                    # ...and for a PALETTE image it must FOLLOW PLTE, because
+                    # its entries are per-palette-entry alphas and mean nothing
+                    # before the palette they index exists. The comment above
+                    # has claimed this rule since 0.3.3; the code enforced only
+                    # the other two until 0.5.3.
+                    if (load64(raw + RAW_COLOR_TYPE_OFFSET) == 3) {
+                        if (seen_plte == 0) {
+                            store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
+                            return 0;
+                        }
+                    }
                     store64(raw + RAW_TRNS_OFF_OFFSET, data_off);
                     store64(raw + RAW_TRNS_LEN_OFFSET, chunk_len);
                     seen_trns = 1;

@@ -3236,6 +3236,248 @@ fn fx_bad_filter_method(len_out): i64 {
     return b;
 }
 
+fn fx_gray4_oob_key(len_out): i64 {
+    var b = alloc(82);
+    store64(len_out, 82);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 4);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 1);
+    store8(b + 24, 4);
+    store8(b + 25, 0);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 25);
+    store8(b + 30, 167);
+    store8(b + 31, 189);
+    store8(b + 32, 16);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 2);
+    store8(b + 37, 116);
+    store8(b + 38, 82);
+    store8(b + 39, 78);
+    store8(b + 40, 83);
+    store8(b + 41, 1);
+    store8(b + 42, 5);
+    store8(b + 43, 31);
+    store8(b + 44, 226);
+    store8(b + 45, 8);
+    store8(b + 46, 246);
+    store8(b + 47, 0);
+    store8(b + 48, 0);
+    store8(b + 49, 0);
+    store8(b + 50, 11);
+    store8(b + 51, 73);
+    store8(b + 52, 68);
+    store8(b + 53, 65);
+    store8(b + 54, 84);
+    store8(b + 55, 120);
+    store8(b + 56, 218);
+    store8(b + 57, 99);
+    store8(b + 58, 96);
+    store8(b + 59, 93);
+    store8(b + 60, 15);
+    store8(b + 61, 0);
+    store8(b + 62, 0);
+    store8(b + 63, 188);
+    store8(b + 64, 0);
+    store8(b + 65, 181);
+    store8(b + 66, 17);
+    store8(b + 67, 229);
+    store8(b + 68, 245);
+    store8(b + 69, 123);
+    store8(b + 70, 0);
+    store8(b + 71, 0);
+    store8(b + 72, 0);
+    store8(b + 73, 0);
+    store8(b + 74, 73);
+    store8(b + 75, 69);
+    store8(b + 76, 78);
+    store8(b + 77, 68);
+    store8(b + 78, 174);
+    store8(b + 79, 66);
+    store8(b + 80, 96);
+    store8(b + 81, 130);
+    return b;
+}
+
+fn fx_pal_trns_before_plte(len_out): i64 {
+    var b = alloc(106);
+    store64(len_out, 106);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 4);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 1);
+    store8(b + 24, 4);
+    store8(b + 25, 3);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 11);
+    store8(b + 30, 18);
+    store8(b + 31, 18);
+    store8(b + 32, 254);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 2);
+    store8(b + 37, 116);
+    store8(b + 38, 82);
+    store8(b + 39, 78);
+    store8(b + 40, 83);
+    store8(b + 41, 0);
+    store8(b + 42, 128);
+    store8(b + 43, 155);
+    store8(b + 44, 43);
+    store8(b + 45, 78);
+    store8(b + 46, 24);
+    store8(b + 47, 0);
+    store8(b + 48, 0);
+    store8(b + 49, 0);
+    store8(b + 50, 12);
+    store8(b + 51, 80);
+    store8(b + 52, 76);
+    store8(b + 53, 84);
+    store8(b + 54, 69);
+    store8(b + 55, 255);
+    store8(b + 56, 0);
+    store8(b + 57, 0);
+    store8(b + 58, 0);
+    store8(b + 59, 255);
+    store8(b + 60, 0);
+    store8(b + 61, 0);
+    store8(b + 62, 0);
+    store8(b + 63, 255);
+    store8(b + 64, 255);
+    store8(b + 65, 255);
+    store8(b + 66, 0);
+    store8(b + 67, 214);
+    store8(b + 68, 2);
+    store8(b + 69, 143);
+    store8(b + 70, 123);
+    store8(b + 71, 0);
+    store8(b + 72, 0);
+    store8(b + 73, 0);
+    store8(b + 74, 11);
+    store8(b + 75, 73);
+    store8(b + 76, 68);
+    store8(b + 77, 65);
+    store8(b + 78, 84);
+    store8(b + 79, 120);
+    store8(b + 80, 218);
+    store8(b + 81, 99);
+    store8(b + 82, 96);
+    store8(b + 83, 84);
+    store8(b + 84, 6);
+    store8(b + 85, 0);
+    store8(b + 86, 0);
+    store8(b + 87, 40);
+    store8(b + 88, 0);
+    store8(b + 89, 37);
+    store8(b + 90, 169);
+    store8(b + 91, 103);
+    store8(b + 92, 98);
+    store8(b + 93, 8);
+    store8(b + 94, 0);
+    store8(b + 95, 0);
+    store8(b + 96, 0);
+    store8(b + 97, 0);
+    store8(b + 98, 73);
+    store8(b + 99, 69);
+    store8(b + 100, 78);
+    store8(b + 101, 68);
+    store8(b + 102, 174);
+    store8(b + 103, 66);
+    store8(b + 104, 96);
+    store8(b + 105, 130);
+    return b;
+}
+
+# ---- 0.5.3 audit regressions ------------------------------------------
+# 0.3.3's H-1 made the depth-8/16 tRNS key a FULL-WIDTH compare, but the
+# sub-byte grayscale path kept reading only the low byte. A key of 0x0105 names
+# no 4-bit sample (max 15), yet the low byte 5 aliased onto a real one and
+# turned those pixels transparent. Assembling both bytes makes it match
+# nothing, which is correct. ImageMagick reaches the same outcome by a
+# different route — it warns "tRNS chunk has out-of-range samples for
+# bit_depth" and ignores the key.
+fn test_subbyte_trns_out_of_range_key() {
+    var lo = 0;
+    var b = fx_gray4_oob_key(&lo);
+    var err = 0;
+    var img = chitra_png_decode(b, lo, &err);
+    assert(img != 0, "gray4 with an out-of-range tRNS key decodes");
+    var px = chitra_image_pixels(img);
+    # samples 0,5,10,15 -> scaled x17; NONE may be keyed transparent
+    _assert_px(px, 0, 0, 0, 0, 255, "oob-key px0 opaque");
+    _assert_px(px, 1, 85, 85, 85, 255, "oob-key px1 (sample 5) NOT keyed");
+    _assert_px(px, 2, 170, 170, 170, 255, "oob-key px2 opaque");
+    _assert_px(px, 3, 255, 255, 255, 255, "oob-key px3 opaque");
+    return 0;
+}
+
+# Spec § 5.6 / § 11.3.2: for a palette image tRNS must FOLLOW PLTE — its
+# entries are per-palette-entry alphas and mean nothing before the palette they
+# index exists. 0.3.3's comment claimed this rule; the code enforced only
+# at-most-once and before-IDAT until 0.5.3. Note ImageMagick TOLERATES this
+# ordering; chitra rejects it, consistent with its posture elsewhere (it also
+# rejects unknown critical chunks per § 5.4, which many decoders skip).
+fn test_palette_trns_before_plte_rejected() {
+    var lo = 0;
+    var b = fx_pal_trns_before_plte(&lo);
+    var err = 0;
+    var img = chitra_png_decode(b, lo, &err);
+    assert(img == 0, "tRNS before PLTE rejected");
+    assert(err != 0, "tRNS before PLTE sets err_out");
+    if (err != 0) {
+        assert_eq(chitra_err_code(err), CHITRA_ERR_BAD_CHUNK, "tRNS before PLTE -> BAD_CHUNK");
+    }
+    return 0;
+}
+
 fn main() {
     test_cursor_bounds();
     test_signature();
@@ -3272,6 +3514,8 @@ fn main() {
     test_reject_trns_after_idat();
     test_reject_unknown_critical_chunk();
     test_unknown_ancillary_chunk_still_decodes();
+    test_subbyte_trns_out_of_range_key();
+    test_palette_trns_before_plte_rejected();
     test_reject_palette_depth16();
     test_reject_no_idat();
     test_reject_iend_nonzero();

@@ -1,6 +1,6 @@
 # chitra
 
-Version: 0.5.2
+Version: 0.5.3
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder, a sibling AGNOS package in the mould of `sakshi` /
@@ -56,10 +56,14 @@ attacker-controlled data.
 Untrusted bytes are the whole input surface, so the guards are the product:
 
 - **Bounds on every read**, a per-chunk CRC-32 on PNG, and
-  decompression-bomb caps on both compressed paths — PNG's inflate ratio and
+  decompression-bomb caps on **every** compressed path — PNG's inflate ratio,
   JPEG's output:input amplification cap (which JPEG needs *more*, because its
   bit-reader zero-pads past end-of-data and so needs no payload at all to
-  drive a full-size decode).
+  drive a full-size decode), and, since 0.5.3, the same for BMP-RLE and GIF,
+  where a 1,082-byte file and a 797-byte file respectively decoded into
+  ~64 MB. PNG's remaining amplification case is documented as **accepted
+  risk** rather than capped, because there the bomb and a legitimate solid
+  image are the same file shape.
 - **`make fuzz`** — one harness per format, **~2.2 M adversarial decode cases,
   7,482,610 assertions, 0 failures**. They assert *both* that the decoder
   survives and that it honours the documented `(0, *err_out set)` contract —
@@ -68,9 +72,14 @@ Untrusted bytes are the whole input surface, so the guards are the product:
   [CSV history](bench-history.csv). BMP **6 ns/px** (RLE8 **18**, where
   per-opcode branching costs more than the bytes it saves), JPEG grayscale and
   GIF **43 ns/px**, PNG RGBA8 **83 ns/px** at 256×256.
-- Three security audits in [`docs/audit/`](docs/audit/); the most recent is a
-  ten-lens adversarial sweep of both compressed paths that found **no
-  memory-safety defect**.
+- **Four security audits** in [`docs/audit/`](docs/audit/) — one per decode
+  path, the last (0.5.3) covering BMP and GIF. None found a memory-safety
+  defect. What they did find is the reason the reference cross-checks are not
+  optional: **seven of nine findings in the 0.5.3 sweep were silent wrong
+  output** — a real 32-bpp file decoding with red and blue swapped, a V4 file
+  decoding fully transparent — that millions of fuzz cases had passed over,
+  because none of them crash. Every one was caught by decoding the same bytes
+  with ImageMagick.
 
 Per-release detail — including the four input classes 0.3.3 began rejecting
 deliberately — is in [`CHANGELOG.md`](CHANGELOG.md). Sequencing is in
@@ -109,7 +118,7 @@ All deps are pinned in `cyrius.cyml`; the toolchain pin is
 ```bash
 cyrius deps          # resolve stdlib + sankoch + thread into lib/
 make build           # link-check the include chain (→ build/chitra_smoke)
-make test            # 2416 assertions across tests/tcyr/
+make test            # 2478 assertions across tests/tcyr/
 make fuzz            # ~2.2 M adversarial decode cases (fuzz/*.fcyr)
 make bench           # 17 decode benchmarks (tests/bcyr/chitra.bcyr)
 make dist            # regenerate dist/chitra.cyr — the artifact consumers link

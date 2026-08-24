@@ -99,7 +99,7 @@ Place each in the matching `tests/tcyr/` suite — `error.tcyr` (error paths),
 `interlace.tcyr` (Adam7), `jpeg.tcyr` (baseline JPEG decode + reject paths),
 `png.tcyr` (the core PNG decode matrix), or `subbyte.tcyr` (1/2/4-bit
 grayscale/palette). The suites are globbed by `make test`; each is a standalone
-`main()`. The current baseline is **2,416 assertions across 7 suites** — PRs that
+`main()`. The current baseline is **2,478 assertions across 7 suites** — PRs that
 lower coverage will be asked to add it.
 Confirm the count with `make count-assertions`.
 
@@ -115,12 +115,12 @@ send a decode change:
   change the generator, keep the verification honest. Record with
   `make bench-record`; numbers are host-dependent, so compare within a host.
 
-> **Wanted contribution:** all four common raster formats now decode, so the
-> remaining v1.0 work is the **public API + ABI freeze**, the BMP deferrals
-> (0.5.1/0.5.2), and a line-by-line audit of BMP and GIF, neither of which has
-> had one — see
-> [`docs/development/roadmap.md`](docs/development/roadmap.md). Open an issue
-> first to agree on shape.
+> **Wanted contribution:** all four common raster formats now decode, the BMP
+> deferrals are paid off (0.5.1/0.5.2), and every decode path has now been
+> audited (0.5.3). The remaining v1.0 work is the **public API + ABI freeze**,
+> the deferred JPEG § A.2 geometry, and a streaming / byte-budget decode API —
+> see [`docs/development/roadmap.md`](docs/development/roadmap.md). Open an
+> issue first to agree on shape.
 
 ## Modules and the dist bundle
 

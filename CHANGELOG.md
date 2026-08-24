@@ -5,6 +5,109 @@ All notable changes to chitra are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.3] - 2026-08-24
+
+**P-1 audit and repair cut — the first line-by-line audit of BMP and GIF.**
+Those two formats shipped across 0.4.0–0.5.2 with known-answer suites,
+reference cross-checks and heavy fuzzing, but no guard review. Full report:
+[`docs/audit/2026-08-24-audit.md`](docs/audit/2026-08-24-audit.md).
+
+**No memory-safety defect was found** — no OOB access reachable from a public
+entry, no integer overflow into an allocation, no unterminated loop. That was
+the expected shape: 0.5.2 alone had surfaced two silent BMP bugs that months of
+fuzzing missed because neither was a crash, so this sweep weighted
+**wrong-output** defects as heavily as memory safety. Seven of the nine
+confirmed findings are exactly that.
+
+**Every wrong-output finding was confirmed by decoding the same bytes with
+ImageMagick.** The fuzzers had run millions of cases over this code without
+flagging any of them.
+
+**2,478 test assertions** (up from 2,416), **7,482,610 fuzz assertions**, 0
+failures. Every repair carries a regression test verified to fail against the
+pre-repair code.
+
+### Fixed
+
+- **32-bpp `BI_BITFIELDS` masks were parsed, validated, then ignored** unless
+  the file also declared an alpha mask. A file whose red mask is the low byte
+  decoded **with red and blue swapped** — chitra returned `(50,100,200)` where
+  ImageMagick returns `(200,100,50)`. Masks now govern both packed depths
+  unconditionally; whether the file also declares alpha is a separate question.
+- **Mask fields were honoured under `BI_RGB`, rendering images invisible.**
+  Microsoft is explicit that the V4/V5 masks are *"valid only if compression is
+  BI_BITFIELDS"*, and real writers populate them anyway. A V4 `BI_RGB` file
+  with a stale alpha mask over padding bytes decoded **fully transparent**.
+  Masks are now read only under `BI_BITFIELDS` / `BI_ALPHABITFIELDS`. Present
+  since 0.5.2.
+- **`BI_RGB` default masks were injected into bitfields files**, inventing a
+  layout the file never declared — and making the **"at least one colour
+  channel" guard unreachable dead code**, because the defaults erased exactly
+  the condition it tests. The 0.5.2 CHANGELOG claimed that guard rejects such
+  files; it could not fire. Defaults now apply only when the file declared no
+  masks, and a bitfields file declaring no colour channel rejects with
+  `CHITRA_ERR_BMP_MASK`.
+- **GIF transparent index was a stale function-scoped var.** A Graphic Control
+  Extension applies to the graphic that follows it, so the last one before the
+  image descriptor governs — including one that turns transparency **off**. The
+  index was only ever set, never cleared, so an earlier GCE's value survived a
+  later GCE that revoked it, keying pixels the file said were opaque. This is
+  the `var`-is-function-scoped hazard, and what it costs in a long function.
+- **GIF Graphic Control Extension block size was never validated.** It is fixed
+  at 4 and every field after it was addressed by a fixed offset; a GCE
+  declaring another size had chitra read the packed byte and transparent index
+  from bytes that are not those fields.
+- **Sub-byte grayscale tRNS compared the key at the wrong width** — a gap in
+  0.3.3's H-1 repair, which fixed depth 8/16 but not the sub-byte path. A key
+  of `0x0105` names no 4-bit sample, yet its low byte aliased onto a real one
+  and keyed those pixels transparent.
+- **tRNS ordering enforced two of the three rules its own comment claimed** — a
+  gap in 0.3.3's H-8 repair. For a palette image tRNS must **follow PLTE**; its
+  entries are per-palette-entry alphas and mean nothing before the palette
+  exists (§ 5.6 / § 11.3.2). Note ImageMagick tolerates this ordering; chitra
+  rejects it, consistent with its § 5.4 posture.
+- **The LZW prefix-chain guard was looser than the buffer it protected**,
+  permitting up to 4097 stores into a 4096-byte buffer. Unreachable in practice
+  (the maximum real chain is ~4092) but a guard one looser than its buffer is a
+  latent overflow, not a margin. The bound is now on the index itself.
+- **A wild pointer on the RLE path.** `srow = data + y * stride` was computed
+  where `stride` is meaningless, producing a pointer far past the input. Never
+  dereferenced — but a pointer that survives only by never being used is
+  latent, not safe.
+
+### Security
+
+- **Amplification caps for BMP-RLE and GIF.** PNG bounds inflate output against
+  IDAT input and JPEG has had an output:input cap since 0.3.3; neither newer
+  format got one. Demonstrated rather than argued: a **1,082-byte** RLE8 file
+  and a **797-byte** GIF each declaring 4096×4096 decoded into ~64 MB the bump
+  allocator never reclaims. New `CHITRA_MAX_BMP_RLE_RATIO` (4096:1) and
+  `CHITRA_MAX_GIF_RATIO` (16384:1), each sized against the format's own best
+  case — a solid 4096×4096 needs ~137 KB of RLE or ~13 KB of LZW, leaving 8.5×
+  and 3.2× headroom. The GIF cap is deliberately looser than PNG's 1100:1
+  because **LZW's legitimate compression of degenerate content is close to the
+  bomb ratio**; it bounds the extreme case, not the merely aggressive one.
+- Two follow-on defects **in the new caps** were found and fixed before
+  release: padding defeated the BMP cap (appending 512 KB of junk raised the
+  attacker's own allowance, so it now measures bytes actually **consumed**),
+  and the GIF cap fired *after* the allocation it exists to prevent.
+
+### Notes
+
+- **Accepted risk, stated rather than quietly fixed:** a 2,116-byte 1-bit PNG
+  declaring 4096×4096 decodes to 64 MB, and `CHITRA_MAX_INFLATE_RATIO` does not
+  catch it because it bounds *inflated:IDAT* while the final RGBA is 32× the
+  inflated scanlines. This is **not** repaired: that file is a complete, valid
+  encoding of a solid image, so the bomb and the legitimate image are the same
+  file shape and a ratio cap would reject valid PNGs. What distinguishes the
+  BMP/GIF cases is that those bombs supplied *nothing* — 2 and 4 bytes for
+  16.7 M pixels. The operative bound for PNG is `CHITRA_MAX_PIXELS`.
+- No PNG or JPEG regression: all nine 2026-08-23 repairs are intact, and
+  growing the router from two formats to four did not change routing for any
+  PNG or JPEG input.
+- `scripts/check-anchors.sh` caught three more drifted code citations
+  introduced by this cut's own edits, on its second release since being added.
+
 ## [0.5.2] - 2026-08-24
 
 **BMP channel masks, 16 bpp, and the V4/V5 headers.** The last of the 0.4.0

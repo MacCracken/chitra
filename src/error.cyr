@@ -40,10 +40,10 @@ enum ChitraErrCode {
     CHITRA_ERR_JPEG_PRECISION   = 21;  # deferred: sample precision != 8 (12-bit) — 8-bit-only in 0.3.0
     CHITRA_ERR_JPEG_MODE        = 22;  # deferred: hierarchical/lossless/differential SOF modes
     CHITRA_ERR_JPEG_COMPONENTS  = 23;  # deferred: unsupported component count (CMYK/YCCK 4-component)
-    # ---- BMP (chitra 0.4.0, BI_RGB uncompressed) ----
+    # ---- BMP (0.4.0 BI_RGB; + RLE 0.5.1; + BITFIELDS/16 bpp/V4-V5 0.5.2) ----
     CHITRA_ERR_BMP_HEADER       = 24;  # malformed file header or DIB header (size/planes/offsets)
-    CHITRA_ERR_BMP_DEPTH        = 25;  # bpp not in {1,4,8,24,32} (16 deferred)
-    CHITRA_ERR_BMP_COMPRESSION  = 26;  # deferred: RLE4/RLE8, BITFIELDS, embedded JPEG/PNG
+    CHITRA_ERR_BMP_DEPTH        = 25;  # bpp not in {1,4,8,16,24,32}
+    CHITRA_ERR_BMP_COMPRESSION  = 26;  # refused permanently: BI_JPEG / BI_PNG (a decoder re-entering itself)
     CHITRA_ERR_BMP_PALETTE      = 27;  # palette missing, short, or an index outside it
     # ---- GIF (chitra 0.5.0, first frame only — see ADR 0005) ----
     CHITRA_ERR_GIF_HEADER       = 28;  # bad signature/version, screen or image descriptor

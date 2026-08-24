@@ -112,12 +112,12 @@ the audit ([`../audit/2026-06-26-audit.md`](../audit/2026-06-26-audit.md)).
 | Per-chunk CRC-32 (every chunk) | `src/png_filter.cyr:431`-`440` | `CHITRA_ERR_CRC` |
 | IDAT-fusing accumulator cap | `src/png_filter.cyr:445`-`448` | `CHITRA_ERR_OOM` |
 | PLTE: single, pre-IDAT, ≤768, multiple-of-3 | `src/png_filter.cyr:454`-`460` | `CHITRA_ERR_BAD_CHUNK` |
-| IEND zero-length enforcement | `src/png_filter.cyr:495`-`502` | `CHITRA_ERR_BAD_CHUNK` |
-| Derived inflated/pixel-size caps (Adam7-aware) | `src/png_filter.cyr:532`-`539` | `CHITRA_ERR_DIMENSIONS` |
-| Zero-IDAT structural reject | `src/png_filter.cyr:545` | `CHITRA_ERR_NO_IDAT` |
-| Decompression-bomb ratio cap (1100:1) | `src/png_filter.cyr:551`-`554` | `CHITRA_ERR_DIMENSIONS` |
-| Inflate failure + exact-size second line | `src/png_filter.cyr:586` | `CHITRA_ERR_INFLATE` |
-| Per-row filter-byte allow-list `{0..4}` | `_chitra_unfilter_row` (`src/png_filter.cyr:39`) → `:604` / deinterlace `:312` | `CHITRA_ERR_FILTER` |
+| IEND zero-length enforcement | `src/png_filter.cyr:506`-`513` | `CHITRA_ERR_BAD_CHUNK` |
+| Derived inflated/pixel-size caps (Adam7-aware) | `src/png_filter.cyr:543`-`550` | `CHITRA_ERR_DIMENSIONS` |
+| Zero-IDAT structural reject | `src/png_filter.cyr:556` | `CHITRA_ERR_NO_IDAT` |
+| Decompression-bomb ratio cap (1100:1) | `src/png_filter.cyr:562`-`565` | `CHITRA_ERR_DIMENSIONS` |
+| Inflate failure + exact-size second line | `src/png_filter.cyr:597` | `CHITRA_ERR_INFLATE` |
+| Per-row filter-byte allow-list `{0..4}` | `_chitra_unfilter_row` (`src/png_filter.cyr:39`) → `:615` / deinterlace `:312` | `CHITRA_ERR_FILTER` |
 | Color-pass re-assert of dimension caps | `src/png_color.cyr:80`-`88` | `CHITRA_ERR_DIMENSIONS` |
 | Scanline-buffer sufficiency check | `src/png_color.cyr:89`-`92` | `CHITRA_ERR_DIMENSIONS` |
 | tRNS span re-validated within `(src, len)` | `src/png_color.cyr:103`-`106` | `CHITRA_ERR_BAD_CHUNK` |
@@ -153,6 +153,43 @@ allocator that never reclaims (see
 [`../architecture/003-bump-allocator-no-free.md`](../architecture/003-bump-allocator-no-free.md)),
 that made resource exhaustion **cumulative across decodes** — a handful of
 ~150-byte files, not a stream of large ones.
+
+### Added in 0.5.3 (the [2026-08-24 P-1 sweep](../audit/2026-08-24-audit.md))
+
+The sweep that audited BMP and GIF found the amplification posture was
+**format-by-format rather than uniform** — PNG had a ratio cap from 0.1.0 and
+JPEG gained one in 0.3.3, but the two formats added since had none:
+
+| Guard | Code | Error |
+|---|---|---|
+| BMP-RLE amplification cap `CHITRA_MAX_BMP_RLE_RATIO` (4096:1), measured on bytes **consumed** | `src/bmp.cyr` `_bmp_decode_rle` | `CHITRA_ERR_DIMENSIONS` |
+| GIF amplification cap `CHITRA_MAX_GIF_RATIO` (16384:1), checked **before** the index allocation | `src/gif.cyr` block walk | `CHITRA_ERR_DIMENSIONS` |
+| GCE block size validated (fixed at 4; every field after it is a fixed offset) | `src/gif.cyr` GCE parse | `CHITRA_ERR_GIF_HEADER` |
+| LZW prefix-chain bound moved onto the write index itself, not a parallel counter | `src/gif_lzw.cyr` chain walk | `CHITRA_ERR_GIF_LZW` |
+| `BI_BITFIELDS` masks govern both packed depths, and are read **only** under `BI_BITFIELDS` | `src/bmp.cyr` header parse | `CHITRA_ERR_BMP_MASK` (when invalid) |
+
+Two things about the caps generalise past this cut. **The denominator is the
+guard**: the first BMP cap measured file size, so appending 512 KB of padding
+raised the attacker's own allowance — it must measure what the attacker
+actually spent. And **a cap must precede the allocation it exists to prevent**;
+the first GIF cap fired after it.
+
+The **PNG** analogue was examined and deliberately **not** added. A 2,116-byte
+1-bit PNG declaring 4096×4096 decodes to 64 MB, and `CHITRA_MAX_INFLATE_RATIO`
+does not catch it because it bounds *inflated:IDAT* while the RGBA8 output is
+32× the inflated scanlines. But that file is a complete, valid encoding of a
+solid image: the bomb and the legitimate image are the same file shape, so an
+output-ratio cap would reject valid PNGs. What made the BMP and GIF cases
+different is that those bombs supplied *nothing* — 2 and 4 bytes for 16.7 M
+pixels. The operative PNG bound stays `CHITRA_MAX_PIXELS`, and this is recorded
+as **accepted risk** in [`../../SECURITY.md`](../../SECURITY.md) rather than
+left implicit.
+
+The sweep's other seven findings were **wrong output, not memory safety** —
+which is the durable lesson for this ADR: the perimeter model here is about
+what a hostile file can *do to the process*, and it has nothing to say about a
+file that decodes safely into the wrong pixels. Fuzzing tests the former; only
+a reference cross-check tests the latter.
 
 Test coverage exercises each cap and rejection path; the suite counts
 live in [`../development/state.md`](../development/state.md). As of 0.3.3
@@ -207,7 +244,11 @@ tracked gaps in this ADR's original text; both are now closed.
   audit pass with the shape of
   [`../audit/2026-06-26-audit.md`](../audit/2026-06-26-audit.md). The
   spec-only-feature-set discipline in [`../../CLAUDE.md`](../../CLAUDE.md)
-  enforces this.
+  enforces this. **0.4.0–0.5.2 tested that claim and it held only in
+  arrears**: two formats shipped before either was audited, and the audit
+  that caught up ([2026-08-24](../audit/2026-08-24-audit.md)) found nine real
+  findings including two missing amplification caps. The discipline is sound;
+  what 0.5.3 adds is that the audit is part of the format, not a follow-up.
 - **sankoch upstream items are tracked, not owned.** chitra's pre-inflate
   caps reduce the blast radius of any sankoch-internal inflate bug, but a
   substrate flaw remains an upstream finding; tracked in

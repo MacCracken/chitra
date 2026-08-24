@@ -49,10 +49,18 @@ fn _gif_br_init(st, base, len): i64 {
     return 0;
 }
 
-# Read `n` bits LSB-first. Returns -1 when the stream is exhausted — a truncated
-# LZW stream is a rejection, not a zero-pad. (JPEG zero-pads past end-of-data
-# because a truncated scan still has a well-defined block to finish; LZW has no
-# such notion, and padding would fabricate dictionary entries.)
+# Read `n` bits LSB-first. Returns -1 when the stream is exhausted.
+#
+# The DECODER treats that as a clean end rather than an error, because real
+# encoders in the wild omit the End code — but note what it does NOT do: it
+# never zero-pads. JPEG zero-pads past end-of-data because a truncated scan
+# still has a well-defined block to finish; LZW has no such notion, and padding
+# would fabricate dictionary entries out of nothing.
+#
+# The consequence is that a stream can legitimately produce FEWER pixels than
+# the frame holds, and gif.cyr zero-fills the remainder. What stops that being
+# an amplification vector — a two-byte stream claiming a 4096x4096 frame — is
+# the output:input cap in gif.cyr, not this function.
 fn _gif_br_bits(st, n): i64 {
     var base = load64(st + LZ_BASE);
     var len = load64(st + LZ_LEN);
@@ -164,15 +172,26 @@ fn _gif_lzw_decode(data, data_len, min_code_size, out, out_cap, err_out): i64 {
                                 cur = prev;
                                 guard = 0;
                                 while (cur >= clear_code) {
-                                    if (guard > GIF_LZW_MAX_CODES) {
+                                    if (guard >= GIF_LZW_MAX_CODES) {
                                         rc = CHITRA_ERR_GIF_LZW;
                                         cur = 0 - 1;
                                     }
                                     if (cur >= clear_code) {
-                                        store8(chain + sp, load64(suffix + cur * 8));
-                                        sp = sp + 1;
-                                        cur = load64(prefix + cur * 8);
-                                        guard = guard + 1;
+                                        # Bound on `sp` itself, not merely on
+                                        # the walk length: sp is what indexes
+                                        # `chain`, and the guard counter was
+                                        # one looser than the buffer it was
+                                        # protecting.
+                                        if (sp >= GIF_LZW_MAX_CODES) {
+                                            rc = CHITRA_ERR_GIF_LZW;
+                                            cur = 0 - 1;
+                                        }
+                                        if (cur >= clear_code) {
+                                            store8(chain + sp, load64(suffix + cur * 8));
+                                            sp = sp + 1;
+                                            cur = load64(prefix + cur * 8);
+                                            guard = guard + 1;
+                                        }
                                     }
                                 }
                                 if (rc != 0) { done = 1; }
@@ -190,15 +209,21 @@ fn _gif_lzw_decode(data, data_len, min_code_size, out, out_cap, err_out): i64 {
                             cur = code;
                             guard = 0;
                             while (cur >= clear_code) {
-                                if (guard > GIF_LZW_MAX_CODES) {
+                                if (guard >= GIF_LZW_MAX_CODES) {
                                     rc = CHITRA_ERR_GIF_LZW;
                                     cur = 0 - 1;
                                 }
                                 if (cur >= clear_code) {
-                                    store8(chain + sp, load64(suffix + cur * 8));
-                                    sp = sp + 1;
-                                    cur = load64(prefix + cur * 8);
-                                    guard = guard + 1;
+                                    if (sp >= GIF_LZW_MAX_CODES) {
+                                        rc = CHITRA_ERR_GIF_LZW;
+                                        cur = 0 - 1;
+                                    }
+                                    if (cur >= clear_code) {
+                                        store8(chain + sp, load64(suffix + cur * 8));
+                                        sp = sp + 1;
+                                        cur = load64(prefix + cur * 8);
+                                        guard = guard + 1;
+                                    }
                                 }
                             }
                             if (rc != 0) { done = 1; }

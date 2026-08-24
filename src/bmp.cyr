@@ -52,6 +52,21 @@ var BMP_BI_JPEG      = 4;
 var BMP_BI_PNG       = 5;
 var BMP_BI_ALPHABITFIELDS = 6;    # RGBA masks following a 40-byte header
 
+# Output:input amplification ceiling for the RUN-LENGTH modes only.
+#
+# BI_RGB needs no such cap: its pixel span is exactly stride*height and the
+# header check `data_off + stride*h > len` already forces the file to carry the
+# bytes it claims. An RLE stream has no computable length — that is the point
+# of it — so nothing bounded a ~1 KB file declaring 4096x4096 from allocating
+# ~84 MB that the bump allocator never reclaims.
+#
+# 4096:1 is sized against the format's own best case rather than picked round.
+# An RLE opcode is two bytes and encodes at most 255 pixels, so a SOLID
+# 4096x4096 image still needs ~137 KB of stream (480:1). The cap admits
+# anything down to 16 KB, leaving ~8x headroom over that floor while rejecting
+# the observed 1082-byte bomb by a factor of sixteen.
+var CHITRA_MAX_BMP_RLE_RATIO = 4096;
+
 # ================================================================
 # Little-endian readers. BMP is little-endian throughout, which is the
 # opposite of PNG (big-endian) and JPEG (big-endian) — hence local helpers
@@ -404,23 +419,33 @@ fn _bmp_parse_header(src, len, err_out): i64 {
     var mask_g = 0;
     var mask_b = 0;
     var mask_a = 0;
-    if (has_mask_fields == 1) {
-        mask_r = _bmp_u32_le(dib + 40);
-        mask_g = _bmp_u32_le(dib + 44);
-        mask_b = _bmp_u32_le(dib + 48);
-        if (dib_size >= BMP_V3_HEADER_SIZE) { mask_a = _bmp_u32_le(dib + 52); }
-    } else {
-        if (is_bitfields == 1) {
-            var nmask = 3;
-            if (compression == BMP_BI_ALPHABITFIELDS) { nmask = 4; }
-            if (BMP_FILE_HEADER_SIZE + dib_size + nmask * 4 > len) {
-                store64(err_out, chitra_err(CHITRA_ERR_TRUNCATED));
-                return 0;
+    #
+    # CRITICAL: the mask fields are read ONLY under BI_BITFIELDS. Microsoft is
+    # explicit that bV4RedMask and friends are "valid only if bV4V4Compression
+    # is set to BI_BITFIELDS", and real writers emit a V4/V5 header with those
+    # fields populated even for BI_RGB. Honouring them there is not a harmless
+    # extra: a stale alpha mask over pixels whose fourth byte is padding
+    # renders the ENTIRE IMAGE transparent. Under BI_RGB the documented
+    # defaults below are the only correct source of layout.
+    if (is_bitfields == 1) {
+        if (has_mask_fields == 1) {
+            mask_r = _bmp_u32_le(dib + 40);
+            mask_g = _bmp_u32_le(dib + 44);
+            mask_b = _bmp_u32_le(dib + 48);
+            if (dib_size >= BMP_V3_HEADER_SIZE) { mask_a = _bmp_u32_le(dib + 52); }
+        } else {
+            if (is_bitfields == 1) {
+                var nmask = 3;
+                if (compression == BMP_BI_ALPHABITFIELDS) { nmask = 4; }
+                if (BMP_FILE_HEADER_SIZE + dib_size + nmask * 4 > len) {
+                    store64(err_out, chitra_err(CHITRA_ERR_TRUNCATED));
+                    return 0;
+                }
+                mask_r = _bmp_u32_le(dib + dib_size + 0);
+                mask_g = _bmp_u32_le(dib + dib_size + 4);
+                mask_b = _bmp_u32_le(dib + dib_size + 8);
+                if (nmask == 4) { mask_a = _bmp_u32_le(dib + dib_size + 12); }
             }
-            mask_r = _bmp_u32_le(dib + dib_size + 0);
-            mask_g = _bmp_u32_le(dib + dib_size + 4);
-            mask_b = _bmp_u32_le(dib + dib_size + 8);
-            if (nmask == 4) { mask_a = _bmp_u32_le(dib + dib_size + 12); }
         }
     }
 
@@ -428,18 +453,27 @@ fn _bmp_parse_header(src, len, err_out): i64 {
     # documented layouts, not inventions: 16 bpp BI_RGB is X1R5G5B5, and 32 bpp
     # BI_RGB is X8R8G8B8 with the top byte undefined (see the alpha note in
     # chitra_bmp_decode).
-    if (mask_r == 0) {
-        if (mask_g == 0) {
-            if (mask_b == 0) {
-                if (bpp == 16) {
-                    mask_r = 31744;      # 0x7C00
-                    mask_g = 992;        # 0x03E0
-                    mask_b = 31;         # 0x001F
-                }
-                if (bpp == 32) {
-                    mask_r = 16711680;   # 0x00FF0000
-                    mask_g = 65280;      # 0x0000FF00
-                    mask_b = 255;        # 0x000000FF
+    # Gated on is_bitfields: these defaults exist for BI_RGB, which declares no
+    # masks at all. Applying them to a BI_BITFIELDS file that declared all-zero
+    # colour masks would invent a layout the file never stated — and, worse,
+    # would make the "at least one colour channel" guard below UNREACHABLE,
+    # since it tests exactly the condition these defaults have just erased. A
+    # guard that cannot fire is not a guard; it is a claim in the CHANGELOG
+    # with nothing behind it.
+    if (is_bitfields == 0) {
+        if (mask_r == 0) {
+            if (mask_g == 0) {
+                if (mask_b == 0) {
+                    if (bpp == 16) {
+                        mask_r = 31744;      # 0x7C00
+                        mask_g = 992;        # 0x03E0
+                        mask_b = 31;         # 0x001F
+                    }
+                    if (bpp == 32) {
+                        mask_r = 16711680;   # 0x00FF0000
+                        mask_g = 65280;      # 0x0000FF00
+                        mask_b = 255;        # 0x000000FF
+                    }
                 }
             }
         }
@@ -599,7 +633,7 @@ fn _bmp_rle_put(idx, w, h, x, y, v): i64 {
     return 0;
 }
 
-fn _bmp_decode_rle(src, len, data_off, w, h, is_rle4, idx, err_out): i64 {
+fn _bmp_decode_rle(src, len, data_off, w, h, is_rle4, idx, err_out, consumed_out): i64 {
     store64(err_out, 0);
     var p = data_off;
     var x = 0;
@@ -713,6 +747,11 @@ fn _bmp_decode_rle(src, len, data_off, w, h, is_rle4, idx, err_out): i64 {
         store64(err_out, chitra_err(rc));
         return 0 - 1;
     }
+    # Report the bytes actually consumed. The amplification cap needs this
+    # rather than the available span: trailing junk after the stream sits
+    # inside `len - data_off` and would otherwise inflate the allowance, which
+    # is exactly how a padded bomb defeated the first version of the cap.
+    if (consumed_out != 0) { store64(consumed_out, p - data_off); }
     return 0;
 }
 
@@ -747,8 +786,6 @@ fn chitra_bmp_decode(src, len, err_out): i64 {
         store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
         return 0;
     }
-    var rgba = alloc(out_size);
-    if (rgba == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
 
     var pal = src + pal_off;
     var data = src + data_off;
@@ -770,10 +807,26 @@ fn chitra_bmp_decode(src, len, err_out): i64 {
         while (zz < w * h) { store8(rle_idx + zz, 0); zz = zz + 1; }
         var is4 = 0;
         if (compression == BMP_BI_RLE4) { is4 = 1; }
-        if (_bmp_decode_rle(src, len, data_off, w, h, is4, rle_idx, err_out) != 0) {
+        var consumed = 0;
+        if (_bmp_decode_rle(src, len, data_off, w, h, is4, rle_idx, err_out, &consumed) != 0) {
+            return 0;
+        }
+        # Amplification cap — the RLE analogue of PNG's inflate ratio and
+        # JPEG's output:input ceiling. See CHITRA_MAX_BMP_RLE_RATIO. It is
+        # applied HERE, after the decode, because the only honest denominator
+        # is the bytes the stream actually CONSUMED: an RLE stream's length is
+        # not computable in advance, and measuring against the available span
+        # lets an attacker pad the file to raise their own allowance.
+        # The index plane allocated above is bounded by CHITRA_MAX_PIXELS; this
+        # protects the 4x-larger RGBA buffer, which is not yet allocated.
+        if (out_size > consumed * CHITRA_MAX_BMP_RLE_RATIO) {
+            store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
             return 0;
         }
     }
+
+    var rgba = alloc(out_size);
+    if (rgba == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
 
     # 32-bpp alpha. When the header DECLARES an alpha mask (V3+ or
     # BI_ALPHABITFIELDS), chitra reads it — 0.5.2 retires the heuristic below
@@ -795,11 +848,23 @@ fn chitra_bmp_decode(src, len, err_out): i64 {
     var wd_b = _bmp_mask_width(mask_b);
     var wd_a = _bmp_mask_width(mask_a);
 
+    # Masks govern BOTH packed depths, always. This used to key off `mask_a`
+    # alone, which meant a 32-bpp BI_BITFIELDS file declaring R/G/B masks but
+    # NO alpha mask fell through to a fixed B,G,R byte read and silently
+    # ignored its own masks — a file whose red mask is the low byte decoded
+    # with red and blue swapped. The masks are the file's statement about its
+    # layout; whether it also declares alpha is a separate question, answered
+    # just below. For BI_RGB the header filled in the documented default masks,
+    # and those reproduce the byte-order read exactly (0x00FF0000 >> 16 is the
+    # same byte as `srow + x*4 + 2`), so this is a unification rather than a
+    # behaviour change for anything except the bug above.
     var use_alpha = 0;
-    if (bpp == 32) {
-        if (mask_a != 0) { use_alpha = 2; }      # declared: read the mask
+    if (mask_a != 0) {
+        use_alpha = 2;                          # declared: read the alpha mask
     }
     if (use_alpha == 0) {
+        # No alpha mask. At 32 bpp BI_RGB the fourth byte is formally
+        # UNDEFINED, so the padding heuristic governs there and only there.
         if (bpp == 32) {
             var ay = 0;
             var probe = 0;
@@ -815,6 +880,14 @@ fn chitra_bmp_decode(src, len, err_out): i64 {
             }
             use_alpha = probe;
         }
+    }
+    # A bitfields file that declared no alpha mask is opaque BY DECLARATION,
+    # not by inspection — the padding heuristic must not speak for it.
+    if (compression == BMP_BI_BITFIELDS) {
+        if (mask_a == 0) { use_alpha = 0; }
+    }
+    if (compression == BMP_BI_ALPHABITFIELDS) {
+        if (mask_a == 0) { use_alpha = 0; }
     }
 
     var y = 0;
@@ -834,7 +907,14 @@ fn chitra_bmp_decode(src, len, err_out): i64 {
         oy = y;
         if (top_down == 0) { oy = h - 1 - y; }
         if (is_rle == 1) { oy = y; }
-        srow = data + y * stride;
+        # `stride` describes the packed rows of a BI_RGB image and means nothing
+        # for a run-length stream, whose rows are not fixed-width. Computing
+        # `data + y*stride` on the RLE path produced a pointer far past the
+        # input buffer — never dereferenced, because the RLE branch reads
+        # `rle_idx` instead, but a wild pointer that survives only by never
+        # being used is a latent hazard, not a safe one.
+        srow = data;
+        if (is_rle == 0) { srow = data + y * stride; }
         orow = rgba + oy * w * 4;
         x = 0;
         while (x < w) {
@@ -858,24 +938,21 @@ fn chitra_bmp_decode(src, len, err_out): i64 {
                 }
             }
             if (bpp == 32) {
+                # Little-endian 32-bit word, channels carved out by mask — the
+                # same path BI_RGB takes via its default masks.
+                pix = load8(srow + x * 4) | (load8(srow + x * 4 + 1) << 8)
+                | (load8(srow + x * 4 + 2) << 16) | (load8(srow + x * 4 + 3) << 24);
+                store8(o + 0, _bmp_scale_to_8((pix & mask_r) >> sh_r, wd_r));
+                store8(o + 1, _bmp_scale_to_8((pix & mask_g) >> sh_g, wd_g));
+                store8(o + 2, _bmp_scale_to_8((pix & mask_b) >> sh_b, wd_b));
                 if (use_alpha == 2) {
-                    # Declared masks: read every channel through them rather
-                    # than assuming the B,G,R,A byte order.
-                    pix = load8(srow + x * 4) | (load8(srow + x * 4 + 1) << 8)
-                    | (load8(srow + x * 4 + 2) << 16) | (load8(srow + x * 4 + 3) << 24);
-                    store8(o + 0, _bmp_scale_to_8((pix & mask_r) >> sh_r, wd_r));
-                    store8(o + 1, _bmp_scale_to_8((pix & mask_g) >> sh_g, wd_g));
-                    store8(o + 2, _bmp_scale_to_8((pix & mask_b) >> sh_b, wd_b));
                     store8(o + 3, _bmp_scale_to_8((pix & mask_a) >> sh_a, wd_a));
-                } else {
-                    store8(o + 0, load8(srow + x * 4 + 2));
-                    store8(o + 1, load8(srow + x * 4 + 1));
-                    store8(o + 2, load8(srow + x * 4 + 0));
-                    if (use_alpha == 1) {
-                        store8(o + 3, load8(srow + x * 4 + 3));
-                    } else {
-                        store8(o + 3, 255);
-                    }
+                }
+                if (use_alpha == 1) {
+                    store8(o + 3, load8(srow + x * 4 + 3));
+                }
+                if (use_alpha == 0) {
+                    store8(o + 3, 255);
                 }
             }
             # Indexed depths only. 16 bpp is packed-pixel, not palette-indexed,
