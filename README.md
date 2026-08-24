@@ -1,14 +1,14 @@
 # chitra
 
-Version: 0.3.3
+Version: 0.4.0
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder, a sibling AGNOS package in the mould of `sakshi` /
 `patra` / `samvada`. It turns encoded image bytes into canonical RGBA8
 pixels with no GPU, no C shim, and no external binaries.
 
-The name is deliberately format-agnostic — PNG and JPEG already share it,
-and GIF / BMP can join later without a rename.
+The name is deliberately format-agnostic — PNG, JPEG and BMP already share
+it, and GIF can join later without a rename.
 
 ## Scope
 
@@ -62,9 +62,21 @@ and GIF / BMP can join later without a rename.
   history, closing the second gate — PNG rgba8 decodes at **83 ns/px**,
   JPEG grayscale at **43 ns/px** (256×256, this host).
   See [`docs/audit/2026-08-23-audit.md`](docs/audit/2026-08-23-audit.md).
-- **Staged (tracked, not silently dropped):** **GIF / BMP** → after JPEG.
-  Both v1.0 hardening gates — the fuzz harness and the benchmark harness —
-  landed in v0.3.3. PNG and baseline JPEG are feature-complete.
+- **v0.4.0 — BMP.** The third format into the same canonical RGBA8 surface.
+  `BI_RGB` uncompressed at 1 / 4 / 8 bpp (palette), 24 bpp and 32 bpp;
+  `BITMAPINFOHEADER` and `BITMAPCOREHEADER` DIB headers; bottom-up *and*
+  top-down row order; the BGRA palette. New public
+  `chitra_bmp_decode` / `chitra_bmp_decode_rgba8` /
+  `chitra_bmp_check_signature`, and `chitra_image_decode` now sniffs three
+  formats. Output verified **identical to ImageMagick** on every valid
+  fixture. The simplest of the three paths, and it shows: **6 ns/px** at
+  24/32 bpp against PNG's 83 and JPEG's 43. RLE4/RLE8, BITFIELDS, 16 bpp,
+  V4/V5 headers and the `BI_JPEG` / `BI_PNG` embedded streams reject with
+  distinct codes.
+- **Staged (tracked, not silently dropped):** **GIF** → 0.5.0; the two
+  deferred decode paths → 0.6.0. Both v1.0 hardening gates — the fuzz
+  harness and the benchmark harness — landed in v0.3.3. PNG, baseline JPEG
+  and BMP are feature-complete for their scope.
 
 ## Relationships
 
@@ -97,7 +109,7 @@ All deps are pinned in `cyrius.cyml`; the toolchain pin is
 ```bash
 cyrius deps          # resolve stdlib + sankoch + thread into lib/
 make build           # link-check the include chain (→ build/chitra_smoke)
-make test            # 784 assertions across tests/tcyr/
+make test            # 1078 assertions across tests/tcyr/
 make fuzz            # ~10⁶ adversarial decode cases (fuzz/*.fcyr)
 make bench           # 12 decode benchmarks (tests/bcyr/chitra.bcyr)
 make dist            # regenerate dist/chitra.cyr — the artifact consumers link

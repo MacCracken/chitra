@@ -26,9 +26,9 @@ it, and GIF / BMP can join later without a rename.
 
 Own **CPU-side raster image decode** for AGNOS. Turn encoded image bytes into
 canonical RGBA8 with zero GPU dependency and no C shim — the pure-Cyrius answer
-to "load this image into a texture." PNG and baseline JPEG are feature-complete;
-further formats (GIF, BMP) land later without breaking the byte-buffer → RGBA8
-contract.
+to "load this image into a texture." PNG, baseline JPEG and BMP are
+feature-complete for their scope; GIF lands next without breaking the
+byte-buffer → RGBA8 contract.
 
 ## Current State
 
@@ -69,7 +69,7 @@ make count-assertions                                # NUL-safe assertion total 
 - **Validate against a real reference** — every decode-matrix claim is checked against ImageMagick output, plus an interlaced-vs-non-interlaced cross-check. Numbers/images or it didn't happen.
 - **Spec-cite the hard cells** — bit-depth × color-type legality follows PNG § 11.2.2 Table 11.1; the five unfilter predictors follow § 9. Cite the section in the code.
 - Every buffer declaration is a contract: `var buf[N]` = N **bytes**, not N entries.
-- **Trust no input byte** — an encoded image (PNG or JPEG) is untrusted external data. Bounds-check every length, reject lying headers, cap decompression bombs, bound every entropy/Huffman loop.
+- **Trust no input byte** — an encoded image (PNG, JPEG or BMP) is untrusted external data. Bounds-check every length, reject lying headers, cap decompression bombs, bound every entropy/Huffman loop.
 
 ## Rules (Hard Constraints)
 
@@ -78,7 +78,7 @@ make count-assertions                                # NUL-safe assertion total 
 - **NEVER use `gh` CLI** — use `curl` to the GitHub API if needed
 - **`lib/` must be a real directory populated by `cyrius deps`** — never a symlink to a cyrius checkout (an agent editing `lib/*.cyr` would corrupt the toolchain repo). `make` targets guard this via `check-lib-wiring`; if it trips: `rm lib && mkdir lib && cyrius deps`.
 - **Stdlib includes live ONLY in `src/lib.cyr`** — domain modules (`src/*.cyr`) are flat (no stdlib includes). This is what lets `cyrius distlib` strip-concatenate into a compile-clean `dist/chitra.cyr`. Adding a stdlib include to a domain module breaks the dist bundle.
-- **`[lib].modules` order in `cyrius.cyml` is dependency order** — `error.cyr` (dep-free) → `png_chunks.cyr` → `png_filter.cyr` → `png_color.cyr` → `png.cyr` → `jpeg_huffman.cyr` → `jpeg_idct.cyr` → `jpeg_markers.cyr` → `jpeg.cyr` (the frame-independent JPEG leaves precede the frame-builder — see [architecture/004](docs/architecture/004-jpeg-decode-pipeline.md)). Don't reorder without re-running `cyrius distlib` and verifying the bundle still compiles.
+- **`[lib].modules` order in `cyrius.cyml` is dependency order** — `error.cyr` (dep-free) → `png_chunks.cyr` → `png_filter.cyr` → `png_color.cyr` → `png.cyr` → `jpeg_huffman.cyr` → `jpeg_idct.cyr` → `jpeg_markers.cyr` → `jpeg.cyr` → `bmp.cyr` (the frame-independent JPEG leaves precede the frame-builder — see [architecture/004](docs/architecture/004-jpeg-decode-pipeline.md); `bmp.cyr` comes last because it needs `ChitraImage` from `png.cyr`, the ceilings from `png_chunks.cyr`, and nothing else). Don't reorder without re-running `cyrius distlib` and verifying the bundle still compiles.
 - **`ChitraErr` stays a 16-byte record** (`+0` code, `+8` detail ptr) — layout-compatible with mabda's `GpuErr` so a decode failure maps cleanly onto `GPU_ERR_IMAGE_DECODE`. Don't widen it.
 - **`ChitraImage` field additions are append-only** — `width`/`height`/`pixels`/`channels` keep their 0.1.x offsets (mabda's accessors depend on them). New fields go at the end (`seen_iend` @ +32, `src_ctype` @ +40), and any widen bumps `CHITRA_IMAGE_SIZE`.
 - Do not add unnecessary dependencies (current set: stdlib + `sankoch` + `thread`).
@@ -113,9 +113,10 @@ CHANGELOG entry and an ADR:
 - `chitra_png_decode(src, len, err_out)` → owned RGBA8 `ChitraImage`, or `0` with `*err_out` set
 - `chitra_png_decode_rgba8(src, len, w_out, h_out)` → RGBA8 ptr directly (no detailed error)
 - `chitra_jpeg_decode(src, len, err_out)` / `chitra_jpeg_decode_rgba8(src, len, w_out, h_out)` — the JPEG pair, mirroring the PNG ones
-- `chitra_image_decode(src, len, err_out)` → the **format-sniffing router** (PNG magic vs JPEG SOI); the entry to reach for when the format isn't known up front
-- `chitra_png_check_signature` / `chitra_jpeg_check_signature` — signature predicates
-- `chitra_image_{width,height,pixels,channels,seen_iend,source_color_type}` accessors (`source_color_type`: PNG color_type 0/2/3/4/6, or `0x100 | ncomp` for JPEG — 0x101 grayscale, 0x103 YCbCr)
+- `chitra_bmp_decode(src, len, err_out)` / `chitra_bmp_decode_rgba8(src, len, w_out, h_out)` — the BMP pair (0.4.0)
+- `chitra_image_decode(src, len, err_out)` → the **format-sniffing router** (PNG magic, then JPEG SOI, then BMP `BM`, else `CHITRA_ERR_SIGNATURE`); the entry to reach for when the format isn't known up front
+- `chitra_png_check_signature` / `chitra_jpeg_check_signature` / `chitra_bmp_check_signature` — signature predicates
+- `chitra_image_{width,height,pixels,channels,seen_iend,source_color_type}` accessors (`source_color_type`: PNG color_type 0/2/3/4/6; `0x100 | ncomp` for JPEG — 0x101 grayscale, 0x103 YCbCr; `0x200 | bpp` for BMP — 0x208 palette-8, 0x218 24bpp, 0x220 32bpp)
 - `chitra_image_free` (no-op under the bump allocator; kept for symmetry)
 - `chitra_version()` (packed `major*10000 + minor*100 + patch`)
 - error API: `chitra_err_new` / `chitra_err` / `chitra_err_code` / `chitra_err_detail` / `chitra_err_name` / `chitra_err_print_name` + the `ChitraErrCode` enum
@@ -165,6 +166,14 @@ non-negotiable — re-verify each before tagging.
 8. **Only length-bearing markers are skipped by length** — standalone markers (SOI, EOI, RSTn, TEM) and the T.81 Table B.1 reserved range are rejected, not treated as segments. Otherwise the walk reads two attacker bytes as a length and the cursor is steered by the input
 9. **Fill bytes tolerated, both sides** — § B.1.1.2 allows any number of `0xFF` bytes before a marker. The header walk *and* the entropy reader must both collapse the run, or valid files are rejected
 10. **Geometry chitra does not implement is rejected, not approximated** — a single-component scan is non-interleaved per § A.2; since only the interleaved layout is implemented, `H > 1 || V > 1` on a lone component rejects. Mis-rendering a spec-legal file is worse than refusing it
+
+**BMP** (0.4.0; `BI_RGB` uncompressed only):
+
+1. **Header fields validated before use** — every field is checked before it derives another, and every derived size is capped before allocation: dimensions vs `CHITRA_MAX_DIM` / `CHITRA_MAX_PIXELS`, `stride * height` vs `CHITRA_MAX_RAW_BYTES`
+2. **The pixel-data offset is attacker-controlled** — it is a header field, not "after the palette", and it can point anywhere. The whole `data_off + stride*height` span is validated against `len` → `CHITRA_ERR_TRUNCATED`
+3. **Palette span + index bounds** — the palette span is validated against `len`, and every index is hard-rejected against the declared entry count → `CHITRA_ERR_BMP_PALETTE`. Never clamp an index; reject it
+4. **Deferred modes reject with distinct codes** — RLE4/RLE8, BITFIELDS, 16 bpp, V4/V5 headers. `BI_JPEG` / `BI_PNG` are refused outright: honouring them re-enters the decoder, which is a recursion surface, not a feature
+5. **No checksum exists** — BMP has nothing like PNG's per-chunk CRC, so every byte of a BMP reaching the parser is attacker-chosen with nothing to turn it away but chitra's own bounds. Treat the header parser as the entire perimeter
 
 File findings in `docs/audit/YYYY-MM-DD-audit.md`. Severity: CRITICAL / HIGH / MEDIUM / LOW.
 

@@ -180,6 +180,34 @@ conformance, resource and defence-in-depth rather than exploit fixes:
 > color-type-3 at depth 16). Their enum comments were corrected in 0.3.2. See
 > [`docs/audit/2026-06-26-audit.md`](docs/audit/2026-06-26-audit.md).
 
+### BMP (0.4.0)
+
+BMP has **no checksum of any kind** — no per-chunk CRC like PNG, nothing. Every
+byte reaching the parser is attacker-chosen with only chitra's own bounds to
+turn it away, so the header parser *is* the entire perimeter:
+
+- ✅ **Every header field validated before it derives another**, and every
+  derived size capped before allocation: dimensions against
+  `CHITRA_MAX_DIM` / `CHITRA_MAX_PIXELS`, `stride * height` against
+  `CHITRA_MAX_RAW_BYTES`. Failures → `CHITRA_ERR_DIMENSIONS`.
+- ✅ **The pixel-data offset is attacker-controlled.** It is a header field —
+  not "wherever the palette ended" — so it can point anywhere in or past the
+  buffer. The full `data_off + stride * height` span is validated against the
+  input length before a single pixel is read. Failure →
+  `CHITRA_ERR_TRUNCATED`.
+- ✅ **Palette span and index bounds.** The palette span is validated against
+  the input length, and every index is **hard-rejected** against the declared
+  entry count rather than clamped — the same posture as the PNG palette path.
+  Failure → `CHITRA_ERR_BMP_PALETTE`.
+- ✅ **Deferred modes reject with distinct codes** rather than half-decoding:
+  `BI_RLE8` / `BI_RLE4`, `BI_BITFIELDS`, 16 bpp, and the V4/V5 header
+  extensions. **`BI_JPEG` and `BI_PNG` are refused outright** — honouring them
+  would have a decoder re-enter itself, and a recursion surface is better
+  declined than bounded.
+- ✅ **`planes != 1` is a malformed header, not a feature.** There has never
+  been a multi-plane BMP in the wild, so accepting one would only widen the
+  parser for no input that exists.
+
 ## What chitra does NOT do
 
 For threat-modeling clarity, chitra has no:
@@ -219,7 +247,7 @@ We will:
 
 For format-specific issues (e.g. a known libpng / lodepng / stb_image / libjpeg
 vulnerability), please cite the CVE ID. If chitra inherits an issue by faithfully
-implementing the PNG or JPEG spec, the fix may involve hardening chitra's parser
+implementing the PNG, JPEG or BMP spec, the fix may involve hardening chitra's parser
 beyond spec.
 
 ## Audit history

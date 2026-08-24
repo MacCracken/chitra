@@ -2,11 +2,12 @@
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder. It turns encoded image bytes into canonical
-RGBA8 pixels — no GPU, no C shim, no external binaries. As of v0.3.0 it
+RGBA8 pixels — no GPU, no C shim, no external binaries. As of v0.4.0 it
 decodes **PNG** (every spec-legal bit depth 1/2/4/8/16 across color types
-0/2/3/4/6, Adam7 interlace, PLTE/tRNS) and **baseline JPEG** (JFIF SOF0,
+0/2/3/4/6, Adam7 interlace, PLTE/tRNS), **baseline JPEG** (JFIF SOF0,
 grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0 chroma subsampling, restart
-markers) — both to the same canonical RGBA8.
+markers) and **BMP** (`BI_RGB` at 1/4/8 bpp palette, 24 bpp and 32 bpp,
+both row orders) — all three to the same canonical RGBA8.
 
 chitra is a **library**, not a CLI. There is no binary to run, no
 stdout emit, no terminal surface. You link `dist/chitra.cyr` into your
@@ -14,8 +15,8 @@ own program, hand it the encoded bytes you already hold in memory, and
 get back an owned RGBA8 buffer. The consumer owns all file / network /
 syscall I/O — chitra never opens a file.
 
-The name is deliberately format-agnostic: JPEG joined in 0.3.0, and
-GIF / BMP can land later without a rename.
+The name is deliberately format-agnostic: JPEG joined in 0.3.0 and BMP in
+0.4.0, and GIF can land later without a rename.
 
 ## Build & verify locally
 
@@ -26,9 +27,9 @@ isn't on your PATH yet, see the agnosticos bootstrap.
 ```bash
 cyrius deps        # resolve stdlib + sankoch + thread into lib/
 make build         # link-check: builds build/chitra_smoke from programs/smoke.cyr
-make test          # 784 assertions across tests/tcyr/
+make test          # 1078 assertions across tests/tcyr/
 make fuzz          # ~10⁶ adversarial decode cases across fuzz/*.fcyr
-make bench         # 12 decode benchmarks (tests/bcyr/chitra.bcyr)
+make bench         # 15 decode benchmarks (tests/bcyr/chitra.bcyr)
 make dist          # = cyrius distlib → dist/chitra.cyr
 make test-all      # version-check + dist + test + fuzz — the pre-release gate
 ```
@@ -43,12 +44,13 @@ A few notes on what each step proves:
   only to prove the full include chain (stdlib + sankoch + thread +
   domain modules) parses and links clean; it writes a one-line banner
   and exits 0.
-- **`make test`** runs the five suites under `tests/tcyr/` — each is a
-  standalone `main()`: `error.tcyr` (20), `interlace.tcyr` (35),
-  `jpeg.tcyr` (226), `png.tcyr` (360), `subbyte.tcyr` (143).
-- **`make fuzz`** drives both public decode entries over random,
+- **`make test`** runs the six suites under `tests/tcyr/` — each is a
+  standalone `main()`: `bmp.tcyr` (294), `error.tcyr` (20),
+  `interlace.tcyr` (35), `jpeg.tcyr` (226), `png.tcyr` (360),
+  `subbyte.tcyr` (143).
+- **`make fuzz`** drives all three public decode entries over random,
   signature-prefixed, bit-flipped, truncated and entropy-mutated input —
-  ~1,000,237 cases. It asserts **both** that the decoder survives and that
+  ~1.5 M cases. It asserts **both** that the decoder survives and that
   it honours the documented contract (failure returns 0 *and* sets
   `*err_out`). Part of `make test-all`.
 - **`make bench`** measures decode latency. It generates its own fixtures
@@ -71,7 +73,7 @@ released tag and pulling that one module:
 ```toml
 [deps.chitra]
 git     = "https://github.com/MacCracken/chitra"
-tag     = "0.3.3"
+tag     = "0.4.0"
 modules = ["dist/chitra.cyr"]
 ```
 
@@ -85,16 +87,20 @@ list. Make sure your manifest's stdlib includes them, then run
 ## The decode call
 
 The format-agnostic entry point takes **bytes** (a pointer + length you
-already hold) and an error-out slot, sniffs the signature (PNG magic vs
-JPEG SOI), routes to the right decoder, and returns an owned `ChitraImage`:
+already hold) and an error-out slot, sniffs the signature (PNG magic, then
+JPEG SOI, then BMP `BM`), routes to the right decoder, and returns an owned
+`ChitraImage`:
 
 ```
 fn chitra_image_decode(src, len, err_out): i64
 ```
 
 If you already know the format, the format-specific decoders have the
-identical shape: `chitra_png_decode(src, len, err_out)` and
-`chitra_jpeg_decode(src, len, err_out)`.
+identical shape: `chitra_png_decode(src, len, err_out)`,
+`chitra_jpeg_decode(src, len, err_out)` and
+`chitra_bmp_decode(src, len, err_out)`. Bytes matching none of the three
+signatures are rejected by the router with `CHITRA_ERR_SIGNATURE` — it does
+not fall through to a default decoder.
 
 Each returns the `ChitraImage` pointer on success, or `0` on failure with
 `*err_out` set to a `ChitraErr` pointer (and left `0` on success).
@@ -113,7 +119,8 @@ directly:
 - `chitra_image_source_color_type(img)` — the pre-normalization source
   type, so you can report the original format even though the pixels are
   canonical RGBA8. For PNG it is the PNG color_type (0/2/3/4/6); for JPEG
-  it is `0x100 | num_components` (`0x101` grayscale, `0x103` YCbCr)
+  it is `0x100 | num_components` (`0x101` grayscale, `0x103` YCbCr); for BMP
+  it is `0x200 | bpp` (`0x208` palette-8, `0x218` 24 bpp, `0x220` 32 bpp)
 
 A minimal usage sketch (you supply `bytes`/`n` from however you read
 the file or socket):
@@ -140,20 +147,21 @@ convenience wrappers (one per format):
 ```
 fn chitra_png_decode_rgba8(src, len, w_out, h_out): i64
 fn chitra_jpeg_decode_rgba8(src, len, w_out, h_out): i64
+fn chitra_bmp_decode_rgba8(src, len, w_out, h_out): i64
 ```
 
 Each decodes and returns the RGBA8 pixel pointer directly, writing
 width/height through `w_out`/`h_out` (`>=8`-byte slots), or `0` on any
 failure. The detailed `ChitraErr` is not surfaced on this path — reach
-for `chitra_image_decode` / `chitra_png_decode` / `chitra_jpeg_decode`
-when you need the error.
+for `chitra_image_decode` / `chitra_png_decode` / `chitra_jpeg_decode` /
+`chitra_bmp_decode` when you need the error.
 
 `chitra_image_free(img)` exists for API symmetry but is a documented
 no-op: the stdlib `alloc` is a bump allocator with no per-block free —
 see [architecture note 003](../architecture/003-bump-allocator-no-free.md).
 
 You can probe the linked version at runtime with `chitra_version()`,
-which returns `303` for 0.3.3 (`major*10000 + minor*100 + patch`).
+which returns `400` for 0.4.0 (`major*10000 + minor*100 + patch`).
 `make version-check` gates that literal against `VERSION`, so it cannot
 drift silently again.
 
@@ -206,6 +214,10 @@ the pixels. A *malformed* IEND (e.g. non-zero length) is a hard error.
 | `CHITRA_ERR_JPEG_PRECISION` | 21 | Sample precision other than 8-bit |
 | `CHITRA_ERR_JPEG_MODE` | 22 | Hierarchical / lossless / differential mode |
 | `CHITRA_ERR_JPEG_COMPONENTS` | 23 | Unsupported component count (e.g. 4-component CMYK / YCCK) |
+| `CHITRA_ERR_BMP_HEADER` | 24 | Malformed BMP file/DIB header (size, planes, offsets), or a deferred V4/V5 header |
+| `CHITRA_ERR_BMP_DEPTH` | 25 | BMP bpp outside {1,4,8,24,32} — 16 bpp is deferred |
+| `CHITRA_ERR_BMP_COMPRESSION` | 26 | Deferred BMP compression: RLE4/RLE8, BITFIELDS, embedded JPEG/PNG |
+| `CHITRA_ERR_BMP_PALETTE` | 27 | BMP palette missing, short, or an index outside it |
 | `CHITRA_ERR_OTHER` | 99 | Anything else |
 
 Note that `CHITRA_ERR_INTERLACE` and `CHITRA_ERR_BIT_DEPTH` are narrower

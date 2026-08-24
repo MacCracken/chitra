@@ -1,36 +1,36 @@
 # chitra — Current State
 
-> **Last refresh**: 2026-08-23 (0.3.3) | **Refresh cadence**: every release.
+> **Last refresh**: 2026-08-24 (0.4.0) | **Refresh cadence**: every release.
 > [`CLAUDE.md`](../../CLAUDE.md) is preferences / process / architecture
 > (durable); this file is **state** (volatile) — it is the home for the
 > version, sizes, and counts `CLAUDE.md` must not inline.
 
 ## Version
 
-**0.3.3** — cut 2026-08-23, tagged. **P-1 audit, hardening and repair cut.**
-A ten-lens adversarial sweep of both decode paths, every finding put to two
-independent skeptics, plus the repair of everything confirmed — and chitra's
-**first in-tree fuzz harnesses and first benchmark harness**, which together
-close **both** remaining v1.0 hardening gates.
+**0.4.0** — cut 2026-08-24. **BMP decode.** chitra gains its third format,
+normalizing Windows BMP to the same canonical RGBA8 `ChitraImage` that PNG and
+JPEG already produce — the format-agnostic name paying off, with no rename and
+no change to the existing surface.
 
-**No memory-safety defect was found.** The entropy bounds, Adam7 geometry,
-plane-write indices, signed-shift discipline and palette/span validation were
-all examined and verified correct. The repairs are correctness, conformance,
-resource and defence-in-depth: full-width depth-16 tRNS keying, rejection of
-single-component non-interleaved JPEG scans, a JPEG decompression-bomb cap, a
-`chitra_err_new` that can no longer return 0, T.81 fill-byte handling, ZRL
-overrun rejection, non-segment marker rejection, and the PNG § 5.4 / § 5.6
-chunk-ordering guards. Every repair carries a regression test verified to fail
-against the pre-repair code. Four input classes that previously decoded now
-reject, deliberately — see the CHANGELOG's *Behaviour changes* section.
+BMP is the simplest of the three paths (no entropy coding, no DEFLATE, no DCT)
+and benchmarks that way: **6 ns/px** at 24/32 bpp against PNG's 83 and JPEG's
+43 for the same 256×256 image. The difficulty is framing, not compression —
+bottom-up row order by default, 4-byte row padding, B,G,R channels, and a
+pixel-data offset that is an attacker-controlled header field rather than
+"after the palette". Output verified **identical to ImageMagick** on all eight
+valid fixtures, including the bottom-up/top-down pair that must agree from
+opposite storage orders.
 
-`chitra_version()` → **303**. **784 test assertions** across 5 suites,
-**3,464,838 fuzz assertions** over ~10⁶ decode cases, and a 12-benchmark
-decode baseline — 0 failures throughout. See
-[`CHANGELOG.md`](../../CHANGELOG.md) and
-[`docs/audit/2026-08-23-audit.md`](../audit/2026-08-23-audit.md).
+`chitra_version()` → **400**. **1,078 test assertions** across 6 suites,
+**5,284,328 fuzz assertions** across 3 harnesses, and 15 benchmarks — 0
+failures throughout. See [`CHANGELOG.md`](../../CHANGELOG.md).
 
-Released tags: 0.1.0, 0.2.0, 0.2.1, 0.3.0, 0.3.1, 0.3.2, **0.3.3** (SemVer;
+The previous cut, **0.3.3**, was the P-1 audit + hardening release that closed
+both v1.0 hardening gates; its detail lives in the
+[2026-08-23 audit](../audit/2026-08-23-audit.md).
+
+Released tags: 0.1.0, 0.2.0, 0.2.1, 0.3.0, 0.3.1, 0.3.2, 0.3.3, **0.4.0**
+(SemVer;
 pre-1.0, the public surface is still moving — no API freeze until v1.0).
 
 ## Toolchain
@@ -85,12 +85,20 @@ JPEG (0.3.0):
 - `chitra_jpeg_check_signature(src, len)` → 1 if the bytes open with the
   JPEG SOI marker.
 
+BMP (0.4.0):
+
+- `chitra_bmp_decode(src, len, err_out)` → `ChitraImage*` (0 on fail,
+  `*err_out` set).
+- `chitra_bmp_decode_rgba8(src, len, w_out, h_out)` → RGBA8 ptr (0 on fail).
+- `chitra_bmp_check_signature(src, len)` → 1 if the bytes open with `BM`.
+
 Format-agnostic:
 
 - `chitra_image_decode(src, len, err_out)` → `ChitraImage*` — the
   **signature-sniffing router** ([`jpeg.cyr:424`](../../src/jpeg.cyr)): the
   8-byte PNG magic → `chitra_png_decode`; else the JPEG SOI marker →
-  `chitra_jpeg_decode`; else **`0` with `*err_out` = `CHITRA_ERR_SIGNATURE`**.
+  `chitra_jpeg_decode`; else the BMP `BM` magic → `chitra_bmp_decode`; else
+  **`0` with `*err_out` = `CHITRA_ERR_SIGNATURE`**.
   It does *not* fall through to the PNG decoder for unrecognized bytes — an
   unknown format is rejected at the router. The single entry a consumer
   should reach for when it does not know the format up front.
@@ -100,7 +108,7 @@ Shared:
 - `ChitraImage` accessors: `chitra_image_{width,height,pixels,channels,
   seen_iend,source_color_type}`; `chitra_image_free` (a documented no-op
   under the bump allocator).
-- `chitra_version()` → **`303`** (`major*10000 + minor*100 + patch`).
+- `chitra_version()` → **`400`** (`major*10000 + minor*100 + patch`).
 - Error API: `chitra_err_new` / `chitra_err` / `chitra_err_code` /
   `chitra_err_detail` / `chitra_err_name` / `chitra_err_print_name` + enum
   `ChitraErrCode`.
@@ -118,7 +126,8 @@ Shared:
 closed the stream, 0 = tolerated IEND-less clean end), `src_ctype`@40. For a
 PNG, `src_ctype` is the pre-normalization PNG color_type (0/2/3/4/6); for a
 JPEG it carries the sentinel `0x100 | num_components` (so `0x101` grayscale,
-`0x103` YCbCr). The +32/+40 fields are **append-only** — 0.1.x offsets
+`0x103` YCbCr); for a BMP, `0x200 | bpp` (so `0x201`/`0x204`/`0x208` indexed,
+`0x218` at 24 bpp, `0x220` at 32 bpp). The +32/+40 fields are **append-only** — 0.1.x offsets
 preserved, so mabda's accessors are unaffected.
 
 `ChitraErr` is a **16-byte** record (+0 code, +8 detail ptr), **layout-
@@ -266,23 +275,34 @@ JPEG (0.3.0):
   (max_h×max_v data units, per-component subsampled planes, box upsample),
   and the BT.601 YCbCr→RGB color pass → `ChitraImage`.
 
+BMP (0.4.0):
+
+- `bmp.cyr` (434 L) — the whole BMP path in one module, because there is no
+  compression stage to separate out: `chitra_bmp_check_signature`,
+  little-endian readers (BMP is LE where PNG and JPEG are BE), the
+  `BITMAPFILEHEADER` + DIB header parse into `ChitraBmpHdr`, the deferred-mode
+  rejections, the MSB-first index extractor, and `chitra_bmp_decode` /
+  `chitra_bmp_decode_rgba8`. Depends on `error.cyr` for codes,
+  `png_chunks.cyr` for the shared ceilings, and `png.cyr` for `ChitraImage`
+  — which is why it comes last in the include order.
+
 Include chain: `lib.cyr` (64 L) pulls the stdlib set then
 `error.cyr` → `png_chunks.cyr` → `png_filter.cyr` → `png_color.cyr` →
 `png.cyr` → `jpeg_huffman.cyr` → `jpeg_idct.cyr` → `jpeg_markers.cyr` →
-`jpeg.cyr` (the order in `[lib].modules`). Domain-module total: **3,044 L**
-across 9 files, plus `lib.cyr`.
+`jpeg.cyr` → `bmp.cyr` (the order in `[lib].modules`). Domain-module total:
+**3,494 L** across 10 files, plus `lib.cyr`.
 
 ## Sizes
 
-- `dist/chitra.cyr` — **~130 KB** (133,286 bytes / 3,075 lines; `cyrius
-  distlib` reports 3,044 code lines), regenerated by `cyrius distlib`
-  (= `make dist`). This is the artifact consumers link. The 0.3.3 diff
-  against 0.3.2 is the decode repairs, the new `CHITRA_MAX_JPEG_RATIO`
-  ceiling, the BSS zig-zag table and fallback `ChitraErr`, and the version
-  stamp — **no public signature, struct offset, or symbol changed** (verified
-  by diffing the exported surface), so mabda and kii re-pin mechanically.
+- `dist/chitra.cyr` — **~148 KB** (151,197 bytes / 3,524 lines; `cyrius
+  distlib` reports 3,490 code lines), regenerated by `cyrius distlib`
+  (= `make dist`). This is the artifact consumers link. 0.4.0 is **additive**:
+  three new public functions (`chitra_bmp_decode`, `_rgba8`,
+  `_check_signature`), four new error codes, and one new `src_ctype` sentinel
+  range. No existing signature, struct offset or symbol changed, so consumers
+  re-pin mechanically and gain BMP with no code change.
 - `dist/chitra.deps` — the 13-leaf stdlib sidecar consumers resolve against.
-- `build/chitra_smoke` — **~547 KB** (559,656 bytes), built from
+- `build/chitra_smoke` — **~555 KB** (568,128 bytes), built from
   `programs/smoke.cyr` (19 L) via `make build`. It only proves the include
   chain compiles and links clean — chitra is a library, there is no real CLI
   behind it.
@@ -290,9 +310,17 @@ across 9 files, plus `lib.cyr`.
 ## Tests + bench
 
 - `make test` (globs `tests/tcyr/*.tcyr`; each is a standalone `main()`) →
-  **784 assertions, all pass** across 5 suites:
+  **1,078 assertions, all pass** across 6 suites:
+  - `bmp.tcyr` — **294** (signature, 24/32 bpp, 1/4/8 bpp palette,
+    `BITMAPCOREHEADER`, bottom-up **and** top-down producing identical output,
+    the 32-bpp undefined-alpha heuristic, deferred-mode + malformed-header
+    rejections, an out-of-range palette index, a full truncation sweep, the
+    three-format router, and the `_rgba8` wrapper). Fixture pixel values are
+    distinct per position — a decoder with the row order *or* channel order
+    wrong returns the right *set* of pixels in the wrong places, and only
+    position-sensitive expectations catch that.
   - `error.tcyr` — **20** (error codes, `chitra_err_*` accessors, name
-    round-trips, `chitra_version` → 303).
+    round-trips, `chitra_version` → 400).
   - `interlace.tcyr` — **35** (Adam7 cross-checked against the trusted
     non-interlaced decode for 7 color/depth/odd-dimension cases).
   - `jpeg.tcyr` — **226** (marker scan + non-baseline rejection, SOF0
@@ -311,9 +339,9 @@ across 9 files, plus `lib.cyr`.
 - Reference verification is **embedded in the suite**, not a side script:
   the ImageMagick-encoded fixtures live inside `jpeg.tcyr` / `png.tcyr`, so
   a green `make test` *is* the reference cross-check.
-- `make fuzz` (= `cyrius fuzz`, globbing `fuzz/*.fcyr`) → **3,464,838
-  assertions, 0 failures** over **~1,000,237 decode cases** (500,082 PNG +
-  500,155 JPEG) in **~10 s**, across 2 harnesses (860 lines), new in 0.3.3.
+- `make fuzz` (= `cyrius fuzz`, globbing `fuzz/*.fcyr`) → **5,284,328
+  assertions, 0 failures** over **~1.5 M decode cases** (500,082 PNG +
+  500,155 JPEG + ~500,300 BMP), across 3 harnesses (1,170 lines).
   This clears the roadmap's *10⁶ iterations clean* bar, not just the
   "a harness exists" bar.
   Each asserts **two** invariants: *survival* (the decoder returns on any
@@ -328,8 +356,8 @@ across 9 files, plus `lib.cyr`.
     self-check asserting its fixtures decode and its entropy span is wide
     enough to mutate — the first draft silently exercised a 4-byte span, and
     a harness that no-ops is worse than none.
-- `make bench` (= `cyrius bench tests/bcyr/chitra.bcyr`) → **12 benchmarks**,
-  ~2 s, new in 0.3.3. The harness **generates its fixtures at realistic sizes**
+- `make bench` (= `cyrius bench tests/bcyr/chitra.bcyr`) → **15 benchmarks**,
+  ~2 s (12 landed in 0.3.3, +3 BMP in 0.4.0). The harness **generates its fixtures at realistic sizes**
   (256×256) rather than timing the 2×2..16×16 test fixtures, which would
   measure fixed overhead rather than throughput: PNG scanlines go through
   sankoch's `zlib_compress` so the real inflate + unfilter path runs, Adam7
@@ -371,14 +399,14 @@ path in the library (no chroma planes, no upsample, no color convert).
 
 ## Quality gates
 
-All green at 0.3.3 on cyrius 6.5.35:
+All green at 0.4.0 on cyrius 6.5.35:
 
 | gate | command | result |
 |---|---|---|
-| link check | `make build` | OK, 559,656 bytes, no warnings |
-| tests | `make test` | 784/784, 0 failures |
-| fuzz | `make fuzz` | 3,464,838/3,464,838, 0 failures (~10⁶ cases, ~10 s) |
-| bench | `make bench` | 12 benchmarks, fixtures self-verified, ~2 s |
+| link check | `make build` | OK, 568,128 bytes, no warnings |
+| tests | `make test` | 1,078/1,078, 0 failures |
+| fuzz | `make fuzz` | 5,284,328/5,284,328, 0 failures (~1.5 M cases) |
+| bench | `make bench` | 15 benchmarks, fixtures self-verified, ~2 s |
 | lint | `make lint` | 0 warnings (incl. `fuzz/*.fcyr` + `tests/bcyr/*.bcyr`) |
 | fmt | `make fmt-check` | clean |
 | vet | `make vet` | 1 dep, 0 untrusted, 0 missing |

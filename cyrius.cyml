@@ -30,6 +30,7 @@ modules = [
     "src/jpeg_idct.cyr",
     "src/jpeg_markers.cyr",
     "src/jpeg.cyr",
+    "src/bmp.cyr",
 ]
 
 [deps]

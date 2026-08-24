@@ -181,6 +181,22 @@ whole crate. The full guard-to-source mapping is in
     treat as transparent. Used by: `src/png_color.cyr` (0.3.3 — the key is
     now compared at full sample width, so a depth-16 key no longer aliases
     onto the 256 values sharing its high byte).
+- **Microsoft BMP / DIB format** — `BITMAPFILEHEADER`,
+  `BITMAPCOREHEADER` (12-byte, OS/2 1.x), `BITMAPINFOHEADER` (40-byte), the
+  `BI_*` compression enumeration, bottom-up-by-default row order with a
+  negative height selecting top-down, 4-byte row padding, and the B,G,R
+  channel order with a B,G,R,reserved palette.
+  <https://learn.microsoft.com/en-us/windows/win32/gdi/bitmap-storage>
+  Used by: `src/bmp.cyr` throughout. Three notes on what the format does
+  **not** pin down, each of which drove a decision:
+  - The fourth byte of a 32-bpp `BI_RGB` pixel is **undefined** — alpha is
+    only official under `BI_BITFIELDS` / the V4 masks. chitra treats an
+    all-zero alpha plane as padding and otherwise honours it; ImageMagick
+    agrees, which is what settled the heuristic.
+  - 16-bpp channel layout is 5-5-5 **by convention only** absent
+    `BI_BITFIELDS`, so 16 bpp is deferred rather than guessed.
+  - `BI_JPEG` / `BI_PNG` embed a whole other format inside the DIB. Refused
+    outright: honouring them re-enters the decoder.
 - **RFC 1950 (zlib) + RFC 1951 (DEFLATE)** — IDAT decompression contract;
   § 3.2.5 sets the ~1032:1 ratio backstop behind
   `CHITRA_MAX_INFLATE_RATIO`. **chitra does not implement inflate** — it

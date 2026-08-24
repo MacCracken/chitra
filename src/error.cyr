@@ -40,6 +40,11 @@ enum ChitraErrCode {
     CHITRA_ERR_JPEG_PRECISION   = 21;  # deferred: sample precision != 8 (12-bit) — 8-bit-only in 0.3.0
     CHITRA_ERR_JPEG_MODE        = 22;  # deferred: hierarchical/lossless/differential SOF modes
     CHITRA_ERR_JPEG_COMPONENTS  = 23;  # deferred: unsupported component count (CMYK/YCCK 4-component)
+    # ---- BMP (chitra 0.4.0, BI_RGB uncompressed) ----
+    CHITRA_ERR_BMP_HEADER       = 24;  # malformed file header or DIB header (size/planes/offsets)
+    CHITRA_ERR_BMP_DEPTH        = 25;  # bpp not in {1,4,8,24,32} (16 deferred)
+    CHITRA_ERR_BMP_COMPRESSION  = 26;  # deferred: RLE4/RLE8, BITFIELDS, embedded JPEG/PNG
+    CHITRA_ERR_BMP_PALETTE      = 27;  # palette missing, short, or an index outside it
     CHITRA_ERR_OTHER      = 99;  # catch-all
 }
 
@@ -114,6 +119,10 @@ fn chitra_err_name(code): i64 {
     if (code == CHITRA_ERR_JPEG_PRECISION)   { return "JPEG sample precision unsupported"; }
     if (code == CHITRA_ERR_JPEG_MODE)        { return "JPEG mode unsupported"; }
     if (code == CHITRA_ERR_JPEG_COMPONENTS)  { return "JPEG component count unsupported"; }
+    if (code == CHITRA_ERR_BMP_HEADER)       { return "malformed BMP header"; }
+    if (code == CHITRA_ERR_BMP_DEPTH)        { return "BMP bit depth unsupported"; }
+    if (code == CHITRA_ERR_BMP_COMPRESSION)  { return "BMP compression unsupported"; }
+    if (code == CHITRA_ERR_BMP_PALETTE)      { return "BMP palette invalid"; }
     if (code == CHITRA_ERR_OTHER)      { return "other error"; }
     return "unknown error";
 }

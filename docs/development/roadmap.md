@@ -1,11 +1,11 @@
 # chitra — Roadmap
 
-> **Last Updated**: 2026-08-23 (0.3.3)
+> **Last Updated**: 2026-08-24 (0.4.0)
 >
 > Sequencing — what ships, in what order, against what gates. Volatile state
 > (current version, sizes, assertion counts, in-flight work) lives in
-> [`state.md`](state.md), not here. **chitra is pre-v1** (current: 0.3.3) and
-> both decode paths are **feature-complete for their scope** — every spec-legal
+> [`state.md`](state.md), not here. **chitra is pre-v1** (current: 0.4.0) and
+> all three decode paths are **feature-complete for their scope** — every spec-legal
 > PNG depth × color-type × interlace combination, and JFIF **baseline** JPEG
 > (grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0, restart markers), decode to
 > canonical RGBA8. Hardening infrastructure is **done** — both harnesses landed
@@ -32,6 +32,7 @@ Per-release detail, per-bite provenance, and deferrals live in
 | [0.3.0](../../CHANGELOG.md#030--2026-06-27) | **JFIF baseline JPEG → the same canonical RGBA8.** A full baseline (SOF0) sequential-Huffman 8-bit decoder: grayscale (1 comp) + YCbCr (3 comp), chroma subsampling 4:4:4 / 4:2:2 / 4:2:0 (and general Hi,Vi box upsampling), and DRI / RST0–7 restart markers. Pipeline = marker walk (DQT/DHT/SOF0/DRI) → per-component MCU loop (bit-reader + `DECODE`/`RECEIVE`/`EXTEND`, libjpeg islow integer IDCT, level-shift+clamp) → box upsample → BT.601 YCbCr→RGB. New public `chitra_jpeg_decode` / `chitra_jpeg_decode_rgba8` / `chitra_jpeg_check_signature` plus a signature-sniffing `chitra_image_decode` PNG-vs-JPEG router. Output verified **byte-identical to ImageMagick** on a real 16×16 baseline gradient (real Annex K Huffman tables + AC entropy). Non-baseline modes (progressive / arithmetic / 12-bit / hierarchical/lossless / CMYK) reject loud with distinct codes (ADR [0004](../adr/0004-jpeg-decode-model.md)). |
 | [0.3.1](../../CHANGELOG.md#031---2026-08-17) | **Toolchain bump** — cyrius pin 6.2.44 → 6.5.27, matching the rest of the AGNOS desktop stack. No decode change. |
 | [0.3.2](../../CHANGELOG.md#032---2026-08-23) | **Toolchain catch-up + version-probe fix** — cyrius pin 6.5.27 → 6.5.35 with `lib/` re-vendored, clearing the shadow-lib and pin-drift build warnings. Fixes `chitra_version()`, which 0.3.1 left at its 0.3.0 value while bumping every other version source; `make version-check` now gates that literal so it cannot drift silently again. No decode change. |
+| [0.4.0](../../CHANGELOG.md#040---2026-08-24) | **BMP → the same canonical RGBA8.** The third format, and the simplest decode path in the library: no entropy coding, no DEFLATE, no DCT — **6 ns/px** at 24/32 bpp against PNG's 83 and JPEG's 43. `BI_RGB` uncompressed at 1/4/8 bpp (palette, MSB-first), 24 bpp and 32 bpp; `BITMAPINFOHEADER` (40-byte) and `BITMAPCOREHEADER` (12-byte) DIB headers; bottom-up **and** top-down row order; the BGRA palette. New public `chitra_bmp_decode` / `chitra_bmp_decode_rgba8` / `chitra_bmp_check_signature`; `chitra_image_decode` now sniffs three formats. Output verified **identical to ImageMagick** on all eight valid fixtures, including the bottom-up/top-down pair that must agree from opposite storage orders. RLE4/RLE8, BITFIELDS, 16 bpp, V4/V5 headers reject with distinct codes; `BI_JPEG`/`BI_PNG` are refused outright as a decoder-recursion surface. +294 test assertions, +1,819,490 fuzz assertions, +3 benchmarks. |
 | [0.3.3](../../CHANGELOG.md#033---2026-08-23) | **P-1 audit, hardening and repair — and both v1.0 hardening gates.** A ten-lens adversarial sweep of both decode paths, every finding put to two independent skeptics. **No memory-safety defect was found**; the repairs are correctness, conformance and resource hardening: full-width depth-16 tRNS keying, rejection of single-component non-interleaved JPEG scans, a JPEG decompression-bomb cap (`CHITRA_MAX_JPEG_RATIO`, the analogue of the PNG inflate-ratio cap), a `chitra_err_new` that can no longer return 0, T.81 fill-byte handling, ZRL overrun rejection, non-segment marker rejection, and the PNG § 5.4 / § 5.6 chunk-ordering guards. Every repair carries a regression test verified to fail against the pre-repair code. **Four input classes that previously decoded now reject**, deliberately. Adds the first fuzz harnesses (`make fuzz`, ~10⁶ cases) and the first benchmark harness (`make bench` + `bench-history.csv`), closing both remaining v1.0 hardening gates. Audit: [`2026-08-23`](../audit/2026-08-23-audit.md). |
 
 ## v1.0 criteria
@@ -51,7 +52,8 @@ surface freeze.
   `CHITRA_ERR_JPEG_*` codes (13–23). Decode model: ADR
   [`0004-jpeg-decode-model.md`](../adr/0004-jpeg-decode-model.md); design:
   [`../proposals/jpeg-baseline-decoder.md`](../proposals/jpeg-baseline-decoder.md).
-  Format coverage is **progressing**, not closed — GIF/BMP remain (see below).
+  Format coverage is **progressing**, not closed — BMP shipped in 0.4.0, GIF
+  lands in 0.5.0 (see *Planned releases*).
 - [x] **First security audit** — line-by-line guard verification across the
   src modules, captured in
   [`../audit/2026-06-26-audit.md`](../audit/2026-06-26-audit.md). Confirmed
@@ -118,39 +120,72 @@ surface freeze.
   ([`../guides/getting-started.md`](../guides/getting-started.md)), and
   examples ([`../examples/README.md`](../examples/README.md)) all current.
 
-## Roadmap ahead (not yet committed)
+## Planned releases
 
-Ordered roughly by readiness. The PNG and JFIF-baseline-JPEG decode
-substrates are done; what remains is the next formats and the hardening
-infrastructure that gates v1.0.
+Committed sequencing. Each is a single coherent cycle, smallest-first, and each
+lands decode coverage (or surface stability) the previous one did not.
 
-- **GIF / BMP via chitra** — the next common raster formats decode into the
-  same canonical RGBA8 surface PNG and JPEG already produce. This is the
-  **format-agnostic name paying off**: chitra (चित्र = "image") gains GIF and
-  BMP without a rename, exactly as it gained the full PNG matrix and then
-  baseline JPEG. Consumers (mabda, kii) pick each up on a plain
-  `[deps.chitra]` re-pin. GIF raises animation / multi-frame questions to
-  settle in scope (see Out of scope) before committing; BMP is the simpler
-  of the two and likely lands first.
-- ~~Fuzz + benchmark harnesses~~ — **both closed in 0.3.3.** The remaining
-  work before a v1.0 freeze is the **API/ABI freeze itself** and the next
-  format, not hardening infrastructure.
-- **T.81 § A.2 non-interleaved scans** — a scan carrying a single component is
-  non-interleaved: its MCU is one data unit over the component's own
-  dimensions. chitra implements only the interleaved geometry, so since 0.3.3
-  it **rejects** a lone component with `H > 1` or `V > 1`
-  (`CHITRA_ERR_UNSUPPORTED`) rather than emitting the zero-padded, fabricated
-  pixels it previously did. Implementing the layout would turn that rejection
-  back into a decode. Low urgency — every real grayscale encoder emits
-  `H = V = 1`, where the two layouts coincide exactly — but it is a spec-legal
-  input class chitra currently refuses, so it is better settled before the
-  surface freezes than after. ADR
-  [0004](../adr/0004-jpeg-decode-model.md) records why rejecting was the right
-  call for a patch cut.
-- **Possible streaming / byte-budget API** — a chunked-input or
-  bounded-allocation decode entry point for consumers that cannot hand the
-  whole encoded buffer at once, or that need a hard memory ceiling. Speculative
-  — only if a consumer needs it; the current API takes one in-memory `(src, len)`.
+### ~~0.4.0 — BMP~~ — SHIPPED
+
+See the *Shipped* index above. Retained here for the deferral list, which is
+still the live scope boundary:
+
+Windows BMP into the same canonical RGBA8 surface PNG and JPEG already produce.
+BMP first because it is the simpler of the two remaining raster formats: no
+entropy coding, no DEFLATE, no DCT — a header, an optional palette, and rows of
+samples. The work is in the header variants, the bottom-up row order, the
+4-byte row padding, and the channel order (BMP is BGR(A), not RGB(A)).
+
+In scope: `BITMAPINFOHEADER` (40-byte) and `BITMAPCOREHEADER` (12-byte) DIB
+headers; `BI_RGB` uncompressed at 1 / 4 / 8 bpp (palette-indexed), 24 bpp and
+32 bpp; bottom-up (positive height) and top-down (negative height) row order;
+the BGRA palette; 32-bpp alpha where the header declares it.
+
+Deferred with distinct error codes, per the defer-don't-half-implement posture
+([ADR 0004](../adr/0004-jpeg-decode-model.md) set the precedent): `BI_RLE8` /
+`BI_RLE4` run-length compression, `BI_BITFIELDS` custom channel masks, 16 bpp,
+`BI_JPEG` / `BI_PNG` embedded streams (which would be a decoder calling itself
+— a recursion surface worth refusing outright), and the `BITMAPV4` / `BITMAPV5`
+header extensions beyond the fields the 40-byte header already covers.
+
+One scope note worth carrying forward: **32-bpp `BI_RGB` alpha is a documented
+heuristic**, not a spec reading. The fourth byte is formally undefined for
+`BI_RGB`; chitra treats an all-zero alpha plane as padding (opaque) and
+otherwise honours it, because trusting it blindly renders padding-zero files
+invisible and ignoring it discards real alpha. ImageMagick makes the same call.
+A future cut that implements `BI_BITFIELDS` / V4 masks would replace the
+heuristic with the declared masks.
+
+### 0.5.0 — GIF
+
+GIF into the same surface. Deliberately after BMP because it is the harder of
+the two and raises a scope question BMP does not: **animation**. GIF carries LZW
+compression, a global and per-frame local palette, interlacing, and a frame
+sequence with disposal methods.
+
+The scope decision to settle before this starts: whether `chitra_gif_decode`
+returns the **first frame only** (keeping the one-image-in/one-image-out
+contract every other format honours, and keeping `ChitraImage` unchanged), or
+whether chitra grows a multi-frame surface. First-frame-only is the smaller,
+contract-preserving move and is the presumption unless a consumer needs
+otherwise; either way the decision earns an ADR before code.
+
+### 0.6.0 — deferred decode paths + surface work
+
+The two items previously parked as uncommitted, now sequenced:
+
+- **T.81 § A.2 non-interleaved JPEG scans** — implement the non-interleaved
+  layout so a single-component scan with `H > 1` or `V > 1` **decodes** instead
+  of being rejected. 0.3.3 chose rejection over mis-rendering for a patch cut
+  (`CHITRA_ERR_UNSUPPORTED`); this is the follow-through. Every real grayscale
+  encoder emits `H = V = 1`, where the interleaved and non-interleaved layouts
+  coincide, so the urgency is low — but it is a spec-legal input class chitra
+  currently refuses.
+- **Streaming / byte-budget decode API** — a chunked-input or
+  bounded-allocation entry point for consumers that cannot hand over the whole
+  encoded buffer at once, or that need a hard memory ceiling. This is additive
+  surface, so it wants an ADR and it wants to land before the v1.0 freeze
+  rather than after.
 
 ## Out of scope (durable scope guards)
 

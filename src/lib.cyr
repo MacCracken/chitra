@@ -62,3 +62,7 @@ include "src/jpeg_huffman.cyr"
 include "src/jpeg_idct.cyr"
 include "src/jpeg_markers.cyr"
 include "src/jpeg.cyr"
+
+# BMP (0.4.0) — BI_RGB uncompressed. Depends on error.cyr for codes,
+# png_chunks.cyr for the security ceilings, and png.cyr for ChitraImage.
+include "src/bmp.cyr"

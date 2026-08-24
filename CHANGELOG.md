@@ -5,6 +5,101 @@ All notable changes to chitra are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-08-24
+
+**BMP decode.** chitra gains its third format, normalizing Windows BMP to the
+same canonical RGBA8 `ChitraImage` that PNG and JPEG already produce. This is
+the format-agnostic name paying off: BMP joins on a plain `[deps.chitra]`
+re-pin, with no rename and no change to the existing surface.
+
+BMP is the simplest of the three decode paths — no entropy coding, no DEFLATE,
+no DCT — and it benchmarks that way: **6 ns/px** at 24/32 bpp against PNG's
+83 ns/px and JPEG's 43 ns/px for the equivalent 256×256 image. The difficulty
+in BMP is not compression but framing, and four quirks drive the
+implementation:
+
+1. **Rows are stored bottom-up.** A positive header height means the file's
+   first row is the image's *last* row. A negative height means top-down, and
+   the magnitude is the height.
+2. **Rows are padded to a 4-byte boundary**, so the stride is
+   `((width * bpp + 31) / 32) * 4`, not `width * bytes-per-pixel`.
+3. **Channels are B,G,R** — and the palette is B,G,R,reserved.
+4. **The pixel data offset is a header field**, not "after the palette". It is
+   authoritative, and there can be a gap.
+
+Decoder output is verified **identical to ImageMagick** on all eight valid
+fixtures — including the bottom-up/top-down pair, which must produce
+byte-identical output from opposite storage orders.
+
+### Added
+
+- **`src/bmp.cyr`** — the BMP decoder. `BI_RGB` uncompressed at 1 / 4 / 8 bpp
+  (palette-indexed, MSB-first packing), 24 bpp and 32 bpp; `BITMAPINFOHEADER`
+  (40-byte) and `BITMAPCOREHEADER` (12-byte) DIB headers; both row orders; the
+  BGRA palette.
+- New public surface, mirroring the existing pairs exactly:
+  `chitra_bmp_decode(src, len, err_out)`,
+  `chitra_bmp_decode_rgba8(src, len, w_out, h_out)`, and
+  `chitra_bmp_check_signature(src, len)`.
+- **`chitra_image_decode` now sniffs three formats** — PNG magic, then JPEG
+  SOI, then BMP `BM`, then `CHITRA_ERR_SIGNATURE`. Existing callers gain BMP
+  support with no code change.
+- `ChitraImage.src_ctype` gains the BMP sentinel **`0x200 | bpp`** — so `0x201`
+  / `0x204` / `0x208` for the indexed depths, `0x218` for 24 bpp and `0x220`
+  for 32 bpp. Distinct from PNG's raw color_type (0/2/3/4/6) and JPEG's
+  `0x100 | ncomp`.
+- Four error codes (24–27): `CHITRA_ERR_BMP_HEADER`, `_BMP_DEPTH`,
+  `_BMP_COMPRESSION`, `_BMP_PALETTE`.
+- **`tests/tcyr/bmp.tcyr`** — 294 assertions. Fixture pixel values are
+  deliberately distinct per position, because a decoder that got the row order
+  *or* the channel order wrong would still return the right *set* of pixels,
+  just in the wrong places — only position-sensitive expectations catch that.
+- **`fuzz/fuzz_bmp.fcyr`** — ~500,000 adversarial cases, **1,819,490
+  assertions**, 0 failures. BMP has **no checksum of any kind**, so unlike PNG
+  every mutation reaches the parser; the harness leans on that with a
+  header-only mutation mode that keeps the file plausible so the header parser
+  is always the thing under test. The hostile field that matters most is the
+  pixel-data offset — it is the one header value that can point anywhere in or
+  past the buffer.
+- **Three BMP benchmarks** in `tests/bcyr/chitra.bcyr` (24 / 32 / palette-8 at
+  256×256), fixtures generated and decode-verified before timing as with the
+  other formats.
+
+### Security
+
+- Every BMP header field is validated **before** it is used to derive another,
+  and every derived size is capped before anything is allocated: dimensions
+  against `CHITRA_MAX_DIM` / `CHITRA_MAX_PIXELS`, `stride * height` against
+  `CHITRA_MAX_RAW_BYTES`, the palette span and the whole pixel-data span
+  against the input length. A lying pixel-data offset is a clean rejection,
+  never an overread.
+- **Palette indices are hard-rejected** against the declared entry count —
+  the same posture as the PNG palette path, not a clamp.
+- Deferred modes reject with distinct codes rather than half-decoding, per the
+  posture [ADR 0004](docs/adr/0004-jpeg-decode-model.md) set for non-baseline
+  JPEG: `BI_RLE8` / `BI_RLE4`, `BI_BITFIELDS`, 16 bpp, and the
+  `BITMAPV4`/`BITMAPV5` header extensions. **`BI_JPEG` and `BI_PNG` are
+  refused on their own merit** — honouring them would have a decoder re-enter
+  itself, which is a recursion surface worth declining outright rather than
+  bounding.
+- `planes != 1` is treated as a malformed header, not a feature — there has
+  never been a multi-plane BMP in the wild.
+
+### Notes
+
+- **32 bpp `BI_RGB` alpha is a documented heuristic.** The fourth byte is
+  formally *undefined* for `BI_RGB` — alpha only becomes official with
+  `BI_BITFIELDS` / V4 masks, which are deferred. Writers disagree in practice:
+  some store real alpha, others leave it zero as padding. Trusting it blindly
+  renders the padding-zero files fully invisible; ignoring it discards real
+  alpha. chitra looks first: if *every* fourth byte is zero the field is
+  padding and the image is opaque, otherwise it is alpha and is honoured.
+  **ImageMagick makes the same call**, which is what settled it.
+- 16 bpp is deferred rather than guessed: without `BI_BITFIELDS` the channel
+  layout is 5-5-5 by convention only, and honouring a convention while
+  refusing the header that declares it would be exactly the kind of guess this
+  project rejects elsewhere.
+
 ## [0.3.3] - 2026-08-23
 
 **P-1 audit, hardening and repair cut.** A ten-lens adversarial sweep of both
