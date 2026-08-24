@@ -1,10 +1,10 @@
 # chitra — Roadmap
 
-> **Last Updated**: 2026-08-24 (0.6.1)
+> **Last Updated**: 2026-08-24 (0.7.0)
 >
 > Sequencing — what ships, in what order, against what gates. Volatile state
 > (current version, sizes, assertion counts, in-flight work) lives in
-> [`state.md`](state.md), not here. **chitra is pre-v1** (current: 0.6.1) and
+> [`state.md`](state.md), not here. **chitra is pre-v1** (current: 0.7.0) and
 > all four decode paths are **feature-complete for their scope** — every spec-legal
 > PNG depth × color-type × interlace combination, and JFIF **baseline** JPEG
 > (grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0, restart markers), decode to
@@ -307,7 +307,7 @@ doc drift. Nothing was left in a document that no release reads.
 
 Ordered smallest-first, each cut a single theme.
 
-### 0.7.0 — Stream-end honesty
+### ~~0.7.0 — Stream-end honesty~~ — SHIPPED
 
 **The decoder must say when it fabricated pixels.** Today it does not, and the
 one field that exists to say so is a constant.
@@ -324,11 +324,22 @@ one field that exists to say so is a constant.
   — a PNG-specific "the stream closed properly" signal repurposed as a
   constant on three formats of four.
 
-Scope: make the field mean "the stream ended the way this format says it
-should", per format, and keep decoding rather than start rejecting — matching
-libjpeg's partial-image behaviour and chitra's own tolerance of an IEND-less
-PNG and an EOI-less JPEG. This is a **public behaviour change**, which is why
-it is a minor bump and not a patch.
+Shipped as described: the field now means "the stream ended the way this
+format says it should", per format, and chitra keeps decoding rather than
+starting to reject — matching libjpeg's partial-image behaviour and chitra's
+own tolerance of an IEND-less PNG.
+
+Two things the plan did not anticipate, both recorded because they generalise:
+
+- **JPEG needs two independent conditions**, not one. A real EOI and a
+  truncated scan both leave the bit reader zero-padding, so the marker alone
+  cannot tell them apart — that took a new `BR_EOD` flag. And the flag alone is
+  not sufficient either: it misses a file whose EOI was spliced in early. Only
+  the conjunction is honest.
+- **Plain truncation of a GIF mostly rejects**, so it does not exercise this
+  path. The reachable case is a *structurally valid* file whose LZW sub-block
+  chain ends early. A test built on naive truncation would have passed against
+  the unrepaired code.
 
 ### 0.7.1 — PNG spec conformance: chunks that are forbidden, not merely odd
 

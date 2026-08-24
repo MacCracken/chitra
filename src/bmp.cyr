@@ -988,6 +988,12 @@ fn chitra_bmp_decode(src, len, err_out): i64 {
     store64(img + IMAGE_HEIGHT_OFFSET, h);
     store64(img + IMAGE_PIXELS_OFFSET, rgba);
     store64(img + IMAGE_CHANNELS_OFFSET, 4);
+    # BMP has no stream terminator to have seen — no IEND, no EOI, no trailer.
+    # The whole `data_off + stride * height` span is validated against the input
+    # length before a single pixel is read, so if the decode got this far the
+    # pixel data was entirely present. 1 is therefore the honest answer here,
+    # not a placeholder: unlike the JPEG and GIF paths before 0.7.0, there is no
+    # incomplete-but-decoded state for this field to be hiding.
     store64(img + IMAGE_SEEN_IEND_OFFSET, 1);
     # src_ctype sentinel: 0x200 | bpp — so 0x201/0x204/0x208 indexed,
     # 0x218 for 24 bpp, 0x220 for 32 bpp. Distinct from PNG's raw color_type

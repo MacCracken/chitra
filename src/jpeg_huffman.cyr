@@ -100,7 +100,13 @@ var BR_END    = 16;
 var BR_BUF    = 24;
 var BR_CNT    = 32;
 var BR_MARKER = 40;
-var BR_SIZE   = 48;
+# +48 eod — set the moment the reader needs a byte the input does not contain.
+# It is NOT the same question as BR_MARKER: a scan that ends at a real EOI and
+# a scan that simply runs out both leave the reader zero-padding, and only this
+# flag tells them apart. That distinction is what lets a caller learn its JPEG
+# was truncated (0.7.0), which it previously could not.
+var BR_EOD    = 48;
+var BR_SIZE   = 56;
 
 fn _jpeg_br_init(reader, base, len): i64 {
     store64(reader + BR_BASE, base);
@@ -109,10 +115,13 @@ fn _jpeg_br_init(reader, base, len): i64 {
     store64(reader + BR_BUF, 0);
     store64(reader + BR_CNT, 0);
     store64(reader + BR_MARKER, 0);
+    store64(reader + BR_EOD, 0);
     return 0;
 }
 
 fn _jpeg_br_marker(reader): i64 { return load64(reader + BR_MARKER); }
+# 1 once the reader has had to fabricate bits because the input ran out.
+fn _jpeg_br_eod(reader): i64    { return load64(reader + BR_EOD); }
 fn _jpeg_br_pos(reader): i64    { return load64(reader + BR_POS); }
 
 # Resync at a restart-interval boundary (T.81 § F.2.1.3.1 / E.1.1): discard the
@@ -160,7 +169,10 @@ fn _jpeg_br_load_byte(reader): i64 {
     var end = load64(reader + BR_END);
     var b = 0;
     var b2 = 0;
-    if (pos >= end) { return 0; }
+    if (pos >= end) {
+        store64(reader + BR_EOD, 1);
+        return 0;
+    }
     b = load8(base + pos);
     pos = pos + 1;
     if (b == 0xFF) {
@@ -181,7 +193,10 @@ fn _jpeg_br_load_byte(reader): i64 {
             }
         }
         if (pos >= end) {
+            # A trailing 0xFF run with nothing after it. The EOI is synthesized,
+            # not read — so this is end-of-data, not a clean close.
             store64(reader + BR_MARKER, 0xD9);
+            store64(reader + BR_EOD, 1);
             store64(reader + BR_POS, pos - 1);
             return 0;
         }

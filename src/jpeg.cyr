@@ -173,13 +173,18 @@ fn _jpeg_parse_sos(frame, src, len, err_out): i64 {
 # have worked just as well, which is why this walks to the end of the entropy
 # data rather than simply subtracting the header.
 #
+# *marker_out receives the marker code that ENDED the scan, or 0 if the input
+# ran out first. 0.7.0 uses that to tell a stream that closed with EOI from
+# one that simply stopped.
+#
 # The walk is the same rule the entropy bit-reader uses (T.81 § B.1.1.2 and
 # § F.1.2.3): inside entropy-coded data a 0xFF is always followed by 0x00
 # (byte stuffing) or by an RSTn marker; any other marker ENDS the scan. Fill
 # bytes (runs of 0xFF) are collapsed, exactly as the reader collapses them.
 # Reads only — nothing is decoded, and every access is bounded by `len`.
 # ================================================================
-fn _jpeg_entropy_span(src, len, start): i64 {
+fn _jpeg_entropy_span(src, len, start, marker_out): i64 {
+    store64(marker_out, 0);
     var i = start;
     var j = 0;
     var b2 = 0;
@@ -222,6 +227,7 @@ fn _jpeg_entropy_span(src, len, start): i64 {
                         continue;
                     }
                 }
+                store64(marker_out, b2);
                 done = 1;               # any other marker ends the scan
             }
         }
@@ -299,7 +305,8 @@ fn _jpeg_decode_scan(frame, src, len, entropy_start, err_out): i64 {
     # let an attacker buy allowance with bytes the decoder never decodes —
     # a 16,556-byte file padded with 16,404 bytes of skipped APPn segments
     # allocated 117,463,728 bytes. See _jpeg_entropy_span above.
-    var espan = _jpeg_entropy_span(src, len, entropy_start);
+    var scan_end_marker = 0;
+    var espan = _jpeg_entropy_span(src, len, entropy_start, &scan_end_marker);
     if (w * h * 4 > espan * CHITRA_MAX_JPEG_RATIO) {
         store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
         return 0;
@@ -383,7 +390,7 @@ fn _jpeg_decode_scan(frame, src, len, entropy_start, err_out): i64 {
     done = 0;
 
     var ri = chitra_jpeg_frame_restart_interval(frame);
-    var reader[48];
+    var reader[56];   # BR_SIZE — 56 since 0.7.0's BR_EOD flag
     _jpeg_br_init(&reader, src + entropy_start, len - entropy_start);
     var zz = alloc(512);
     var out = alloc(512);
@@ -582,7 +589,29 @@ fn _jpeg_decode_scan(frame, src, len, entropy_start, err_out): i64 {
     store64(img + IMAGE_HEIGHT_OFFSET, h);
     store64(img + IMAGE_PIXELS_OFFSET, rgba);
     store64(img + IMAGE_CHANNELS_OFFSET, 4);
-    store64(img + IMAGE_SEEN_IEND_OFFSET, 1);
+    # 0.7.0 — say whether the stream actually closed, instead of claiming it
+    # always did.
+    #
+    # Through 0.6.1 this field was hardcoded to 1 on the JPEG path, so the one
+    # accessor that exists to report "the stream ended the way the format says
+    # it should" was a constant. A JPEG truncated inside its entropy stream
+    # decoded to fabricated zero-padded MCUs, returned success, and reported a
+    # clean close — measured on a 689-byte file, chopping 8 to 60 bytes gave
+    # byte sums of 215,484 / 229,896 / 143,178 against a correct 223,824, with
+    # no signal of any kind.
+    #
+    # Two independent things have to hold, and neither alone is sufficient:
+    #   - the entropy decoder never had to fabricate bits (BR_EOD), which is
+    #     what catches data removed from the middle or the end of the scan; and
+    #   - the scan was terminated by a real EOI marker, which is what catches an
+    #     EOI-stripped file whose pixels happen to be complete.
+    # This mirrors PNG, where 0 means "tolerated IEND-less clean end" rather
+    # than "corrupt" — chitra still returns the image either way, as libjpeg
+    # does. The caller decides what a partial decode is worth.
+    var closed = 1;
+    if (_jpeg_br_eod(&reader) == 1) { closed = 0; }
+    if (scan_end_marker != 0xD9) { closed = 0; }
+    store64(img + IMAGE_SEEN_IEND_OFFSET, closed);
     # JPEG sentinel: 0x100 | ncomp, with bit 4 set when the components are RGB
     # rather than YCbCr — so 0x101 gray, 0x103 YCbCr, 0x113 RGB. Without the
     # distinction an Adobe transform=0 file reports 0x103 and a consumer has no

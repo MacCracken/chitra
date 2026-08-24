@@ -377,6 +377,13 @@ fn chitra_gif_decode(src, len, err_out): i64 {
     # the alternative is inventing a transparency the file never declared.
     var z = got;
     while (z < npix) { store8(idx + z, 0); z = z + 1; }
+    # 0.7.0: remember whether the frame was actually filled. Zero-filling the
+    # tail is the right DECODE, but returning it with no signal meant a caller
+    # could not tell a complete frame from a prefix followed by palette entry 0
+    # at full alpha — which is what a GIF truncated inside its sub-block chain
+    # produces.
+    var frame_complete = 1;
+    if (got < npix) { frame_complete = 0; }
 
     # ---- canvas: logical screen, transparent where this frame paints nothing
     var out_size = screen_w * screen_h * 4;
@@ -456,7 +463,12 @@ fn chitra_gif_decode(src, len, err_out): i64 {
     store64(img + IMAGE_HEIGHT_OFFSET, screen_h);
     store64(img + IMAGE_PIXELS_OFFSET, rgba);
     store64(img + IMAGE_CHANNELS_OFFSET, 4);
-    store64(img + IMAGE_SEEN_IEND_OFFSET, 1);
+    # 0.7.0 — the GIF analogue of PNG's IEND question: did the stream deliver
+    # the frame it promised? Hardcoded to 1 through 0.6.1, so a truncated GIF
+    # reported a clean end while handing back a prefix. chitra still returns
+    # the partial image (ADR 0005's posture: decode what is there), but the
+    # caller can now tell.
+    store64(img + IMAGE_SEEN_IEND_OFFSET, frame_complete);
     # src_ctype sentinel: 0x300 | (bits per palette index). Distinct from PNG's
     # raw color_type, JPEG's 0x100 | ncomp, and BMP's 0x200 | bpp.
     store64(img + IMAGE_SRC_CTYPE_OFFSET, 768 + min_code_size);

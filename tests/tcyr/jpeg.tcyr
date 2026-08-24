@@ -554,7 +554,7 @@ fn test_extend() {
 fn test_bitreader() {
     var buf[4];
     store8(&buf + 0, 0xB5);   # 1011 0101
-    var rdr[48];
+    var rdr[56];   # BR_SIZE
     _jpeg_br_init(&rdr, &buf, 1);
     assert_eq(_jpeg_br_bit(&rdr), 1, "bit0");
     assert_eq(_jpeg_br_bit(&rdr), 0, "bit1");
@@ -569,7 +569,7 @@ fn test_bitreader_stuffing() {
     store8(&buf + 0, 0xFF);
     store8(&buf + 1, 0x00);   # stuffed -> 0xFF is real data
     store8(&buf + 2, 0x80);   # 1000 0000
-    var rdr[48];
+    var rdr[56];   # BR_SIZE
     _jpeg_br_init(&rdr, &buf, 3);
     assert_eq(_jpeg_br_bits(&rdr, 8), 255, "stuffed 0xFF reads as 255");
     assert_eq(_jpeg_br_bit(&rdr), 1, "next bit from 0x80 = 1");
@@ -582,7 +582,7 @@ fn test_bitreader_marker() {
     store8(&buf + 0, 0x80);   # 1000 0000
     store8(&buf + 1, 0xFF);
     store8(&buf + 2, 0xD9);   # EOI marker
-    var rdr[48];
+    var rdr[56];   # BR_SIZE
     _jpeg_br_init(&rdr, &buf, 3);
     assert_eq(_jpeg_br_bit(&rdr), 1, "first data bit");
     assert_eq(_jpeg_br_bits(&rdr, 7), 0, "rest of 0x80");
@@ -596,7 +596,7 @@ fn test_decode_block() {
     var act = fx_ac_table();
     var lo = 0;
     var ent = fx_entropy_block(&lo);
-    var rdr[48];
+    var rdr[56];   # BR_SIZE
     _jpeg_br_init(&rdr, ent, lo);
     var zz = alloc(512);
     var err = 0;
@@ -616,7 +616,7 @@ fn test_decode_block_dc_predictor() {
     var act = fx_ac_table();
     var lo = 0;
     var ent = fx_entropy_block(&lo);
-    var rdr[48];
+    var rdr[56];   # BR_SIZE
     _jpeg_br_init(&rdr, ent, lo);
     var zz = alloc(512);
     var err = 0;
@@ -1573,7 +1573,7 @@ fn test_reject_dc_oversize() {
     var act = fx_ac_table();
     var buf[2];
     store8(&buf + 0, 0x00);
-    var rdr[48];
+    var rdr[56];   # BR_SIZE
     _jpeg_br_init(&rdr, &buf, 2);
     var zz = alloc(512);
     var err = 0;
@@ -1587,7 +1587,7 @@ fn test_reject_ac_oversize() {
     var act = fx_ac_table_s11();
     var buf[2];
     store8(&buf + 0, 0x00);
-    var rdr[48];
+    var rdr[56];   # BR_SIZE
     _jpeg_br_init(&rdr, &buf, 2);
     var zz = alloc(512);
     var err = 0;

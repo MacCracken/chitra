@@ -4,7 +4,7 @@ chitra is a decode **library**: consumers link `dist/chitra.cyr`, hand
 it encoded image bytes, and get back canonical RGBA8. There is no CLI,
 no stdout emit, no terminal surface to capture — so this directory does
 not yet carry the `run.sh`/`expected.txt` example dirs you may know from
-sibling AGNOS tools. chitra is early (0.6.1, pre-1.0); examples grow as
+sibling AGNOS tools. chitra is early (0.7.0, pre-1.0); examples grow as
 the API stabilizes.
 
 ## What exists today

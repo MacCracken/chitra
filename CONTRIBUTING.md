@@ -99,7 +99,7 @@ Place each in the matching `tests/tcyr/` suite — `error.tcyr` (error paths),
 `interlace.tcyr` (Adam7), `jpeg.tcyr` (baseline JPEG decode + reject paths),
 `png.tcyr` (the core PNG decode matrix), or `subbyte.tcyr` (1/2/4-bit
 grayscale/palette). The suites are globbed by `make test`; each is a standalone
-`main()`. The current baseline is **2,802 assertions across 9 suites** — PRs that
+`main()`. The current baseline is **2,820 assertions across 10 suites** — PRs that
 lower coverage will be asked to add it.
 Confirm the count with `make count-assertions`.
 

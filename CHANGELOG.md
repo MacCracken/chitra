@@ -5,6 +5,75 @@ All notable changes to chitra are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] - 2026-08-24
+
+**Stream-end honesty.** `chitra_image_seen_iend` exists to answer one question —
+did the encoded stream end the way its format says it should? PNG has answered
+it honestly since 0.2.0. **JPEG, BMP and GIF hardcoded `1`**, so on three
+formats of four the single accessor a consumer could use to detect an
+incomplete stream was a constant.
+
+That matters because chitra deliberately **decodes** incomplete streams rather
+than rejecting them, exactly as libjpeg does. A JPEG truncated inside its
+entropy data comes back as fabricated zero-padded MCUs; a GIF whose LZW stream
+stops early comes back with its tail filled by palette entry 0 at full alpha.
+Both are defensible decodes. Both were indistinguishable from a complete one.
+
+Measured on a 689-byte JPEG before the repair: chopping 8, 20 and 60 bytes gave
+byte sums of **215,484 / 229,896 / 143,178** against a correct 223,824 — every
+one reporting a cleanly closed stream.
+
+**2,820 test assertions** across **10 suites**, 0 failures.
+
+### Changed
+
+- **`chitra_image_seen_iend` now means what it says on every format.** It is
+  never an error on its own — all of these cases still return a usable
+  `ChitraImage`, and the caller decides what a partial decode is worth.
+  - **JPEG** — `1` if the scan ended at a real EOI **and** the entropy decoder
+    never had to fabricate bits. Both conditions are needed and neither is
+    sufficient: the first alone misses a file whose EOI was spliced in early,
+    the second alone misses an EOI-stripped file whose pixels are complete.
+    Implemented with a new `BR_EOD` flag on the bit reader, set the moment it
+    needs a byte the input does not contain — a real EOI and a truncated scan
+    both leave the reader zero-padding, and only that flag tells them apart.
+  - **GIF** — `1` if the LZW stream filled the frame. Note this asks about the
+    **frame**, not the file trailer: chitra decodes the first frame only
+    ([ADR 0005](docs/adr/0005-gif-first-frame-only.md)), so on a multi-frame
+    GIF it never reads far enough for the trailer to mean anything.
+  - **BMP** — still always `1`, now deliberately rather than by omission. The
+    format has no terminator, and the entire pixel span is validated against
+    the input length before anything is read, so a decode that returns at all
+    had complete data.
+  - **PNG** — unchanged.
+
+  A consumer treating `seen_iend` as "always 1 except on PNG" will now see `0`
+  on truncated JPEG and GIF input. That is the repair.
+
+### Added
+
+- `tests/tcyr/stream_end.tcyr` — a 10th suite (18 assertions) pinning the
+  signal for every format **in both directions**. A suite that only checked the
+  truncated cases would pass with the field hardcoded the other way.
+
+  Its GIF fixture is worth a note: plain truncation of a GIF mostly *rejects*
+  with `CHITRA_ERR_TRUNCATED`, so it does not exercise this path at all. The
+  reachable case is a **structurally valid** file whose LZW sub-block chain
+  ends early — built by shortening the first sub-block and splicing in the
+  end-of-blocks terminator. ImageMagick reads it without complaint.
+
+### Notes
+
+- The bit-reader record grew from 48 to 56 bytes for `BR_EOD`. Every
+  `var reader[48]` / `var rdr[48]` declaration moved with it — in `src/` and in
+  the seven test call sites. A `var buf[N]` is N **bytes**, and a record that
+  outgrows its declaration writes past it: the first build after the reader
+  grew failed 8 assertions in exactly that way, which is the cheapest possible
+  version of that lesson.
+- No public function, struct offset or error code changed. `ChitraImage` keeps
+  its 48-byte layout and every accessor keeps its meaning; what changed is that
+  one of them now reports a fact instead of a constant.
+
 ## [0.6.1] - 2026-08-24
 
 **A repair cut, and the byte-budget surface ADR 0007 deferred.** A tree-wide
