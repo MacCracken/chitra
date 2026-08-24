@@ -66,7 +66,7 @@ make count-assertions                                # NUL-safe assertion total 
 - Test after EVERY change, not after the feature is "done" — `make test` is cheap.
 - ONE change at a time — never bundle unrelated changes.
 - **DEFLATE is sankoch's job, not chitra's** — IDAT inflate + chunk-CRC route through `sankoch` (`zlib_decompress` / `crc32` / `adler32`), exactly as kii does. Don't reimplement zlib inline.
-- **Validate against a real reference** — every decode-matrix claim is checked against ImageMagick output, plus an interlaced-vs-non-interlaced cross-check. Numbers/images or it didn't happen.
+- **Validate against a real reference** — every decode-matrix claim is checked against ImageMagick output, plus an interlaced-vs-non-interlaced cross-check. Numbers/images or it didn't happen. **JPEG narrowing**: the primary oracle is `djpeg -nosmooth`, which chitra matches byte-for-byte across the sampling matrix. ImageMagick is a valid *second* oracle only for grayscale and 4:4:4 — it upsamples chroma with a fancy (triangle) filter where chitra uses box, so on a 4:2:0 file it differs in 937 of 1536 bytes at up to 40/byte. That is a filter difference, not a bug; don't chase it.
 - **Spec-cite the hard cells** — bit-depth × color-type legality follows PNG § 11.2.2 Table 11.1; the five unfilter predictors follow § 9. Cite the section in the code.
 - Every buffer declaration is a contract: `var buf[N]` = N **bytes**, not N entries.
 - **Trust no input byte** — an encoded image (PNG, JPEG, BMP or GIF) is untrusted external data. Bounds-check every length, reject lying headers, cap decompression bombs, bound every entropy/Huffman loop.
@@ -158,7 +158,7 @@ non-negotiable — re-verify each before tagging.
 9. **Chunk ordering + uniqueness** — PLTE and tRNS are each at-most-once and must precede IDAT (§ 5.6 / § 11.3.2). Track "have we seen IDAT" with an explicit flag, never by testing an accumulated byte count: a spec-legal **zero-length IDAT** leaves the count at 0 and defeats the guard
 10. **tRNS keys one exact value** — the § 11.3.2 color key is compared at FULL sample width. Comparing at the truncated 8-bit output width makes every value sharing a high byte transparent
 
-**JPEG** (baseline; see [docs/audit/2026-06-27-audit.md](docs/audit/2026-06-27-audit.md) and [docs/audit/2026-08-23-audit.md](docs/audit/2026-08-23-audit.md)):
+**JPEG** (baseline; see [docs/audit/2026-06-27-audit.md](docs/audit/2026-06-27-audit.md) and [docs/audit/2026-08-23-audit.md](docs/audit/2026-08-23-audit.md); § A.2 geometry per [ADR 0006](docs/adr/0006-defer-jpeg-multiscan-resumption.md)):
 
 1. **Non-baseline rejection** — progressive / arithmetic / 12-bit / hierarchical-lossless / CMYK rejected at the marker classifier with distinct codes (attack-surface reduction)
 2. **Marker/segment bounds** — every 16-bit segment length validated against the input span
@@ -169,7 +169,10 @@ non-negotiable — re-verify each before tagging.
 7. **Amplification cap** — output:input bounded by `CHITRA_MAX_JPEG_RATIO` → `CHITRA_ERR_DIMENSIONS`. JPEG needs this *more* than PNG does: the entropy bit-reader zero-pads past end-of-data, so a hostile file needs **no scan payload at all** — the declared SOF0 geometry alone drives the work, and the bump allocator never reclaims it
 8. **Only length-bearing markers are skipped by length** — standalone markers (SOI, EOI, RSTn, TEM) and the T.81 Table B.1 reserved range are rejected, not treated as segments. Otherwise the walk reads two attacker bytes as a length and the cursor is steered by the input
 9. **Fill bytes tolerated, both sides** — § B.1.1.2 allows any number of `0xFF` bytes before a marker. The header walk *and* the entropy reader must both collapse the run, or valid files are rejected
-10. **Geometry chitra does not implement is rejected, not approximated** — a single-component scan is non-interleaved per § A.2; since only the interleaved layout is implemented, `H > 1 || V > 1` on a lone component rejects. Mis-rendering a spec-legal file is worse than refusing it
+10. **Geometry chitra does not implement is rejected, not approximated** — as of 0.6.0 that means MULTI-SCAN and partially-interleaved files (`Ns < Nf`), which reject with `CHITRA_ERR_UNSUPPORTED` (a deferral, not a validity error — the file is valid and chitra declines it; see [ADR 0006](docs/adr/0006-defer-jpeg-multiscan-resumption.md)). It no longer means the one-component case, which now decodes
+11. **For a ONE-component frame the sampling factors are INERT (0.6.0)** — not merely ignorable. § A.1.1 gives `x_i = ceil(X·H_i/H_max)`, and with `Nf = 1` the lone component IS the maximum, so `x_1 = X` for every legal `(H,V)`. That is why the non-interleaved layout is an *effective-geometry collapse* (force `H = V = max_h = max_v = 1`) rather than a second decoder — and why it needs no plane zero-fill: `cpw = ceil(w/8)*8` covers the plane with NO unwritten margin. Keep ONE grid variable; a second (`grid_w` for the count while `mcu_cols` sizes the plane) lets placement diverge from count
+12. **ΣHj·Vj ≤ 10 is § B.2.3 and applies only when Ns > 1** — it bounds an INTERLEAVED MCU, and a one-component frame has none. Conditioned, not removed, and it stays at the SOF0 parse (moving it to the scan header would put it after the allocations it exists to bound)
+13. **The exact-fit property depends on the BOX upsampler** — box reads exactly `(y·Vi/max_v)*comppw + (x·Hi/max_h)`. A fancy/triangle upsampler reads `x+1` and would make an edge margin live again, reopening a read-of-uninitialized class
 
 **BMP** (0.4.0 `BI_RGB`; + RLE 0.5.1; + BITFIELDS/16 bpp/V4-V5 0.5.2; audited 0.5.3 — see [docs/audit/2026-08-24-audit.md](docs/audit/2026-08-24-audit.md)):
 
@@ -234,7 +237,7 @@ File findings in `docs/audit/YYYY-MM-DD-audit.md`. Severity: CRITICAL / HIGH / M
 - [`docs/adr/`](docs/adr/) — architecture decision records. *Why X over Y?* (e.g. "fork kii's png.cyr vs. shared dep")
 - [`docs/architecture/`](docs/architecture/) — non-obvious constraints. *What can't I derive from the code alone?* (e.g. the `lib/`-must-not-be-a-symlink quirk, the flat-domain-module + distlib invariant)
 - [`docs/guides/`](docs/guides/) — task-oriented how-tos (e.g. "consuming chitra from mabda")
-- [`docs/development/roadmap.md`](docs/development/roadmap.md) — shipped (PNG, baseline JPEG, BMP, GIF + the 0.5.x arc), backlog (deferred JPEG geometry, streaming API), v1.0 criteria
+- [`docs/development/roadmap.md`](docs/development/roadmap.md) — shipped (PNG, baseline JPEG, BMP, GIF + the 0.5.x arc, § A.2 Nf=1 in 0.6.0), backlog (byte-budget surface 0.6.1, JPEG multi-scan 0.7.0), v1.0 criteria
 - [`docs/development/state.md`](docs/development/state.md) — live state snapshot, refreshed every release
 - [`docs/audit/`](docs/audit/) — security audit reports (`YYYY-MM-DD-audit.md`)
 - [`docs/proposals/`](docs/proposals/) — design notes written *before* a large feature lands (e.g. the baseline-JPEG plan)

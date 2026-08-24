@@ -99,7 +99,7 @@ Place each in the matching `tests/tcyr/` suite — `error.tcyr` (error paths),
 `interlace.tcyr` (Adam7), `jpeg.tcyr` (baseline JPEG decode + reject paths),
 `png.tcyr` (the core PNG decode matrix), or `subbyte.tcyr` (1/2/4-bit
 grayscale/palette). The suites are globbed by `make test`; each is a standalone
-`main()`. The current baseline is **2,478 assertions across 7 suites** — PRs that
+`main()`. The current baseline is **2,719 assertions across 8 suites** — PRs that
 lower coverage will be asked to add it.
 Confirm the count with `make count-assertions`.
 
@@ -116,11 +116,22 @@ send a decode change:
   `make bench-record`; numbers are host-dependent, so compare within a host.
 
 > **Wanted contribution:** all four common raster formats now decode, the BMP
-> deferrals are paid off (0.5.1/0.5.2), and every decode path has now been
-> audited (0.5.3). The remaining v1.0 work is the **public API + ABI freeze**,
-> the deferred JPEG § A.2 geometry, and a streaming / byte-budget decode API —
-> see [`docs/development/roadmap.md`](docs/development/roadmap.md). Open an
-> issue first to agree on shape.
+> deferrals are paid off (0.5.1/0.5.2), every decode path has been audited
+> (0.5.3), and T.81 § A.2 decodes for a one-component frame (0.6.0). What is
+> left is the **public API + ABI freeze**, the byte-budget surface (0.6.1, and
+> [ADR 0007](docs/adr/0007-byte-budget-surface-deferred.md) says what must
+> happen first), and JPEG multi-scan resumption (0.7.0,
+> [ADR 0006](docs/adr/0006-defer-jpeg-multiscan-resumption.md)) — see
+> [`docs/development/roadmap.md`](docs/development/roadmap.md). Open an issue
+> first to agree on shape.
+>
+> **Reference decoders, and which one to trust for JPEG.** The house rule is
+> "validate against ImageMagick", and it holds unqualified for PNG, BMP and
+> GIF. For JPEG the primary oracle is **`djpeg -nosmooth`**, which chitra
+> matches byte-for-byte across the sampling matrix; ImageMagick is a valid
+> second oracle only for grayscale and 4:4:4, because it upsamples chroma with
+> a fancy (triangle) filter where chitra uses box. On a 4:2:0 file that is 937
+> of 1536 bytes different — a filter difference, not a bug.
 
 ## Modules and the dist bundle
 

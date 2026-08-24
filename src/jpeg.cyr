@@ -59,7 +59,40 @@ fn _jpeg_parse_sos(frame, src, len, err_out): i64 {
     var ls = _cur_u16_be(&cur);
     var ns = _cur_u8(&cur);
     var ncomp = chitra_jpeg_frame_num_components(frame);
-    if (ns != ncomp) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_SOS)); return 0; }
+    # T.81 § B.2.3 bounds Ns as 1 <= Ns <= 4 and requires each Csj to name a
+    # DISTINCT component of the frame, so Ns > Nf is malformed by pigeonhole.
+    # Both are VALIDITY failures and keep CHITRA_ERR_JPEG_SOS — the point of
+    # splitting them out is that the third case below is not one.
+    #
+    # Ns < 1 is load-bearing: neuter it and an Ns = 0 scan falls into the Ns < Nf
+    # branch and is reported as a DEFERRAL (code 4) — chitra would be saying it
+    # declines a file that is simply malformed.
+    #
+    # Ns > Nf changes no error code today: with it removed, such a scan reaches
+    # the selector loop below, where the duplicate-Cs guard rejects it with the
+    # same 17 (Ns > Nf forces a repeat, since only Nf distinct ids exist). Keep
+    # it anyway, and not for tidiness — it is what BOUNDS THE WRITE INDEX of
+    # `seencs` below. With it, the loop runs at most ncomp times; without it,
+    # the bound on `i` comes indirectly from "distinct SOF ids run out", which is
+    # a proxy for the index rather than the index itself. `seencs` holds
+    # CHITRA_MAX_COMPONENTS entries and ncomp is today restricted to {1,3}
+    # (jpeg_markers.cyr:333), so both forms are in bounds — but only the direct
+    # bound stays correct if that restriction is ever widened.
+    if (ns < 1) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_SOS)); return 0; }
+    if (ns > ncomp) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_SOS)); return 0; }
+    # Ns < Nf is a different thing entirely, and conflating it with the two
+    # above was a lie about a valid file. A scan carrying FEWER components than
+    # the frame is non-interleaved (Ns = 1, § A.2.2) or partially interleaved
+    # (1 < Ns < Nf, § A.2.3); both are spec-legal BASELINE SOF0, and both are
+    # what `cjpeg -scans` / `jpegtran -scans` emit on request. Decoding them
+    # needs a RESUMABLE marker walk chitra does not have — chitra_jpeg_scan_markers
+    # stops at the first SOS, and real multi-scan files declare DHT segments
+    # BETWEEN scans — so this is a DEFERRAL, not a validity error, and it says
+    # so: CHITRA_ERR_UNSUPPORTED is "chitra declines", where CHITRA_ERR_JPEG_SOS
+    # said "your file is malformed". Note the ONE-component frame reaches none of
+    # this: Ns == Nf == 1 there, and its non-interleaved layout decodes (see the
+    # effective-geometry collapse in _jpeg_decode_scan). See ADR 0006.
+    if (ns < ncomp) { store64(err_out, chitra_err(CHITRA_ERR_UNSUPPORTED)); return 0; }
     if (ls != 6 + 2 * ns) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_SOS)); return 0; }
     if (_cur_can_read(&cur, 2 * ns + 3) == 0) { store64(err_out, chitra_err(CHITRA_ERR_TRUNCATED)); return 0; }
 
@@ -144,22 +177,36 @@ fn _jpeg_decode_scan(frame, src, len, entropy_start, err_out): i64 {
     var mcu_cols = (w + mcu_w - 1) / mcu_w;
     var mcu_rows = (h + mcu_h - 1) / mcu_h;
 
-    # T.81 § A.2: a scan carrying a SINGLE component is NON-interleaved — its
-    # MCU is one 8x8 data unit and the block grid is ceil(x_i/8) x ceil(y_i/8)
-    # over the component's own sample dimensions. The geometry above is the
-    # INTERLEAVED one (MCU = max_h x max_v data units), which only coincides
-    # with the non-interleaved layout when the lone component has H=V=1 (what
-    # every real grayscale encoder emits). At H=2,V=1 with w=24 the two
-    # disagree — interleaved decodes ceil(24/16)=2 MCUs x 2 blocks = 4 blocks
-    # where T.81 wants ceil(24/8)=3 — so the entropy stream desyncs and the
-    # image decodes wrong. chitra does not implement the non-interleaved
-    # layout, so it REJECTS rather than mis-renders (the same
-    # defer-don't-half-implement posture as the non-baseline SOF modes).
+    # T.81 § A.2 / § A.2.2: a scan carrying a SINGLE component is NON-interleaved
+    # by definition, and its MCU is exactly ONE 8x8 data unit in raster order —
+    # "regardless of the values of H1 and V1". The geometry computed above is the
+    # INTERLEAVED one (MCU = max_h x max_v data units), which is a different
+    # layout: at H=2,V=1 with w=24 it walks ceil(24/16)=2 MCUs x 2 blocks where
+    # T.81 wants ceil(24/8)=3 in a row.
+    #
+    # THE COLLAPSE. For a one-component FRAME the sampling factors are INERT,
+    # not merely ignorable. § A.1.1 derives each component's own sample
+    # dimensions as x_i = ceil(X * H_i / H_max) and y_i = ceil(Y * V_i / V_max);
+    # with Nf = 1 the lone component IS the maximum, so H_1 == H_max and
+    # V_1 == V_max identically and those collapse to x_1 = X, y_1 = Y for EVERY
+    # legal (H,V) in 1..4. Forcing the effective geometry to H = V = 1 therefore
+    # makes the interleaved loop below walk the non-interleaved layout exactly:
+    # one block per MCU, raster order, and cpw = mcu_cols * 1 * 8 = ceil(w/8) * 8
+    # — the block grid covers the plane with NO unwritten margin, so this needs
+    # no zero-fill and no containment tripwire (neither could ever fire). The box
+    # upsampler at the bottom degenerates to identity: x * 1 / 1 == x.
+    #
+    # Verified against libjpeg-turbo 3.2.0: four cjpeg files differing ONLY in
+    # the SOF0 H/V nibble (0x11 / 0x21 / 0x22 / 0x44) are byte-identical
+    # otherwise, and djpeg decodes all four to the same image — so the reference
+    # decode of an H>1 grayscale JPEG IS its H=1 twin's decode.
     if (ncomp == 1) {
-        if (max_h > 1 || max_v > 1) {
-            store64(err_out, chitra_err(CHITRA_ERR_UNSUPPORTED));
-            return 0;
-        }
+        max_h = 1;
+        max_v = 1;
+        mcu_w = 8;
+        mcu_h = 8;
+        mcu_cols = (w + 7) / 8;
+        mcu_rows = (h + 7) / 8;
     }
 
     # Decompression-bomb cap. The PNG path bounds inflate output against IDAT
@@ -209,6 +256,16 @@ fn _jpeg_decode_scan(frame, src, len, entropy_start, err_out): i64 {
             tq = chitra_jpeg_frame_comp_tq(frame, ci);
             chh = chitra_jpeg_frame_comp_h(frame, ci);
             cvv = chitra_jpeg_frame_comp_v(frame, ci);
+            # Same collapse as the geometry above: for Nf = 1 the scan is
+            # non-interleaved and its MCU is one data unit, so the per-component
+            # block counts, the plane stride (cpw) and the comph/compv the
+            # upsampler later reads must all agree with H = V = 1. Omitting this
+            # leaves the block loop consuming chh*cvv units per MCU against a
+            # one-unit MCU — the entropy desync the comment above describes.
+            if (ncomp == 1) {
+                chh = 1;
+                cvv = 1;
+            }
             if ((chitra_jpeg_frame_huff_present(frame) & (1 << td)) == 0) { rc = CHITRA_ERR_JPEG_SOS; done = 1; }
             if (done == 0) {
                 if ((chitra_jpeg_frame_huff_present(frame) & (1 << (4 + ta))) == 0) {

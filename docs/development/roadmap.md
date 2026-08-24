@@ -1,10 +1,10 @@
 # chitra — Roadmap
 
-> **Last Updated**: 2026-08-24 (0.5.3)
+> **Last Updated**: 2026-08-24 (0.6.0)
 >
 > Sequencing — what ships, in what order, against what gates. Volatile state
 > (current version, sizes, assertion counts, in-flight work) lives in
-> [`state.md`](state.md), not here. **chitra is pre-v1** (current: 0.5.3) and
+> [`state.md`](state.md), not here. **chitra is pre-v1** (current: 0.6.0) and
 > all four decode paths are **feature-complete for their scope** — every spec-legal
 > PNG depth × color-type × interlace combination, and JFIF **baseline** JPEG
 > (grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0, restart markers), decode to
@@ -32,6 +32,7 @@ Per-release detail, per-bite provenance, and deferrals live in
 | [0.3.0](../../CHANGELOG.md#030--2026-06-27) | **JFIF baseline JPEG → the same canonical RGBA8.** A full baseline (SOF0) sequential-Huffman 8-bit decoder: grayscale (1 comp) + YCbCr (3 comp), chroma subsampling 4:4:4 / 4:2:2 / 4:2:0 (and general Hi,Vi box upsampling), and DRI / RST0–7 restart markers. Pipeline = marker walk (DQT/DHT/SOF0/DRI) → per-component MCU loop (bit-reader + `DECODE`/`RECEIVE`/`EXTEND`, libjpeg islow integer IDCT, level-shift+clamp) → box upsample → BT.601 YCbCr→RGB. New public `chitra_jpeg_decode` / `chitra_jpeg_decode_rgba8` / `chitra_jpeg_check_signature` plus a signature-sniffing `chitra_image_decode` PNG-vs-JPEG router. Output verified **byte-identical to ImageMagick** on a real 16×16 baseline gradient (real Annex K Huffman tables + AC entropy). Non-baseline modes (progressive / arithmetic / 12-bit / hierarchical/lossless / CMYK) reject loud with distinct codes (ADR [0004](../adr/0004-jpeg-decode-model.md)). |
 | [0.3.1](../../CHANGELOG.md#031---2026-08-17) | **Toolchain bump** — cyrius pin 6.2.44 → 6.5.27, matching the rest of the AGNOS desktop stack. No decode change. |
 | [0.3.2](../../CHANGELOG.md#032---2026-08-23) | **Toolchain catch-up + version-probe fix** — cyrius pin 6.5.27 → 6.5.35 with `lib/` re-vendored, clearing the shadow-lib and pin-drift build warnings. Fixes `chitra_version()`, which 0.3.1 left at its 0.3.0 value while bumping every other version source; `make version-check` now gates that literal so it cannot drift silently again. No decode change. |
+| [0.6.0](../../CHANGELOG.md#060---2026-08-24) | **T.81 § A.2 non-interleaved JPEG scans decode — for a one-component frame.** A grayscale JPEG declaring `H > 1` or `V > 1` was rejected through 0.5.3, deliberately (0.3.3 chose refusal over mis-rendering); 0.6.0 implements the layout, so that rejection is **reversed**. Not a second decoder but an **effective-geometry collapse**: for `Nf = 1` the sampling factors are *inert* — § A.1.1's `x_i = ceil(X·H_i/H_max)` collapses to `x_1 = X` because the lone component IS the maximum — so forcing `H = V = 1` makes the existing interleaved loop walk the non-interleaved layout exactly, with `cpw = ceil(w/8)·8` covering the plane with **no unwritten margin** (hence no zero-fill and no tripwire: neither could fire). Also conditions **ΣHj·Vj ≤ 10 on `Ns > 1`** per § B.2.3 — it bounds an interleaved MCU and a one-component frame has none — with the cap's reachability proven in both directions. The oracle is external in both directions: four libjpeg files differing in **exactly one byte** (the SOF0 sampling nibble) decode identically under djpeg, and chitra now matches `djpeg -nosmooth` over all 1536 bytes for every one. **Multi-scan and partially-interleaved files stay deferred** ([ADR 0006](../adr/0006-defer-jpeg-multiscan-resumption.md)) and their code moves from `JPEG_SOS` (17, "malformed") to `UNSUPPORTED` (4, "chitra declines") — measured reason: a naive relaxation makes them *decode*, wrongly, with no error. The **byte-budget surface is deferred to 0.6.1** with [ADR 0007](../adr/0007-byte-budget-surface-deferred.md), on a measurement: a 15-byte JPEG that is refused spends **22,096 bytes**, so a probe-based ceiling would itself be an exhaustion vector. +241 test assertions (a new 8th suite), +590 k fuzz assertions. |
 | [0.5.3](../../CHANGELOG.md#053---2026-08-24) | **P-1 audit and repair — the first line-by-line review of BMP and GIF.** Both shipped across 0.4.0–0.5.2 with known-answer suites, reference cross-checks and heavy fuzzing, but no guard review. **No memory-safety defect was found** — no reachable OOB, no overflow into an allocation, no unterminated loop — so the sweep weighted **wrong-output** defects as heavily as memory safety, and seven of nine confirmed findings are exactly that. **Every one was confirmed by decoding the same bytes with ImageMagick**, after millions of fuzz cases had passed over them. Repairs: 32-bpp `BI_BITFIELDS` masks were parsed, validated, then **ignored** unless an alpha mask was also declared (red/blue swapped on a real file); mask fields were honoured under `BI_RGB`, where Microsoft says they are meaningless, decoding a V4 file **fully transparent**; `BI_RGB` defaults were injected into bitfields files, making the "at least one colour channel" guard **unreachable dead code**; the GIF transparent index was a stale function-scoped `var` that survived a later GCE revoking it; the GCE block size was never validated though every field after it is addressed by fixed offset; the LZW chain guard was one looser than the buffer it protected; and two gaps left by 0.3.3's own tRNS repairs (sub-byte keying compared at the wrong width, tRNS-before-PLTE accepted). Adds **amplification caps for BMP-RLE and GIF** — a 1,082-byte RLE8 file and a 797-byte GIF each decoded into ~64 MB — with PNG's equivalent documented as **accepted risk**, since there the bomb and a legitimate solid image are the same file shape. +62 test assertions, every repair carrying a regression test verified to fail against the pre-repair code. Audit: [`2026-08-24`](../audit/2026-08-24-audit.md). |
 | [0.5.2](../../CHANGELOG.md#052---2026-08-24) | **BMP channel masks, 16 bpp, and the V4/V5 headers** — the last of the 0.4.0 deferrals, landed as one cut because they are the same feature from three angles. `BI_BITFIELDS` / `BI_ALPHABITFIELDS` masks at 16 and 32 bpp, read from inside the header for V2+ or from the DWORDs after a 40-byte one; 16 bpp (`BI_RGB` defaulting to the **documented** X1R5G5B5, not a convention); and the V2/V3/V4/V5 headers, whose color-space, gamma and ICC fields are **skipped rather than guessed at** — chitra does no color management, so honouring a color space would claim a transform it does not perform. **Retires the 32-bpp alpha heuristic for files that declare a mask** (plain `BI_RGB` still has no mask to read, so the heuristic still governs there). Masks are validated as attacker input: contiguous, non-overlapping, inside the pixel word, at least one color channel. Two real bugs found by reference cross-check and fixed: channel widening is **bit replication**, not `v*255/max` (which was a whole-image color shift), and 16 bpp was falling into the palette path because `bpp < 24` had silently stopped meaning "indexed". New `CHITRA_ERR_BMP_MASK` (33). +155 test assertions, +100 k fuzz cases. **The BMP deferral list is now empty.** |
 | [0.5.1](../../CHANGELOG.md#051---2026-08-24) | **BMP run-length compression.** `BI_RLE8` and `BI_RLE4`, deferred in 0.4.0, now decode: encoded runs, absolute mode with word-boundary padding, end-of-line, end-of-bitmap and delta. As predicted, the **guards outweigh the codec** — termination is structural (every opcode consumes ≥ 2 bytes and the cursor only advances), every write is bounds-checked individually rather than per-run (a run past the row end is **rejected, not clipped**), and delta is checked against both dimensions **at the jump**, since a delta past the end followed by no writes is still malformed. Top-down RLE rejected (MS: top-down DIBs cannot be compressed — the end-of-line escape counts from the bottom); depth mismatch rejected (`BI_RLE8`⇒8 bpp, `BI_RLE4`⇒4 bpp). New `CHITRA_ERR_BMP_RLE` (32) separates "your file is broken" from "chitra won't". +561 test assertions, +200 k fuzz cases incl. a delta-splice mode, +1 benchmark (18 ns/px — slower than uncompressed BMP's 6, since per-opcode branching costs more than the bytes it saves). |
@@ -117,19 +118,28 @@ surface freeze.
     rejections — chitra decodes Adam7 and every spec-legal depth. Changing
     them changes public `chitra_err_name` output, which is precisely what a
     freeze makes expensive to do later.
-  - Settle whether the four input classes 0.3.3 began rejecting are the frozen
-    behaviour, or whether any should decode instead (see the § A.2 item
-    below).
+  - ~~Settle whether the four input classes 0.3.3 began rejecting are the
+    frozen behaviour~~ — **answered in 0.6.0.** One is **reversed**: the § A.2
+    one-component geometry now decodes. The other three are **affirmed as
+    frozen behaviour** — the JPEG amplification cap, PNG's § 5.4
+    unknown-critical-chunk abort, and the § 5.6 / § 11.3.2 tRNS/PLTE ordering
+    rules. The freeze need not re-open them.
+  - **Not a prerequisite, but the freeze should not ship without it**: a
+    machine-checked manifest of the public surface. ~40 `chitra_`-prefixed
+    functions are visible in `dist/chitra.cyr` and deliberately outside the
+    freeze (`chitra_raw_*`, `chitra_jpeg_frame_*`, `chitra_bmp_hdr_*`,
+    `chitra_png_parse_raw`, `chitra_png_color_to_rgba8`,
+    `chitra_jpeg_scan_markers`), and "the surface is frozen" is an assertion
+    until something checks it.
 - [ ] **Downstream consumers green** — mabda's `gpu_texture_load_png` and
   kii's PNG re-fold (its v1.2.0 deleted its own decoder and adopted
   `dist/chitra.cyr`; ADR 0006 on kii's side) both build and pass against the
   frozen surface. Track until the freeze lands. **Both pins are currently
-  behind, and further behind than at 0.5.2**: mabda at `0.3.1`, kii at
-  `0.3.0`, against a released `0.5.3`. Every cut since 0.3.1 has been
+  behind**: mabda at `0.3.1`, kii at `0.3.0`, against a released `0.6.0`. Every cut since 0.3.1 has been
   ABI-additive — nothing removed, no offset moved — so both bumps are
   mechanical, but until they land neither consumer has BMP, GIF, the 0.3.3
-  decode repairs or the nine 0.5.3 ones, and kii is six cuts behind on a path
-  it uses in anger.
+  decode repairs, the nine 0.5.3 ones, or 0.6.0's § A.2 support — and kii is
+  seven cuts behind on a path it uses in anger.
 - [x] **Root docs + doc tree complete** — CLAUDE.md, README, CHANGELOG,
   CONTRIBUTING, SECURITY, ADRs ([`../adr/README.md`](../adr/README.md)),
   architecture notes ([`../architecture/README.md`](../architecture/README.md)),
@@ -241,22 +251,61 @@ rather than release notes:
   actually *consumed* fixes it, and the same question — *what exactly is the
   denominator?* — should be asked of any future ratio guard.
 
-### 0.6.0 — deferred JPEG geometry + surface work
+### ~~0.6.0 — deferred JPEG geometry + surface work~~ — SHIPPED
 
-The two items previously parked as uncommitted, now sequenced:
+See the *Shipped* index above for what landed. Both items were addressed; one
+shipped code, the other shipped the decision the roadmap asked for.
 
-- **T.81 § A.2 non-interleaved JPEG scans** — implement the non-interleaved
-  layout so a single-component scan with `H > 1` or `V > 1` **decodes** instead
-  of being rejected. 0.3.3 chose rejection over mis-rendering for a patch cut
-  (`CHITRA_ERR_UNSUPPORTED`); this is the follow-through. Every real grayscale
-  encoder emits `H = V = 1`, where the interleaved and non-interleaved layouts
-  coincide, so the urgency is low — but it is a spec-legal input class chitra
-  currently refuses.
-- **Streaming / byte-budget decode API** — a chunked-input or
-  bounded-allocation entry point for consumers that cannot hand over the whole
-  encoded buffer at once, or that need a hard memory ceiling. This is additive
-  surface, so it wants an ADR and it wants to land before the v1.0 freeze
-  rather than after.
+The § A.2 item's original framing said *"the urgency is low"* because every real
+grayscale encoder emits `H = V = 1`. That premise held only for the file shapes
+chitra had fixtures for: `cjpeg -grayscale -sample 2x1` is one flag away, and
+`-sample 4x4` was rejected two steps earlier still, by a frame-wide ΣHj·Vj cap
+the spec conditions on `Ns > 1`. Implementing the layout also turned out to be
+**smaller** than the deferral implied — the factors are inert for `Nf = 1`, so
+it is a geometry collapse rather than a second decoder.
+
+The streaming item shipped as [ADR 0007](../adr/0007-byte-budget-surface-deferred.md),
+which is what *"this is additive surface, so it wants an ADR"* asked for. The
+implementation moved to 0.6.1 on a measurement rather than a preference — see
+that entry below.
+
+### 0.6.1 — the byte-budget decode surface
+
+[ADR 0007](../adr/0007-byte-budget-surface-deferred.md) reserves the shape
+(`chitra_image_probe` → `chitra_info_decode_bytes` →
+`chitra_image_decode_budget`, `CHITRA_ERR_BUDGET = 34`) so this cut does not
+re-litigate it. What it must do **first**, and the reason 0.6.0 did not ship the
+surface: **a 15-byte JPEG that is refused spends 22,096 bytes**, because
+`chitra_jpeg_scan_markers` allocates the frame, quant store and eight Huffman
+records before the SOF0 check that refuses it. A probe routed through that
+function makes a 1-byte budget cost 22 KB before reporting "over budget" — a
+memory-ceiling API that is itself an exhaustion vector on the refusal path.
+
+The prerequisite is **lazy table allocation** in the existing parser — allocate
+the quant store on the first DQT and each Huffman record on the DHT that defines
+it. Not a second header parser: a duplicate's divergence from the real one is
+the "a probe that accepts what the decoder refuses is a lie" failure it would be
+built to avoid. The fix drops the refusal cost to ~336 bytes for *every* caller,
+which is worth doing on its own.
+
+Also in scope, because it is the other half of "a consumer can bound decode
+memory": the `alloc_reset()` hazard in
+[architecture/005](../architecture/005-alloc-reset-sankoch-hazard.md) is an
+upstream sankoch defect, and it currently makes the arena boundary — chitra's
+*only* memory-reclamation story — unsafe for PNG. Report and track it.
+
+### 0.7.0 — JPEG multi-scan resumption
+
+Decode the rest of T.81 § A.2: files whose scans carry fewer components than the
+frame (`Ns < Nf`), non-interleaved or partially interleaved.
+[ADR 0006](../adr/0006-defer-jpeg-multiscan-resumption.md) enumerates what it
+owes — a resumable marker walk whose cursor is derived from *decoded content*
+for the first time in chitra's history, per-scan Huffman pointer re-resolution
+(real `cjpeg -scans` output declares DHT **between** scans), a per-component
+coverage bitmask as the only sound bound on total work, and full-coverage-
+required because an uncovered component decodes to solid green rather than to
+nothing. The measured reason it was not folded into 0.6.0: with the gate simply
+removed, those files **decode**, to a wrong image, with no error raised.
 
 ## Out of scope (durable scope guards)
 

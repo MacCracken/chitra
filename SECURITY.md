@@ -177,12 +177,24 @@ conformance, resource and defence-in-depth rather than exploit fixes:
   reported. A BSS-resident fallback `ChitraErr` keeps the contract intact once
   the heap is gone.
 - ✅ **Geometry chitra does not implement is refused, not approximated** — a
-  single-component scan is non-interleaved per T.81 § A.2; only the interleaved
-  layout is implemented, so `H > 1 || V > 1` on a lone component rejects
-  (`CHITRA_ERR_UNSUPPORTED`) rather than emitting zero-padded, fabricated
-  pixels. Note this **rejects input that 0.3.2 decoded** — deliberately; see
-  the CHANGELOG's *Behaviour changes* section for the full list of four such
-  input classes.
+  scan carrying fewer components than the frame is non-interleaved (T.81
+  § A.2.2) or partially interleaved (§ A.2.3); neither is implemented, so both
+  reject with `CHITRA_ERR_UNSUPPORTED` rather than emitting fabricated pixels.
+  **0.6.0 narrowed what this covers**: the one-component case it originally
+  described now *decodes* (§ A.2 geometry is implemented for `Nf = 1`), and the
+  measured reason the multi-scan case is still refused is that a naive
+  relaxation makes those files **decode to a wrong image with no error raised**
+  — the silent-mis-decode class, not a crash. See
+  [ADR 0006](docs/adr/0006-defer-jpeg-multiscan-resumption.md).
+- ✅ **The ΣHj·Vj ≤ 10 cap is conditioned, not relaxed (0.6.0)** — T.81 § B.2.3
+  conditions it on `Ns > 1`, and it bounds an interleaved MCU. It stays at the
+  SOF0 parse, once per file, before any geometry derives from those factors;
+  moving it to the scan header would put it after the allocations it exists to
+  bound. Its reachability was proven in **both** directions before release: with
+  the condition removed a legal one-component file rejects again, and with the
+  cap itself removed a three-component file declaring ΣHj·Vj = 24 decodes to
+  garbage. A conditioned cap that quietly became dead code is exactly the 0.5.3
+  BMP finding.
 
 > Note on two narrow codes: `CHITRA_ERR_INTERLACE` and `CHITRA_ERR_BIT_DEPTH`
 > ([`src/error.cyr:26-27`](src/error.cyr)) are validity rejections, not

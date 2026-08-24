@@ -1,6 +1,6 @@
 # chitra
 
-Version: 0.5.3
+Version: 0.6.0
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder, a sibling AGNOS package in the mould of `sakshi` /
@@ -18,7 +18,7 @@ always 4 channels, always at the source dimensions, whatever went in.
 | Format | Coverage |
 |---|---|
 | **PNG** | Every spec-legal bit depth × color type: 1/2/4/8/16 across types 0/2/3/4/6 (§ 11.2.2 Table 11.1), plus **Adam7 interlace** for every cell. PLTE palettes, tRNS transparency (keyed and per-entry). IDAT inflate via `sankoch`. |
-| **JPEG** | JFIF **baseline** (SOF0 sequential Huffman, 8-bit): grayscale + YCbCr, chroma subsampling 4:4:4 / 4:2:2 / 4:2:0 and general `Hi,Vi` box upsampling, DRI / RST0–7 restart markers. Verified **byte-identical to ImageMagick**. |
+| **JPEG** | JFIF **baseline** (SOF0 sequential Huffman, 8-bit): grayscale + YCbCr, chroma subsampling 4:4:4 / 4:2:2 / 4:2:0 and general `Hi,Vi` box upsampling, DRI / RST0–7 restart markers, and — since 0.6.0 — the T.81 § A.2 **non-interleaved** layout for a one-component frame (any `H`,`V` in 1..4). Verified **byte-identical to `djpeg -nosmooth`** across the sampling matrix. |
 | **BMP** | `BI_RGB` at 1 / 4 / 8 bpp (palette), 16 / 24 / 32 bpp, plus **`BI_RLE8` / `BI_RLE4`** run-length and **`BI_BITFIELDS`** channel masks; CORE / INFO / V2 / V3 / **V4** / **V5** headers; bottom-up **and** top-down. Verified **identical to ImageMagick**. |
 | **GIF** | GIF87a/89a, LZW, global **and** local color tables, 4-pass row interlace, transparency from a Graphic Control Extension. **First frame only** — see [ADR 0005](docs/adr/0005-gif-first-frame-only.md). Verified against two independent decoders. |
 
@@ -46,6 +46,14 @@ progressive / arithmetic / 12-bit / hierarchical / CMYK JPEG; an unrecognised
 BMP DIB header size; and any illegal PNG depth × color-type pair. BMP's
 deferral list is now empty — everything it once postponed decodes.
 
+One refusal is worth naming because the file is **valid**: a baseline JPEG whose
+scans do not each carry every frame component (what `cjpeg -scans` emits) is
+deferred, not malformed, and says so with `CHITRA_ERR_UNSUPPORTED`. 0.6.0
+implements the one-component half of that layout and schedules the rest —
+[ADR 0006](docs/adr/0006-defer-jpeg-multiscan-resumption.md) records what a
+correct implementation owes, and why relaxing the check without it would make
+those files decode to a *wrong image with no error raised*.
+
 Two refusals are permanent rather than deferred: **encoding** (chitra is
 decode-only, in both directions of that sentence) and **`BI_JPEG` / `BI_PNG`
 inside a BMP**, which would have a decoder re-enter itself through
@@ -64,8 +72,8 @@ Untrusted bytes are the whole input surface, so the guards are the product:
   ~64 MB. PNG's remaining amplification case is documented as **accepted
   risk** rather than capped, because there the bomb and a legitimate solid
   image are the same file shape.
-- **`make fuzz`** — one harness per format, **~2.2 M adversarial decode cases,
-  7,482,610 assertions, 0 failures**. They assert *both* that the decoder
+- **`make fuzz`** — one harness per format, **~2.3 M adversarial decode cases,
+  8,072,804 assertions, 0 failures**. They assert *both* that the decoder
   survives and that it honours the documented `(0, *err_out set)` contract —
   the invariant a crash-only fuzzer misses.
 - **`make bench`** — 17 decode benchmarks with committed
@@ -118,7 +126,7 @@ All deps are pinned in `cyrius.cyml`; the toolchain pin is
 ```bash
 cyrius deps          # resolve stdlib + sankoch + thread into lib/
 make build           # link-check the include chain (→ build/chitra_smoke)
-make test            # 2478 assertions across tests/tcyr/
+make test            # 2719 assertions across tests/tcyr/
 make fuzz            # ~2.2 M adversarial decode cases (fuzz/*.fcyr)
 make bench           # 17 decode benchmarks (tests/bcyr/chitra.bcyr)
 make dist            # regenerate dist/chitra.cyr — the artifact consumers link

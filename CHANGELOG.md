@@ -5,6 +5,186 @@ All notable changes to chitra are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - 2026-08-24
+
+**T.81 § A.2 non-interleaved JPEG scans decode — for a one-component frame.**
+Through 0.5.3 a grayscale JPEG whose SOF0 declared `H > 1` or `V > 1` was
+**rejected**, deliberately: chitra computed the interleaved geometry
+unconditionally, the two layouts diverge as soon as the factors exceed 1, and
+0.3.3 chose rejection over mis-rendering. This cut implements the layout, so
+that rejection is reversed. **Multi-scan and partially-interleaved files
+(`Ns < Nf`) remain deferred** — see [ADR 0006](docs/adr/0006-defer-jpeg-multiscan-resumption.md),
+which records what a correct implementation owes and why a naive relaxation is
+worse than the refusal.
+
+This entry deliberately does **not** say "non-interleaved scans now decode".
+Only the `Nf = 1` class does.
+
+The implementation is an **effective-geometry collapse**, not a second decoder.
+For a one-component frame the sampling factors are *inert*: § A.1.1's
+`x_i = ceil(X · H_i / H_max)` collapses to `x_1 = X` because the lone component
+**is** the maximum, so forcing the effective geometry to `H = V = 1` makes the
+existing interleaved loop walk the non-interleaved layout exactly. It adds no
+zero-fill and no containment tripwire, because `cpw = ceil(w/8) · 8` covers the
+plane with **no unwritten margin** — the last block write lands at
+`cpw·cph − 1` precisely — and a guard that cannot fire is worse than none.
+
+**The oracle is unusually strong here, and it is external in both directions.**
+Four libjpeg-turbo 3.2.0 files from one source image, at sampling 1x1 / 2x1 /
+2x2 / 4x4, are each 372 bytes and differ in **exactly one byte** — the SOF0
+sampling nibble — and `djpeg` decodes all four to the identical image. So the
+reference-correct decode of an H>1 grayscale JPEG is provably its H=1 twin's
+decode, established by an external encoder *and* an external decoder rather
+than by chitra agreeing with itself. chitra now matches `djpeg -nosmooth` over
+all 1536 bytes for every one of them.
+
+**2,719 test assertions** (up from 2,478) across **8 suites**, **8,072,804 fuzz
+assertions**, 0 failures.
+
+### Added
+
+- `tests/tcyr/jpeg_noninterleaved.tcyr` — a new suite (237 assertions) built on
+  real libjpeg-encoded files, with the regeneration recipe in its header so the
+  corpus is reproducible rather than mysterious. Its source pattern varies in
+  **both** axes and gives each 8×8 block a distinct DC level, so a block placed
+  in the wrong grid cell moves an asserted pixel instead of hiding in an equal
+  sum. It includes an **exhaustive sweep of all 16 legal (H,V) pairs**, each
+  asserted byte-for-byte against the control decode — the factors being inert
+  is proved, not spot-checked.
+- Two fuzz cases in `fuzz/fuzz_jpeg.fcyr` (+590,194 assertions): a **256-value
+  sweep of the SOF0 sampling byte** (every value is now a live input, including
+  the illegal ones that must still reject), and 100,000 entropy-mutation cases
+  behind a non-interleaved header — a shape whose entropy bytes **never reached
+  the bit-reader before**, because that header rejected. Worth stating
+  precisely, because the intuitive claim is backwards: the collapsed grid walks
+  6 data units for every legal `(H,V)` on the 24×16 fixture, *fewer* than the 8
+  or 16 an interleaved reading of the same header would have walked. The new
+  surface is a header shape that now decodes at all, not more work per file.
+
+### Behaviour changes
+
+Both directions, which is a first for this project — 0.3.3's entry established
+the convention for newly-*rejecting* classes only.
+
+**Newly accepting** (previously rejected, now decodes):
+
+- A one-component JPEG declaring `H > 1` or `V > 1` — was `CHITRA_ERR_UNSUPPORTED`.
+- A one-component JPEG whose `H · V` exceeds 10 — was `CHITRA_ERR_JPEG_SOF`,
+  from a ΣH·V ≤ 10 cap applied frame-wide. T.81 § B.2.3 conditions that
+  restriction on **`Ns > 1`**; it bounds an interleaved MCU, and a
+  one-component frame has none. libjpeg agrees in both directions: its encoder
+  refuses `-sample 4x4,2x2,2x2` interleaved ("Sampling factors too large for
+  interleaved scan") and accepts the same factors non-interleaved. The cap is
+  **conditioned, not removed**, and does not move — it stays at the SOF0 parse,
+  once per file, before any geometry derives from those factors.
+
+**Newly reclassified** (still rejected, different code):
+
+- A baseline JPEG whose scans do not each carry every frame component now
+  rejects with `CHITRA_ERR_UNSUPPORTED` (4) instead of `CHITRA_ERR_JPEG_SOS`
+  (17). **The file is valid; chitra defers it.** Seventeen said "your file is
+  malformed" about a file `cjpeg -scans` writes on request and `djpeg` reads
+  back — and this rejection appeared in **no document in the tree** before now.
+  A consumer switching on 17 for this class must move to 4.
+
+### Fixed
+
+- **`Ns = 0` was reported as a deferral rather than a malformed scan.** The old
+  single `ns != ncomp` test lumped three different situations together; they
+  are now three branches with their own codes. `Ns < 1` and `Ns > Nf` are
+  validity failures (`CHITRA_ERR_JPEG_SOS`); `Ns < Nf` is the deferral. Neuter
+  the `Ns < 1` branch and an `Ns = 0` file comes back as code 4 — chitra
+  claiming it *declines* a file that is simply broken.
+- `CHITRA_MAX_BLOCKS_PER_MCU`'s comment cited T.81 § A.2.2 for a rule that is
+  § B.2.3. A wrong section number is invisible to `scripts/check-anchors.sh`,
+  which can only see line drift.
+
+### Security
+
+- The `Ns > Nf` branch is kept although removing it changes no error code today
+  (such a scan is caught downstream by the duplicate-selector guard with the
+  same 17). It is what bounds the `seencs` **write index directly** — with it
+  the selector loop runs at most `ncomp` times; without it the bound comes from
+  the proxy "distinct SOF ids run out". Both are in bounds while `ncomp` is
+  restricted to {1,3}; only the direct bound survives that being widened. The
+  code comment says all of this, so nobody later "proves" it dead and deletes it.
+- **Reachability proof for the conditioned ΣH·V cap, run in both directions**
+  because this cut's only cap *loosening* is exactly where a guard silently
+  becomes dead code. With the `ncomp > 1` wrapper removed, the 4x4 grayscale
+  file rejects again with 14 (so the condition is doing the work). With the
+  inner line removed entirely, a 3-component file declaring ΣH·V = 24 **decodes
+  to garbage** — byte sum 282,048 against the correct 223,824 (so the cap is
+  live, not dead). Both were run; the second is the one the 0.5.3 BMP finding
+  says not to skip.
+- A widely-repeated claim about this code is **false, and tested**: removing the
+  `ns != ncomp` gate does *not* give chitra a reachable stack overflow via
+  `seencs`. With the gate fully deleted and no replacement bound, `Ns = 200`
+  rejects cleanly under both cycling-valid and ascending-distinct selectors,
+  because the write index advances only on a distinct matched SOF id. It is
+  recorded in ADR 0006 so a future cut does not hunt a corruption that cannot
+  happen — and so the guard that *is* reachable after relaxation (`Ns < 1`,
+  a wrong-output guard) is not mistaken for a memory-safety one.
+
+### Deferred, with an ADR
+
+- **The streaming / byte-budget decode entry point.** The roadmap asked for
+  "additive surface, so it wants an ADR"; 0.6.0 ships the ADR and the
+  measurement that shapes it, and 0.6.1 ships the surface.
+  [ADR 0007](docs/adr/0007-byte-budget-surface-deferred.md) leads with what
+  disqualified the obvious design: **a 15-byte JPEG that is refused,
+  permanently and correctly, spends 22,096 bytes** — `chitra_jpeg_scan_markers`
+  allocates the frame record, the quantization store and eight Huffman table
+  records *before* the SOF0 check that refuses the file, and none of it comes
+  back. Any probe reaching SOF0 through that function makes
+  `decode_budget(src, len, 1, &err)` spend 22 KB and then say "over budget" —
+  a memory-ceiling API that is itself a memory-exhaustion vector, reachable by
+  an attacker who only ever gets refused. That is the 0.5.3 wrong-denominator
+  lesson recurring inside the guard built to embody it. The named prerequisite
+  is **lazy table allocation** in the existing parser (not a second parser,
+  whose divergence from the real one is the failure it would be built to
+  avoid), which also drops the refusal cost to ~336 bytes for *every* caller.
+
+### Documentation
+
+- **NEW** [`docs/architecture/005-alloc-reset-sankoch-hazard.md`](docs/architecture/005-alloc-reset-sankoch-hazard.md)
+  — a reproduced upstream defect: calling the stdlib's `alloc_reset()` between
+  decodes **corrupts memory and breaks the next PNG decode**, because sankoch
+  memoizes its CRC-32 table as a raw pointer into the arena and cannot see the
+  reset, so chitra's per-decode `crc32_init_table()` writes 16 KB through a
+  dangling pointer. BMP and JPEG are unaffected — neither touches sankoch. The
+  observed error code varies (7 and 1 both seen from the same bytes) with what
+  now occupies the re-issued address, which is itself the diagnosis; the note
+  documents the **mechanism**, not a code. Not fixable chitra-side: the guards
+  are internal to sankoch and `lib/` is a vendored build artifact.
+- **REVISED** [`docs/architecture/003`](docs/architecture/003-bump-allocator-no-free.md)
+  — its allocation inventory predated BMP and GIF entirely (the real count is
+  **30 sites across 9 modules**), and its recommendation to "reset the region
+  between batches" is now flagged unsafe for PNG per 005. Gains the
+  refusal-path allocation cost as a numbered fact.
+- **REVISED** [`ADR 0004`](docs/adr/0004-jpeg-decode-model.md) gains a dated
+  *Revised in 0.6.0* section; the existing 0.3.3 text is left intact so the
+  decision history stays legible.
+- **REVISED** [`docs/architecture/004`](docs/architecture/004-jpeg-decode-pipeline.md)
+  documents the collapse, the exact-fit property, and the fact that exact fit
+  **depends on the upsampler being a box filter** — a fancy filter reads `x+1`
+  and would make an edge margin live again.
+- The reference-verification rule is narrowed for JPEG in CLAUDE.md and
+  CONTRIBUTING: `djpeg -nosmooth` is the primary oracle, and ImageMagick is a
+  valid second one only for grayscale and 4:4:4. It differs from chitra on a
+  4:2:0 file in 937 of 1536 bytes (fancy vs box chroma upsampling) — a filter
+  difference that would otherwise send someone chasing a non-bug.
+
+### Notes
+
+- **No public function, struct offset, or error code changed.** `dist/chitra.cyr`
+  stays ABI-additive; consumers re-pin mechanically.
+- **No new benchmark row.** With the collapse, `H` and `V` do not affect block
+  count or plane size for a one-component frame, so a `jpeg_gray_h2v2_256` row
+  would measure the identical loop counts under a different name. The four
+  existing `jpeg_*` rows are unmoved within host noise (`jpeg_gray_256`
+  2.85 ms vs 2.83 ms), which is the expected result: this cut adds two
+  branches taken once per decode and no zero-fill.
+
 ## [0.5.3] - 2026-08-24
 
 **P-1 audit and repair cut — the first line-by-line audit of BMP and GIF.**

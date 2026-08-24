@@ -106,6 +106,43 @@ recorded here because it is the first time the posture was applied to a
 properly remains open (see
 [`../development/roadmap.md`](../development/roadmap.md)).
 
+> The paragraph above is left as written in 0.3.3. **It is superseded for
+> one-component frames by the next section**: 0.6.0 implemented the layout, so
+> that class now decodes.
+
+
+### Revised in 0.6.0: the one-component layout is now implemented
+
+0.6.0 **reverses** the 0.3.3 rejection above for one-component frames, and
+re-affirms it for everything else. The reversal is not a change of posture — it
+is what the posture asks for once the layout is actually implemented.
+
+The reason it turned out to be cheap: for a one-component frame the sampling
+factors are **inert**, not merely unused. § A.1.1's `x_i = ceil(X · H_i / H_max)`
+collapses to `x_1 = X` because the lone component *is* the maximum, so forcing
+the effective geometry to `H = V = 1` makes the existing interleaved loop walk
+the non-interleaved layout exactly. libjpeg-turbo confirms it from the outside:
+four `cjpeg` files differing only in the SOF0 sampling nibble decode to the
+identical image under `djpeg`.
+
+Two related decisions ride with it:
+
+- **ΣH·V ≤ 10 is conditioned on `Ns > 1`**, per T.81 § B.2.3's own wording. The
+  cap is not removed and does not move — it stays at the SOF0 parse, once per
+  file — but it no longer rejects `cjpeg -grayscale -sample 4x4`, a file libjpeg
+  writes on request and djpeg reads back.
+- **Multi-scan and partially-interleaved files (`Ns < Nf`) stay deferred**, and
+  the posture applies to them unchanged. Their rejection code changes from
+  `CHITRA_ERR_JPEG_SOS` to `CHITRA_ERR_UNSUPPORTED`, which is this ADR's own
+  vocabulary: the file is valid and chitra declines it. The measured reason for
+  deferring rather than relaxing — a naive relaxation *decodes* those files, to
+  a wrong image, with no error — is in
+  [`0006-defer-jpeg-multiscan-resumption.md`](0006-defer-jpeg-multiscan-resumption.md).
+
+Unchanged: progressive, arithmetic, 12-bit precision, hierarchical / lossless /
+differential and 4-component CMYK all still reject with their distinct codes.
+The clean-rejection set as a security control is exactly as it was.
+
 ## Consequences
 
 **Positive**:

@@ -11,7 +11,8 @@ chitra allocates every heap object through the stdlib `alloc()` bump allocator
 (included once in [`../../src`](../../src) via `lib.cyr`). A bump allocator hands
 out memory by advancing a cursor; it has **no per-block reclamation**. There is
 no `free()` counterpart in chitra's call graph — grep the source and the only
-allocation primitive in use is `alloc()`:
+allocation primitive in use is `alloc()`. There are **30 call sites across 9
+domain modules** as of 0.6.0:
 
 - `src/png_filter.cyr` — the PNG parse path: the concatenated IDAT buffer, the
   inflated scanline buffer, the reconstructed pixel buffer, the Paeth/Up filter
@@ -23,8 +24,28 @@ allocation primitive in use is `alloc()`:
   RGBA8 output buffer.
 - `src/png.cyr` — the 48-byte `ChitraImage` record (shared by both decoders).
 - `src/error.cyr` — the 16-byte `ChitraErr` record.
+- `src/bmp.cyr` — the palette span copy, the RLE index plane, and the RGBA8
+  output buffer (0.4.0 / 0.5.1).
+- `src/gif.cyr` — the index plane, the color-table copies and the RGBA8 output;
+  `src/gif_lzw.cyr` — the LZW prefix / suffix dictionaries and the chain
+  scratch (0.5.0).
 
 None of these are ever returned to the allocator during a decode.
+
+### The rejection path allocates too
+
+Worth stating separately, because it is the least intuitive consequence and it
+is measurable: **a JPEG that is refused still costs 22,096 bytes**. A 15-byte
+file whose SOF0 declares 12-bit precision is rejected correctly — and by then
+`chitra_jpeg_scan_markers` has already allocated the frame record (320 B), the
+quantization store (2,048 B) and eight Huffman table records (19,712 B), none
+of which come back. It is not memoized either: every call pays it again. So a
+consumer being fed hostile input pays for the files it *refuses*, at roughly
+1,473:1 against a minimal one. (For contrast: a JPEG rejected at the
+**signature** costs 16 bytes, and a malformed PNG costs ~16.5 KB once — that
+one is sankoch's table setup, memoized — then ~120 B per call.) Reducing this
+is the named prerequisite for the byte-budget surface in
+[`../adr/0007-byte-budget-surface-deferred.md`](../adr/0007-byte-budget-surface-deferred.md).
 
 ## The `*_free` no-ops
 
@@ -74,8 +95,18 @@ per-image free:
   the CPU-side `pixels` were only ever a staging buffer, so a bump allocator with
   a region reset is exactly the right shape.
 - A consumer that genuinely needs to decode many images in one long-lived
-  process should drive the lifetime at the arena boundary (reset the region
-  between batches) rather than expecting `chitra_image_free` to give memory back.
+  process should drive the lifetime at the arena boundary rather than expecting
+  `chitra_image_free` to give memory back.
+
+> ⚠️ **This note used to say "reset the region between batches", and that advice
+> is currently unsafe for PNG.** Calling the stdlib's global `alloc_reset()`
+> corrupts memory and breaks the next PNG decode, because sankoch memoizes its
+> CRC-32 table as a raw pointer into the arena and cannot see the reset — so
+> chitra's per-decode `crc32_init_table()` call writes 16 KB through a dangling
+> pointer. BMP and JPEG are unaffected. The mechanism, the reproduction and the
+> scope are in
+> [`005-alloc-reset-sankoch-hazard.md`](005-alloc-reset-sankoch-hazard.md); it
+> is an upstream defect, not something chitra can work around.
 
 Do **not** treat `chitra_image_free` / `chitra_raw_free` / `chitra_jpeg_frame_free`
 as memory-pressure relief. They are markers, not collectors.
@@ -86,5 +117,9 @@ as memory-pressure relief. They are markers, not collectors.
   `ChitraImage` / `ChitraErr` layouts (and thus the free no-ops' ABI) are pinned.
 - [`002-flat-modules-distlib-concatenation.md`](002-flat-modules-distlib-concatenation.md) — why
   stdlib includes (`alloc.cyr` among them) live only in `lib.cyr`.
+- [`005-alloc-reset-sankoch-hazard.md`](005-alloc-reset-sankoch-hazard.md) — why
+  the arena-reset pattern above is unsafe for PNG today.
+- [`../adr/0007-byte-budget-surface-deferred.md`](../adr/0007-byte-budget-surface-deferred.md)
+  — the bounded-allocation entry point this note motivates.
 - [`../audit/2026-06-26-audit.md`](../audit/2026-06-26-audit.md) — current-state audit.
 - [`../development/state.md`](../development/state.md) — volatile state (versions, sizes, counts).

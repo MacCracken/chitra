@@ -317,6 +317,388 @@ fn fx_jpeg_real_gradient(len_out): i64 {
 # The contract gate — same two invariants as the PNG harness, against
 # chitra_jpeg_decode.
 # ================================================================
+# A real libjpeg-turbo 24x16 grayscale baseline JPEG (sampling 1x1). Byte 100 is
+# the SOF0 sampling nibble; patching it is how the 0.6.0 non-interleaved path is
+# reached, and the fixture is otherwise untouched. See
+# tests/tcyr/jpeg_noninterleaved.tcyr for the corpus provenance.
+fn fx_jpeg_ni_gray(len_out): i64 {
+    var b = alloc(372);
+    store64(len_out, 372);
+    store8(b + 0, 0xFF);
+    store8(b + 1, 0xD8);
+    store8(b + 2, 0xFF);
+    store8(b + 3, 0xE0);
+    store8(b + 4, 0x00);
+    store8(b + 5, 0x10);
+    store8(b + 6, 0x4A);
+    store8(b + 7, 0x46);
+    store8(b + 8, 0x49);
+    store8(b + 9, 0x46);
+    store8(b + 10, 0x00);
+    store8(b + 11, 0x01);
+    store8(b + 12, 0x01);
+    store8(b + 13, 0x00);
+    store8(b + 14, 0x00);
+    store8(b + 15, 0x01);
+    store8(b + 16, 0x00);
+    store8(b + 17, 0x01);
+    store8(b + 18, 0x00);
+    store8(b + 19, 0x00);
+    store8(b + 20, 0xFF);
+    store8(b + 21, 0xDB);
+    store8(b + 22, 0x00);
+    store8(b + 23, 0x43);
+    store8(b + 24, 0x00);
+    store8(b + 25, 0x06);
+    store8(b + 26, 0x04);
+    store8(b + 27, 0x05);
+    store8(b + 28, 0x06);
+    store8(b + 29, 0x05);
+    store8(b + 30, 0x04);
+    store8(b + 31, 0x06);
+    store8(b + 32, 0x06);
+    store8(b + 33, 0x05);
+    store8(b + 34, 0x06);
+    store8(b + 35, 0x07);
+    store8(b + 36, 0x07);
+    store8(b + 37, 0x06);
+    store8(b + 38, 0x08);
+    store8(b + 39, 0x0A);
+    store8(b + 40, 0x10);
+    store8(b + 41, 0x0A);
+    store8(b + 42, 0x0A);
+    store8(b + 43, 0x09);
+    store8(b + 44, 0x09);
+    store8(b + 45, 0x0A);
+    store8(b + 46, 0x14);
+    store8(b + 47, 0x0E);
+    store8(b + 48, 0x0F);
+    store8(b + 49, 0x0C);
+    store8(b + 50, 0x10);
+    store8(b + 51, 0x17);
+    store8(b + 52, 0x14);
+    store8(b + 53, 0x18);
+    store8(b + 54, 0x18);
+    store8(b + 55, 0x17);
+    store8(b + 56, 0x14);
+    store8(b + 57, 0x16);
+    store8(b + 58, 0x16);
+    store8(b + 59, 0x1A);
+    store8(b + 60, 0x1D);
+    store8(b + 61, 0x25);
+    store8(b + 62, 0x1F);
+    store8(b + 63, 0x1A);
+    store8(b + 64, 0x1B);
+    store8(b + 65, 0x23);
+    store8(b + 66, 0x1C);
+    store8(b + 67, 0x16);
+    store8(b + 68, 0x16);
+    store8(b + 69, 0x20);
+    store8(b + 70, 0x2C);
+    store8(b + 71, 0x20);
+    store8(b + 72, 0x23);
+    store8(b + 73, 0x26);
+    store8(b + 74, 0x27);
+    store8(b + 75, 0x29);
+    store8(b + 76, 0x2A);
+    store8(b + 77, 0x29);
+    store8(b + 78, 0x19);
+    store8(b + 79, 0x1F);
+    store8(b + 80, 0x2D);
+    store8(b + 81, 0x30);
+    store8(b + 82, 0x2D);
+    store8(b + 83, 0x28);
+    store8(b + 84, 0x30);
+    store8(b + 85, 0x25);
+    store8(b + 86, 0x28);
+    store8(b + 87, 0x29);
+    store8(b + 88, 0x28);
+    store8(b + 89, 0xFF);
+    store8(b + 90, 0xC0);
+    store8(b + 91, 0x00);
+    store8(b + 92, 0x0B);
+    store8(b + 93, 0x08);
+    store8(b + 94, 0x00);
+    store8(b + 95, 0x10);
+    store8(b + 96, 0x00);
+    store8(b + 97, 0x18);
+    store8(b + 98, 0x01);
+    store8(b + 99, 0x01);
+    store8(b + 100, 0x11);
+    store8(b + 101, 0x00);
+    store8(b + 102, 0xFF);
+    store8(b + 103, 0xC4);
+    store8(b + 104, 0x00);
+    store8(b + 105, 0x1F);
+    store8(b + 106, 0x00);
+    store8(b + 107, 0x00);
+    store8(b + 108, 0x01);
+    store8(b + 109, 0x05);
+    store8(b + 110, 0x01);
+    store8(b + 111, 0x01);
+    store8(b + 112, 0x01);
+    store8(b + 113, 0x01);
+    store8(b + 114, 0x01);
+    store8(b + 115, 0x01);
+    store8(b + 116, 0x00);
+    store8(b + 117, 0x00);
+    store8(b + 118, 0x00);
+    store8(b + 119, 0x00);
+    store8(b + 120, 0x00);
+    store8(b + 121, 0x00);
+    store8(b + 122, 0x00);
+    store8(b + 123, 0x00);
+    store8(b + 124, 0x01);
+    store8(b + 125, 0x02);
+    store8(b + 126, 0x03);
+    store8(b + 127, 0x04);
+    store8(b + 128, 0x05);
+    store8(b + 129, 0x06);
+    store8(b + 130, 0x07);
+    store8(b + 131, 0x08);
+    store8(b + 132, 0x09);
+    store8(b + 133, 0x0A);
+    store8(b + 134, 0x0B);
+    store8(b + 135, 0xFF);
+    store8(b + 136, 0xC4);
+    store8(b + 137, 0x00);
+    store8(b + 138, 0xB5);
+    store8(b + 139, 0x10);
+    store8(b + 140, 0x00);
+    store8(b + 141, 0x02);
+    store8(b + 142, 0x01);
+    store8(b + 143, 0x03);
+    store8(b + 144, 0x03);
+    store8(b + 145, 0x02);
+    store8(b + 146, 0x04);
+    store8(b + 147, 0x03);
+    store8(b + 148, 0x05);
+    store8(b + 149, 0x05);
+    store8(b + 150, 0x04);
+    store8(b + 151, 0x04);
+    store8(b + 152, 0x00);
+    store8(b + 153, 0x00);
+    store8(b + 154, 0x01);
+    store8(b + 155, 0x7D);
+    store8(b + 156, 0x01);
+    store8(b + 157, 0x02);
+    store8(b + 158, 0x03);
+    store8(b + 159, 0x00);
+    store8(b + 160, 0x04);
+    store8(b + 161, 0x11);
+    store8(b + 162, 0x05);
+    store8(b + 163, 0x12);
+    store8(b + 164, 0x21);
+    store8(b + 165, 0x31);
+    store8(b + 166, 0x41);
+    store8(b + 167, 0x06);
+    store8(b + 168, 0x13);
+    store8(b + 169, 0x51);
+    store8(b + 170, 0x61);
+    store8(b + 171, 0x07);
+    store8(b + 172, 0x22);
+    store8(b + 173, 0x71);
+    store8(b + 174, 0x14);
+    store8(b + 175, 0x32);
+    store8(b + 176, 0x81);
+    store8(b + 177, 0x91);
+    store8(b + 178, 0xA1);
+    store8(b + 179, 0x08);
+    store8(b + 180, 0x23);
+    store8(b + 181, 0x42);
+    store8(b + 182, 0xB1);
+    store8(b + 183, 0xC1);
+    store8(b + 184, 0x15);
+    store8(b + 185, 0x52);
+    store8(b + 186, 0xD1);
+    store8(b + 187, 0xF0);
+    store8(b + 188, 0x24);
+    store8(b + 189, 0x33);
+    store8(b + 190, 0x62);
+    store8(b + 191, 0x72);
+    store8(b + 192, 0x82);
+    store8(b + 193, 0x09);
+    store8(b + 194, 0x0A);
+    store8(b + 195, 0x16);
+    store8(b + 196, 0x17);
+    store8(b + 197, 0x18);
+    store8(b + 198, 0x19);
+    store8(b + 199, 0x1A);
+    store8(b + 200, 0x25);
+    store8(b + 201, 0x26);
+    store8(b + 202, 0x27);
+    store8(b + 203, 0x28);
+    store8(b + 204, 0x29);
+    store8(b + 205, 0x2A);
+    store8(b + 206, 0x34);
+    store8(b + 207, 0x35);
+    store8(b + 208, 0x36);
+    store8(b + 209, 0x37);
+    store8(b + 210, 0x38);
+    store8(b + 211, 0x39);
+    store8(b + 212, 0x3A);
+    store8(b + 213, 0x43);
+    store8(b + 214, 0x44);
+    store8(b + 215, 0x45);
+    store8(b + 216, 0x46);
+    store8(b + 217, 0x47);
+    store8(b + 218, 0x48);
+    store8(b + 219, 0x49);
+    store8(b + 220, 0x4A);
+    store8(b + 221, 0x53);
+    store8(b + 222, 0x54);
+    store8(b + 223, 0x55);
+    store8(b + 224, 0x56);
+    store8(b + 225, 0x57);
+    store8(b + 226, 0x58);
+    store8(b + 227, 0x59);
+    store8(b + 228, 0x5A);
+    store8(b + 229, 0x63);
+    store8(b + 230, 0x64);
+    store8(b + 231, 0x65);
+    store8(b + 232, 0x66);
+    store8(b + 233, 0x67);
+    store8(b + 234, 0x68);
+    store8(b + 235, 0x69);
+    store8(b + 236, 0x6A);
+    store8(b + 237, 0x73);
+    store8(b + 238, 0x74);
+    store8(b + 239, 0x75);
+    store8(b + 240, 0x76);
+    store8(b + 241, 0x77);
+    store8(b + 242, 0x78);
+    store8(b + 243, 0x79);
+    store8(b + 244, 0x7A);
+    store8(b + 245, 0x83);
+    store8(b + 246, 0x84);
+    store8(b + 247, 0x85);
+    store8(b + 248, 0x86);
+    store8(b + 249, 0x87);
+    store8(b + 250, 0x88);
+    store8(b + 251, 0x89);
+    store8(b + 252, 0x8A);
+    store8(b + 253, 0x92);
+    store8(b + 254, 0x93);
+    store8(b + 255, 0x94);
+    store8(b + 256, 0x95);
+    store8(b + 257, 0x96);
+    store8(b + 258, 0x97);
+    store8(b + 259, 0x98);
+    store8(b + 260, 0x99);
+    store8(b + 261, 0x9A);
+    store8(b + 262, 0xA2);
+    store8(b + 263, 0xA3);
+    store8(b + 264, 0xA4);
+    store8(b + 265, 0xA5);
+    store8(b + 266, 0xA6);
+    store8(b + 267, 0xA7);
+    store8(b + 268, 0xA8);
+    store8(b + 269, 0xA9);
+    store8(b + 270, 0xAA);
+    store8(b + 271, 0xB2);
+    store8(b + 272, 0xB3);
+    store8(b + 273, 0xB4);
+    store8(b + 274, 0xB5);
+    store8(b + 275, 0xB6);
+    store8(b + 276, 0xB7);
+    store8(b + 277, 0xB8);
+    store8(b + 278, 0xB9);
+    store8(b + 279, 0xBA);
+    store8(b + 280, 0xC2);
+    store8(b + 281, 0xC3);
+    store8(b + 282, 0xC4);
+    store8(b + 283, 0xC5);
+    store8(b + 284, 0xC6);
+    store8(b + 285, 0xC7);
+    store8(b + 286, 0xC8);
+    store8(b + 287, 0xC9);
+    store8(b + 288, 0xCA);
+    store8(b + 289, 0xD2);
+    store8(b + 290, 0xD3);
+    store8(b + 291, 0xD4);
+    store8(b + 292, 0xD5);
+    store8(b + 293, 0xD6);
+    store8(b + 294, 0xD7);
+    store8(b + 295, 0xD8);
+    store8(b + 296, 0xD9);
+    store8(b + 297, 0xDA);
+    store8(b + 298, 0xE1);
+    store8(b + 299, 0xE2);
+    store8(b + 300, 0xE3);
+    store8(b + 301, 0xE4);
+    store8(b + 302, 0xE5);
+    store8(b + 303, 0xE6);
+    store8(b + 304, 0xE7);
+    store8(b + 305, 0xE8);
+    store8(b + 306, 0xE9);
+    store8(b + 307, 0xEA);
+    store8(b + 308, 0xF1);
+    store8(b + 309, 0xF2);
+    store8(b + 310, 0xF3);
+    store8(b + 311, 0xF4);
+    store8(b + 312, 0xF5);
+    store8(b + 313, 0xF6);
+    store8(b + 314, 0xF7);
+    store8(b + 315, 0xF8);
+    store8(b + 316, 0xF9);
+    store8(b + 317, 0xFA);
+    store8(b + 318, 0xFF);
+    store8(b + 319, 0xDA);
+    store8(b + 320, 0x00);
+    store8(b + 321, 0x08);
+    store8(b + 322, 0x01);
+    store8(b + 323, 0x01);
+    store8(b + 324, 0x00);
+    store8(b + 325, 0x00);
+    store8(b + 326, 0x3F);
+    store8(b + 327, 0x00);
+    store8(b + 328, 0xF2);
+    store8(b + 329, 0xBF);
+    store8(b + 330, 0x0F);
+    store8(b + 331, 0xDA);
+    store8(b + 332, 0x7D);
+    store8(b + 333, 0xDE);
+    store8(b + 334, 0x2B);
+    store8(b + 335, 0xD7);
+    store8(b + 336, 0x7C);
+    store8(b + 337, 0x3F);
+    store8(b + 338, 0x69);
+    store8(b + 339, 0xF7);
+    store8(b + 340, 0x78);
+    store8(b + 341, 0xAF);
+    store8(b + 342, 0x5E);
+    store8(b + 343, 0xF0);
+    store8(b + 344, 0xFD);
+    store8(b + 345, 0xA7);
+    store8(b + 346, 0xDD);
+    store8(b + 347, 0xE2);
+    store8(b + 348, 0xBC);
+    store8(b + 349, 0x03);
+    store8(b + 350, 0xC3);
+    store8(b + 351, 0xF6);
+    store8(b + 352, 0x9F);
+    store8(b + 353, 0x77);
+    store8(b + 354, 0x8A);
+    store8(b + 355, 0xF5);
+    store8(b + 356, 0xDF);
+    store8(b + 357, 0x0F);
+    store8(b + 358, 0xDA);
+    store8(b + 359, 0x7D);
+    store8(b + 360, 0xDE);
+    store8(b + 361, 0x2B);
+    store8(b + 362, 0xD5);
+    store8(b + 363, 0xF4);
+    store8(b + 364, 0xB8);
+    store8(b + 365, 0x44);
+    store8(b + 366, 0x50);
+    store8(b + 367, 0x83);
+    store8(b + 368, 0x8E);
+    store8(b + 369, 0x6B);
+    store8(b + 370, 0xFF);
+    store8(b + 371, 0xD9);
+    return b;
+}
+
 fn _jpeg_contract(buf, n, label): i64 {
     var err = 0;
     var img = chitra_jpeg_decode(buf, n, &err);
@@ -496,6 +878,76 @@ fn fuzz_jpeg_selfcheck(): i64 {
     var ges = _find_entropy_start(gb, glo);
     assert(ges > 0, "selfcheck: real gradient SOS located");
     assert(glo - ges >= 8, "selfcheck: real gradient entropy span is fuzzable");
+
+    # 0.6.0: the non-interleaved fixture must DECODE before anything mutates it,
+    # and its sampling nibble must sit where the sweep patches it. A harness that
+    # silently exercises a rejecting fixture proves nothing about the new path.
+    var nlo = 0;
+    var nb = fx_jpeg_ni_gray(&nlo);
+    var nerr = 0;
+    var nimg = chitra_jpeg_decode(nb, nlo, &nerr);
+    assert(nimg != 0, "selfcheck: non-interleaved base fixture decodes clean");
+    assert(load8(nb + 100) == 0x11, "selfcheck: SOF0 sampling nibble sits at offset 100");
+    var nes = _find_entropy_start(nb, nlo);
+    assert(nes > 0, "selfcheck: non-interleaved fixture SOS located");
+    assert(nlo - nes >= 8, "selfcheck: non-interleaved entropy span is fuzzable");
+    # And it must still decode with H=2 declared — otherwise case 8 would be
+    # fuzzing a rejection path rather than the collapsed geometry.
+    store8(nb + 100, 0x21);
+    nerr = 0;
+    assert(chitra_jpeg_decode(nb, nlo, &nerr) != 0, "selfcheck: H=2 reaches the collapsed geometry");
+    return 0;
+}
+
+# ---- 7. Sampling-nibble sweep (0.6.0, T.81 § A.2) ---------------------
+# The SOF0 sampling byte of a ONE-component frame drives geometry that is now
+# collapsed rather than rejected, so every value of that byte is a live input.
+# This walks all 256, not a spot check: 1..4 x 1..4 must decode (the factors are
+# inert for Nf = 1), and 0 or >4 in either nibble must reject — either way the
+# documented contract holds.
+fn fuzz_jpeg_hv_sweep(): i64 {
+    var lo = 0;
+    var b = 0;
+    var hv = 0;
+    while (hv < 256) {
+        b = fx_jpeg_ni_gray(&lo);
+        store8(b + 100, hv);
+        _jpeg_contract(b, lo, "jpeg SOF0 sampling-nibble sweep");
+        _jrouter_contract(b, lo, "jpeg SOF0 sampling-nibble sweep (router)");
+        hv = hv + 1;
+    }
+    return 0;
+}
+
+# ---- 8. Entropy mutation behind a NON-INTERLEAVED header --------------
+# Before 0.6.0 an H>1 one-component header REJECTED, so no entropy byte behind
+# one ever reached the bit-reader: this shape is entirely new attack surface,
+# not a widened one. The collapsed grid walks ceil(24/8) * ceil(16/8) = 6 data
+# units for every legal (H,V) — fewer than the 8 or 16 an interleaved reading of
+# the same header would have walked, which is why the change cannot increase
+# per-file work. Mutates the H/V byte AND the entropy span together, which is
+# the combination the new code owns.
+fn fuzz_jpeg_ni_entropy(seed, nmut): i64 {
+    var lo = 0;
+    var b = fx_jpeg_ni_gray(&lo);
+    _fuzz_seed(seed);
+    var hh = (_fuzz_next() % 4) + 1;
+    var vv = (_fuzz_next() % 4) + 1;
+    store8(b + 100, hh * 16 + vv);
+    var es = _find_entropy_start(b, lo);
+    var span = lo - es;
+    var i = 0;
+    var off = 0;
+    if (es > 0) {
+        if (span > 0) {
+            while (i < nmut) {
+                off = es + (_fuzz_next() % span);
+                store8(b + off, _fuzz_next() & 255);
+                i = i + 1;
+            }
+        }
+    }
+    _jpeg_contract(b, lo, "jpeg non-interleaved entropy mutation");
     return 0;
 }
 
@@ -555,6 +1007,16 @@ fn main(): i64 {
         seed = seed + 1;
     }
     println("fuzz_jpeg: 75000 real-fixture entropy mutation cases survived");
+
+    fuzz_jpeg_hv_sweep();
+    println("fuzz_jpeg: 256-case SOF0 sampling-nibble sweep survived");
+
+    seed = 1;
+    while (seed <= 100000) {
+        fuzz_jpeg_ni_entropy(seed * 2246822519, (seed % 6) + 1);
+        seed = seed + 1;
+    }
+    println("fuzz_jpeg: 100000 non-interleaved entropy cases survived");
 
     fuzz_jpeg_degenerate();
     println("fuzz_jpeg: degenerate-length cases survived");

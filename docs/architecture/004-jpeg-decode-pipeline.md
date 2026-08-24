@@ -143,6 +143,42 @@ For 1 component the gray value fills R=G=B with A=255; for 3 it goes through
 `source_color_type` (`256 + ncomp`, i.e. `0x101` gray / `0x103` YCbCr) so a
 consumer's PNG 0/2/3/4/6 switch can never alias it.
 
+### The Nf = 1 effective-geometry collapse (0.6.0)
+
+The model above is the **interleaved** one (T.81 § A.2.3). A scan carrying a
+single component is **non-interleaved** (§ A.2.2) and its MCU is exactly one
+8×8 data unit — a different layout, and through 0.5.3 chitra rejected it rather
+than mis-render it.
+
+0.6.0 decodes it without a second code path. For a one-component *frame* the
+declared sampling factors are **inert**: § A.1.1 gives
+`x_i = ceil(X · H_i / H_max)`, and with `Nf = 1` the lone component is the
+maximum, so `H_1 ≡ H_max` and `x_1 = X` for every legal `(H, V)`. So
+`_jpeg_decode_scan` forces `max_h = max_v = 1` and `H_i = V_i = 1` when
+`ncomp == 1`, and everything above then walks the non-interleaved layout
+exactly: one block per MCU, raster order, `mcu_cols = ceil(w/8)`.
+
+**The exact-fit property, and what it depends on.** Under the collapse
+`cpw = mcu_cols · 1 · 8 = ceil(w/8) · 8` and `cph = ceil(h/8) · 8`, so the block
+grid covers the plane with **no unwritten margin** — the last block's last write
+lands at offset `cpw·cph − 1` precisely (for 24×16: a 384-byte plane, last write
+at 383). That is why this path needs no plane zero-fill and no containment
+tripwire: with an exact fit, neither could ever fire.
+
+That property is **conditional on the upsampler being a box filter**. Box reads
+exactly `(y·Vi/max_v)·comppw + (x·Hi/max_h)`, never past it. A fancy or
+triangle upsampler reads `x+1`, which would make an edge margin live on the
+interleaved path and reopen a read-of-uninitialized class. Anyone changing the
+upsampler must revisit this paragraph, not just the color pass.
+
+Note also that only **one** grid variable exists. An implementation carrying a
+second (a `grid_w` for the block count while `mcu_cols` still sizes the plane)
+has two names for one quantity and lets placement diverge from count — see
+[`../adr/0006-defer-jpeg-multiscan-resumption.md`](../adr/0006-defer-jpeg-multiscan-resumption.md).
+
+Restart intervals need no change: `Ri` counts MCUs (§ B.2.4.4), an MCU here is
+one data unit, and `mi % ri` is already expressed in MCUs.
+
 ## The entropy bit-reader's marker / restart handling
 
 The bit-reader (`BR_SIZE = 48` bytes: base/pos/end/buf/cnt/marker) pulls bits
@@ -268,10 +304,19 @@ of new attack surface never fuzzed in-tree. `fuzz/fuzz_jpeg.fcyr` now covers it
 directly, including **entropy-segment-only mutation** — the header is left valid
 so hostile bits reach the bit-reader and `DECODE` rather than being turned away
 at the signature gate. `tests/bcyr/chitra.bcyr` measures the path's cost.
-The 226 assertions in `jpeg.tcyr` (of 2,478 across the 7 suites, `make test`)
-remain hand-authored known-answer tests — the byte-identical ImageMagick
-cross-check is correctness evidence, and the fuzz harness is now the generated
-coverage that complements it.
+The 230 assertions in `jpeg.tcyr` and the 237 in `jpeg_noninterleaved.tcyr` (of
+2,719 across the 8 suites, `make test`) remain hand-authored known-answer tests
+— the byte-identical reference cross-check is correctness evidence, and the fuzz
+harness is the generated coverage that complements it.
+
+**Which reference decoder, and when.** `djpeg -nosmooth` is the primary oracle
+for every JPEG cell and matches chitra byte-for-byte across the sampling matrix.
+ImageMagick is a valid *independent second* oracle only for grayscale and 4:4:4:
+it upsamples chroma with a fancy (triangle) filter where chitra and
+`djpeg -nosmooth` use box, so on a 4:2:0 file it differs in 937 of 1536 bytes at
+up to 40 per byte. That is a filter difference, not a decode bug — do not chase
+it. CLAUDE.md's blanket "validate against ImageMagick" rule holds for PNG, BMP
+and GIF unqualified, and for JPEG with this narrowing.
 
 ## See also
 

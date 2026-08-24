@@ -1359,6 +1359,14 @@ fn test_reject_nonsegment_markers() {
 # only the interleaved geometry, which diverges as soon as the lone component
 # has H>1 or V>1 (at w=24,H=2 it decodes 4 blocks where T.81 wants 3, so the
 # entropy stream desyncs). It must reject, not mis-render.
+# The 8x8 fixture widened to 24 and re-declared H=2,V=1 on its only component.
+# Before 0.6.0 this was the § A.2 rejection cell; it now decodes (see the
+# effective-geometry collapse in src/jpeg.cyr). Note its entropy stream still
+# encodes ONE block while the corrected grid asks for ceil(24/8) = 3, so the
+# bit-reader zero-pads and blocks 2-3 come out flat — this is a bounds and
+# no-crash cell, NOT a conformance one. The conformance weight for § A.2 lives
+# in tests/tcyr/jpeg_noninterleaved.tcyr, on real libjpeg-encoded files with an
+# external reference decode.
 fn fx_jpeg_gray_h2(len_out): i64 {
     var b = fx_jpeg_gray_8x8(len_out);
     store8(b + 78, 0x00);
@@ -1380,16 +1388,28 @@ fn fx_jpeg_bomb_dims(len_out): i64 {
     return b;
 }
 
-fn test_reject_single_component_noninterleaved() {
+# 0.6.0 REVERSES the 0.3.3 rejection this cell used to pin. The old assertion
+# (CHITRA_ERR_UNSUPPORTED) is now wrong: a one-component frame is
+# non-interleaved by definition (T.81 § A.2.2) and its sampling factors are
+# inert, so H=2 decodes. What survives here is the bounds check — a
+# short-entropy stream on the corrected 3-block grid must zero-pad and finish,
+# not walk off the plane.
+fn test_decode_single_component_noninterleaved_bounds() {
     var lo = 0;
     var b = fx_jpeg_gray_h2(&lo);
     var err = 0;
     var img = chitra_jpeg_decode(b, lo, &err);
-    assert(img == 0, "1-comp H=2 scan rejected (non-interleaved unsupported)");
-    assert(err != 0, "1-comp H=2 sets err_out");
-    # guard the deref: if the cap ever regresses, err is 0 and this must
-    # report a clean FAIL rather than null-deref the whole suite away.
-    if (err != 0) { assert_eq(chitra_err_code(err), CHITRA_ERR_UNSUPPORTED, "1-comp H=2 -> UNSUPPORTED"); }
+    assert(img != 0, "1-comp H=2 scan now decodes (T.81 § A.2 non-interleaved)");
+    assert_eq(err, 0, "1-comp H=2: no error");
+    if (img != 0) {
+        assert_eq(chitra_image_width(img), 24, "1-comp H=2: width 24");
+        assert_eq(chitra_image_height(img), 8, "1-comp H=2: height 8");
+        assert_eq(chitra_image_source_color_type(img), 257, "1-comp H=2: src ctype 0x101");
+        # Block 1 carries the fixture's flat DC=8 level; blocks 2-3 have no
+        # entropy data behind them and zero-pad to the level-shifted midpoint.
+        assert_eq(load8(chitra_image_pixels(img) + 0), 129, "1-comp H=2: px(0,0) = 129");
+        assert_eq(load8(chitra_image_pixels(img) + 23 * 4 + 3), 255, "1-comp H=2: px(23,0) alpha = 255");
+    }
     return 0;
 }
 
@@ -1597,7 +1617,7 @@ fn main() {
     test_decode_420();
     test_decode_restart();
     test_decode_real_gradient();
-    test_reject_single_component_noninterleaved();
+    test_decode_single_component_noninterleaved_bounds();
     test_reject_jpeg_amplification_bomb();
     test_reject_nonsegment_markers();
     test_amplification_cap_allows_real_images();

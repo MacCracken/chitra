@@ -48,15 +48,26 @@ within each, by the module/function that consumes them.
   - § F.1.2.1 / F.2.2 — baseline DC difference (predictor) + AC run/size
     (RRRR/SSSS, EOB, ZRL) decode. Used by: `src/jpeg.cyr` MCU/block
     decode loop.
-  - Annex A (A.2.1) — component sampling factors Hi/Vi, MCU composition,
-    interleaved data-unit ordering. Used by: `src/jpeg.cyr` MCU
-    geometry; `src/jpeg.cyr` upsampling layout.
-  - Annex A (A.2) — a scan carrying a SINGLE component is **non-interleaved**
-    (its MCU is one data unit over the component's own dimensions), which
-    diverges from the interleaved layout as soon as the lone component has
-    H > 1 or V > 1. chitra implements only the interleaved geometry and
-    therefore **rejects** that case rather than mis-rendering it (0.3.3,
-    `CHITRA_ERR_UNSUPPORTED`). Used by: `src/jpeg.cyr` decode-scan guard.
+  - § A.1.1 — each component's own sample dimensions,
+    `x_i = ceil(X·H_i/H_max)` and `y_i = ceil(Y·V_i/V_max)`. This is the
+    derivation, NOT § A.2.1 as this entry said through 0.5.3. Used by:
+    `src/jpeg.cyr` — and it is what makes the factors **inert** for a
+    one-component frame, since there `H_1 ≡ H_max` and `x_1 = X`.
+  - § A.2.3 — INTERLEAVED data-unit ordering: one MCU carries `H_i × V_i` units
+    from each component in the scan. Used by: `src/jpeg.cyr` MCU geometry and
+    upsampling layout.
+  - § A.2.2 — NON-INTERLEAVED ordering: a scan carrying a single component
+    walks its data units in raster order, one per MCU, "regardless of the
+    values of H1 and V1". Diverges from the interleaved layout as soon as the
+    factors exceed 1. chitra rejected this through 0.5.3; **0.6.0 decodes it**
+    for a one-component frame via the effective-geometry collapse, and defers
+    the multi-scan case (`Ns < Nf`) with `CHITRA_ERR_UNSUPPORTED`. Used by:
+    `src/jpeg.cyr` decode-scan geometry. See
+    [`adr/0006-defer-jpeg-multiscan-resumption.md`](adr/0006-defer-jpeg-multiscan-resumption.md).
+  - § B.2.3 — scan header: `1 ≤ Ns ≤ 4`, each `Csj` names a distinct frame
+    component, and — **conditioned on `Ns > 1`** — `Σ H_j·V_j ≤ 10`. Used by:
+    `src/jpeg.cyr` `_jpeg_parse_sos` and `src/jpeg_markers.cyr`
+    `CHITRA_MAX_BLOCKS_PER_MCU` (whose comment cited § A.2.2 through 0.5.3).
   - § B.1.1.2 — a marker may be preceded by any number of `0xFF` **fill
     bytes**. Used by: `src/jpeg_huffman.cyr` entropy reader and
     `src/jpeg_markers.cyr` header walk (0.3.3 — the entropy side previously
@@ -112,10 +123,15 @@ within each, by the module/function that consumes them.
   coefficient set (the integer realization of the BT.601 equations).
   <https://github.com/libjpeg-turbo/libjpeg-turbo/blob/main/jdcolor.c>
   *(Implementation guide.)* Used by: `src/jpeg.cyr`.
-- **ITU-T T.81 Annex A.2.1 + JFIF chroma-positioning convention** — chroma
+- **ITU-T T.81 § A.2.3 + JFIF chroma-positioning convention** — chroma
   subsampling layout; chitra uses box/nearest replication upsampling (the
-  conformant-simple choice; interpolation is out of 0.3.0 scope). Used by:
-  `src/jpeg.cyr` — chroma upsample pass.
+  conformant-simple choice; interpolation is out of scope). Used by:
+  `src/jpeg.cyr` — chroma upsample pass. Two consequences worth carrying: a
+  4:2:0 decode differs from **ImageMagick**, which upsamples with a fancy
+  (triangle) filter — 937 of 1536 bytes at up to 40/byte on a 24x16 fixture —
+  so `djpeg -nosmooth` is the oracle for subsampled JPEG; and the box filter is
+  what makes the 0.6.0 exact-fit plane property safe, since it never reads
+  `x+1`.
 
 ### JPEG decoder CVE corpus (security hardening)
 
