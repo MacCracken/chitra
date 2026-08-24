@@ -7,7 +7,7 @@ decodes **PNG** (every spec-legal bit depth 1/2/4/8/16 across color types
 0/2/3/4/6, Adam7 interlace, PLTE/tRNS), **baseline JPEG** (JFIF SOF0,
 grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0 chroma subsampling, restart
 markers), **BMP** (`BI_RGB` at 1/4/8 bpp palette, 24 bpp and 32 bpp, both row
-orders) and **GIF** (LZW, global/local palettes, interlace, transparency —
+orders, plus **RLE8/RLE4** run-length) and **GIF** (LZW, global/local palettes, interlace, transparency —
 **first frame only**, see [ADR 0005](../adr/0005-gif-first-frame-only.md)) —
 all four to the same canonical RGBA8.
 
@@ -29,9 +29,9 @@ isn't on your PATH yet, see the agnosticos bootstrap.
 ```bash
 cyrius deps        # resolve stdlib + sankoch + thread into lib/
 make build         # link-check: builds build/chitra_smoke from programs/smoke.cyr
-make test          # 1700 assertions across tests/tcyr/
+make test          # 2261 assertions across tests/tcyr/
 make fuzz          # ~10⁶ adversarial decode cases across fuzz/*.fcyr
-make bench         # 16 decode benchmarks (tests/bcyr/chitra.bcyr)
+make bench         # 17 decode benchmarks (tests/bcyr/chitra.bcyr)
 make dist          # = cyrius distlib → dist/chitra.cyr
 make test-all      # version-check + dist + test + fuzz — the pre-release gate
 ```
@@ -47,7 +47,7 @@ A few notes on what each step proves:
   domain modules) parses and links clean; it writes a one-line banner
   and exits 0.
 - **`make test`** runs the seven suites under `tests/tcyr/` — each is a
-  standalone `main()`: `bmp.tcyr` (294), `error.tcyr` (20), `gif.tcyr` (622),
+  standalone `main()`: `bmp.tcyr` (855), `error.tcyr` (20), `gif.tcyr` (622),
   `interlace.tcyr` (35), `jpeg.tcyr` (226), `png.tcyr` (360),
   `subbyte.tcyr` (143).
 - **`make fuzz`** drives all four public decode entries over random,
@@ -75,7 +75,7 @@ released tag and pulling that one module:
 ```toml
 [deps.chitra]
 git     = "https://github.com/MacCracken/chitra"
-tag     = "0.5.0"
+tag     = "0.5.1"
 modules = ["dist/chitra.cyr"]
 ```
 
@@ -171,7 +171,7 @@ no-op: the stdlib `alloc` is a bump allocator with no per-block free —
 see [architecture note 003](../architecture/003-bump-allocator-no-free.md).
 
 You can probe the linked version at runtime with `chitra_version()`,
-which returns `500` for 0.5.0 (`major*10000 + minor*100 + patch`).
+which returns `501` for 0.5.1 (`major*10000 + minor*100 + patch`).
 `make version-check` gates that literal against `VERSION`, so it cannot
 drift silently again.
 
@@ -226,12 +226,13 @@ the pixels. A *malformed* IEND (e.g. non-zero length) is a hard error.
 | `CHITRA_ERR_JPEG_COMPONENTS` | 23 | Unsupported component count (e.g. 4-component CMYK / YCCK) |
 | `CHITRA_ERR_BMP_HEADER` | 24 | Malformed BMP file/DIB header (size, planes, offsets), or a deferred V4/V5 header |
 | `CHITRA_ERR_BMP_DEPTH` | 25 | BMP bpp outside {1,4,8,24,32} — 16 bpp is deferred |
-| `CHITRA_ERR_BMP_COMPRESSION` | 26 | Deferred BMP compression: RLE4/RLE8, BITFIELDS, embedded JPEG/PNG |
+| `CHITRA_ERR_BMP_COMPRESSION` | 26 | Deferred BMP compression: BITFIELDS, embedded JPEG/PNG (RLE8/RLE4 decode as of 0.5.1) |
 | `CHITRA_ERR_BMP_PALETTE` | 27 | BMP palette missing, short, or an index outside it |
 | `CHITRA_ERR_GIF_HEADER` | 28 | Bad GIF signature/version, screen descriptor, or image descriptor (incl. a frame rect outside the canvas) |
 | `CHITRA_ERR_GIF_LZW` | 29 | Corrupt LZW stream: bad code, oversized expansion, bad chain, or an out-of-range minimum code size |
 | `CHITRA_ERR_GIF_PALETTE` | 30 | No GIF color table in force, or an index outside it |
 | `CHITRA_ERR_GIF_NO_IMAGE` | 31 | Structurally valid GIF with no image descriptor |
+| `CHITRA_ERR_BMP_RLE` | 32 | Corrupt BMP run-length stream: a run or delta leaving the bitmap, or a truncated opcode |
 | `CHITRA_ERR_OTHER` | 99 | Anything else |
 
 Note that `CHITRA_ERR_INTERLACE` and `CHITRA_ERR_BIT_DEPTH` are narrower

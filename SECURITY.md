@@ -77,16 +77,16 @@ decode. Each maps to a `ChitraErrCode`
 - ✅ **Decompression-bomb ratio cap** — the ratio of inflated output to
   compressed IDAT input is bounded by `CHITRA_MAX_INFLATE_RATIO = 1100`
   (constant in [`src/png_chunks.cyr:43`](src/png_chunks.cyr); checked at
-  [`src/png_filter.cyr:519`](src/png_filter.cyr)), just above DEFLATE's
+  [`src/png_filter.cyr:551`](src/png_filter.cyr)), just above DEFLATE's
   theoretical 1032:1 maximum (RFC 1951 § 3.2.5), so a zip-bomb-style input is
   rejected instead of expanded. Failure → `CHITRA_ERR_DIMENSIONS`.
 - ✅ **Raw-buffer ceiling** — every derived buffer size is bounded by
   `CHITRA_MAX_RAW_BYTES = 268435456` (256 MB)
   ([`src/png_chunks.cyr:38`](src/png_chunks.cyr)), and every allocation is
   null-checked. The IHDR-derived inflated/pixel buffer sizes over the ceiling
-  fail as `CHITRA_ERR_DIMENSIONS` ([`src/png_filter.cyr:500-505`](src/png_filter.cyr));
+  fail as `CHITRA_ERR_DIMENSIONS` ([`src/png_filter.cyr:532-539`](src/png_filter.cyr));
   the IDAT-accumulator over the ceiling and any allocation that returns null
-  fail as `CHITRA_ERR_OOM` ([`src/png_filter.cyr:438`](src/png_filter.cyr)).
+  fail as `CHITRA_ERR_OOM` ([`src/png_filter.cyr:445`](src/png_filter.cyr)).
 - ✅ **Inflate exact-size second line of defense** — the inflated stream size
   must match exactly the size derived from IHDR (`height × (1 + row_bytes)`);
   any mismatch from `sankoch` aborts the decode. Failure →
@@ -113,7 +113,7 @@ decode. Each maps to a `ChitraErrCode`
   appears after IDAT, if its length exceeds 768 bytes, or if it is not a
   multiple of 3; tRNS spans are re-validated within `(src, len)` in the color
   pass and must have the correct length for the color type
-  ([`src/png_color.cyr:110`](src/png_color.cyr)). Failure →
+  ([`src/png_color.cyr:103`](src/png_color.cyr)). Failure →
   `CHITRA_ERR_BAD_CHUNK`.
 - ✅ **Structural completeness checks** — IEND must be zero-length; a
   structurally valid PNG with zero IDAT is rejected before any divide on the
@@ -199,9 +199,18 @@ turn it away, so the header parser *is* the entire perimeter:
   the input length, and every index is **hard-rejected** against the declared
   entry count rather than clamped — the same posture as the PNG palette path.
   Failure → `CHITRA_ERR_BMP_PALETTE`.
-- ✅ **Deferred modes reject with distinct codes** rather than half-decoding:
-  `BI_RLE8` / `BI_RLE4`, `BI_BITFIELDS`, 16 bpp, and the V4/V5 header
-  extensions. **`BI_JPEG` and `BI_PNG` are refused outright** — honouring them
+- ✅ **Run-length streams (0.5.1)** decode with the guards carrying the weight,
+  not the codec. Termination is **structural** — every opcode consumes at least
+  two bytes and the cursor only advances, so the loop cannot spin. Every write
+  is bounds-checked **individually**, so a run past the end of a row is
+  rejected rather than clipped (clipping would silently decode a different
+  image than the file encodes). **Delta** — which moves the write cursor by
+  attacker-chosen `(dx, dy)` unrelated to anything written — is checked against
+  both dimensions **at the jump**, because a delta past the end followed by no
+  writes is still malformed. Failure → `CHITRA_ERR_BMP_RLE`. A top-down RLE DIB
+  is rejected outright, and `BI_RLE8`/`BI_RLE4` must match 8/4 bpp.
+- ✅ **Still-deferred modes reject with distinct codes** rather than
+  half-decoding: `BI_BITFIELDS`, 16 bpp, and the V4/V5 header extensions. **`BI_JPEG` and `BI_PNG` are refused outright** — honouring them
   would have a decoder re-enter itself, and a recursion surface is better
   declined than bounded.
 - ✅ **`planes != 1` is a malformed header, not a feature.** There has never
@@ -316,7 +325,7 @@ beyond spec.
 
 > Coverage note: as of 0.3.3 both hardening gaps are closed. The fuzz gap
 > is closed — `make fuzz` drives both public decode entries
-> over ~1.9 M adversarial cases (6,543,842 assertions, 0 failures),
+> over ~2.1 M adversarial cases (7,182,567 assertions, 0 failures),
 > including JPEG entropy-segment mutation, and asserts the documented
 > `(0, *err_out set)` failure contract as well as survival; and `make bench`
 > measures decode latency for all four formats with a committed CSV history. Note

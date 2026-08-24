@@ -5,6 +5,93 @@ All notable changes to chitra are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] - 2026-08-24
+
+**BMP run-length compression.** `BI_RLE8` and `BI_RLE4`, deferred in 0.4.0 with
+`CHITRA_ERR_BMP_COMPRESSION`, now decode. This is the first of the two cuts
+paying off the BMP deferrals; `BI_BITFIELDS`, 16 bpp and the V4/V5 headers
+remain deferred to 0.5.2.
+
+As the roadmap predicted, **the guards are the bulk of the work, not the
+codec.** An RLE stream is a flat sequence of 2-byte opcodes — an encoded run,
+or an escape for end-of-line, end-of-bitmap, absolute mode, or *delta*. Three
+properties do the safety work:
+
+1. **Termination is structural.** Every opcode consumes at least two bytes and
+   the cursor only advances, so the loop cannot spin — there is no opcode that
+   leaves the read position where it was.
+2. **Every write is bounds-checked individually**, not per-run. A run whose
+   count would carry it off the end of a row is **rejected, not clipped**:
+   clipping would silently decode a different image than the file encodes.
+3. **Delta is the sharp one.** It moves the write cursor by attacker-chosen
+   `(dx, dy)` with no relation to what has been written, so it is checked
+   against **both** dimensions at the jump rather than left to the per-write
+   check — a delta far past the end followed by no writes should still be
+   recognised as malformed, not silently accepted.
+
+### Added
+
+- `BI_RLE8` (8 bpp) and `BI_RLE4` (4 bpp) decode: encoded runs, absolute mode
+  with its word-boundary padding, end-of-line, end-of-bitmap, and delta.
+- `CHITRA_ERR_BMP_RLE` (32) — a corrupt RLE stream, distinct from
+  `CHITRA_ERR_BMP_COMPRESSION`, which continues to mean "chitra does not
+  implement this compression". A caller can now tell "your file is broken" from
+  "chitra won't".
+- **+561 test assertions** (`bmp.tcyr` 294 → 855). Coverage includes an
+  **ImageMagick-encoded** RLE8 file, plus hand-built fixtures for RLE4 encoded
+  runs, RLE8 absolute, RLE4 absolute and delta — every one cross-checked
+  against ImageMagick's decode of the same bytes. The RLE4-encoded,
+  RLE8-absolute and RLE4-absolute fixtures encode the **same image by three
+  different opcode paths**, so they must decode identically; that is a check a
+  single-fixture-per-feature suite would miss.
+- **+200,000 fuzz cases** in `fuzz/fuzz_bmp.fcyr`: an RLE-stream-only mutation
+  mode, and a **delta-splice** mode that deliberately injects escape-2 opcodes
+  with random `(dx, dy)` rather than hoping random mutation produces one. BMP
+  fuzz now runs 2,458,215 assertions, 0 failures.
+- **A `bmp_rle8_256` benchmark** with a small run-length encoder in the harness.
+  Its content is deliberately **blocky** rather than the gradient the other
+  fixtures use: RLE exists for flat graphic content, and encoding a per-pixel
+  gradient would produce almost entirely 1-length runs and measure a case
+  nobody ships.
+
+- **`scripts/check-anchors.sh`** — the docs cite code by `file.cyr:line`, and
+  those numbers move whenever a guard is added above them. That rot had already
+  needed hand-repair twice (the `png_chunks.cyr` anchors in 0.3.3, and the
+  `png_filter.cyr` + `png_color.cyr` anchors in this cut, where three citations
+  were pointing at a closing brace). The script prints every citation with the
+  line it now points at and flags the ones landing on a brace or past
+  end-of-file; it is wired into the closeout checklist rather than CI, because
+  it cannot know what a line was *meant* to say. Dated `docs/audit/` reports are
+  excluded — their anchors are a historical record, not a live claim.
+- **Repaired 14 drifted code anchors** across `CLAUDE.md`, `SECURITY.md` and
+  ADR 0002, found by the script above on its first run.
+
+### Security
+
+- A **top-down RLE DIB is rejected** (`CHITRA_ERR_BMP_HEADER`). Microsoft's
+  own documentation says top-down DIBs cannot be compressed, and the reason is
+  structural: the end-of-line escape counts rows from the bottom, so the two
+  conventions have no consistent meaning together.
+- **RLE is bit-depth specific** and a mismatch is rejected: `BI_RLE8` requires
+  8 bpp, `BI_RLE4` requires 4 bpp. The run and absolute payloads mean different
+  things at each depth, so decoding one as the other would silently produce a
+  different image rather than fail.
+- The compressed span cannot be computed in advance — that is the point of a
+  run-length stream — so only its **start** is validated in the header. Every
+  read the decode loop makes is bounds-checked individually, which is what
+  makes the unbounded length safe rather than merely unchecked.
+
+### Notes
+
+- **Pixels no opcode reaches keep index 0.** An RLE stream is allowed to leave
+  gaps: a delta jump skips pixels that are never written. chitra leaves them at
+  index 0 rather than inventing a value, and **ImageMagick resolves them the
+  same way** — which is what settled the semantics rather than assumption.
+- Reference note: ImageMagick will not *write* `BI_RLE4` at all, so the RLE4
+  fixtures are hand-built. They are still reference-*verified*, because
+  ImageMagick reads them back correctly — the encoder gap does not compromise
+  the check.
+
 ## [0.5.0] - 2026-08-24
 
 **GIF decode — the fourth and last of the common raster formats.** chitra now

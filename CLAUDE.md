@@ -144,9 +144,9 @@ non-negotiable — re-verify each before tagging.
 
 **PNG** (the kii-inherited guards):
 
-1. **Decompression-bomb caps** — two distinct gates: the fused IDAT *input* accumulator is capped at `CHITRA_MAX_RAW_BYTES` → `CHITRA_ERR_OOM` (`png_filter.cyr:438`), and the IHDR-derived inflated/pixel *output* sizes are capped → `CHITRA_ERR_DIMENSIONS` (`png_filter.cyr:500`-`507`)
+1. **Decompression-bomb caps** — two distinct gates: the fused IDAT *input* accumulator is capped at `CHITRA_MAX_RAW_BYTES` → `CHITRA_ERR_OOM` (`png_filter.cyr:445`), and the IHDR-derived inflated/pixel *output* sizes are capped → `CHITRA_ERR_DIMENSIONS` (`png_filter.cyr:532`-`539`)
 2. **Lying-IHDR rejection** — declared dimensions cross-checked against actual data → `CHITRA_ERR_DIMENSIONS`
-3. **Ratio caps** — output:input expansion bounded by `CHITRA_MAX_INFLATE_RATIO` → `CHITRA_ERR_DIMENSIONS` (`png_filter.cyr:519`)
+3. **Ratio caps** — output:input expansion bounded by `CHITRA_MAX_INFLATE_RATIO` → `CHITRA_ERR_DIMENSIONS` (`png_filter.cyr:551`)
 4. **Chunk-CRC validation** — every chunk's CRC-32 checked → `CHITRA_ERR_CRC`
 5. **Bounds on every read** — truncated input → `CHITRA_ERR_TRUNCATED`, never an OOB read
 6. **Filter-byte validation** — per-row filter ∈ {0,1,2,3,4} → else `CHITRA_ERR_FILTER`
@@ -173,7 +173,8 @@ non-negotiable — re-verify each before tagging.
 1. **Header fields validated before use** — every field is checked before it derives another, and every derived size is capped before allocation: dimensions vs `CHITRA_MAX_DIM` / `CHITRA_MAX_PIXELS`, `stride * height` vs `CHITRA_MAX_RAW_BYTES`
 2. **The pixel-data offset is attacker-controlled** — it is a header field, not "after the palette", and it can point anywhere. The whole `data_off + stride*height` span is validated against `len` → `CHITRA_ERR_TRUNCATED`
 3. **Palette span + index bounds** — the palette span is validated against `len`, and every index is hard-rejected against the declared entry count → `CHITRA_ERR_BMP_PALETTE`. Never clamp an index; reject it
-4. **Deferred modes reject with distinct codes** — RLE4/RLE8, BITFIELDS, 16 bpp, V4/V5 headers. `BI_JPEG` / `BI_PNG` are refused outright: honouring them re-enters the decoder, which is a recursion surface, not a feature
+4. **Deferred modes reject with distinct codes** — BITFIELDS, 16 bpp, V4/V5 headers (RLE8/RLE4 decode as of 0.5.1). `BI_JPEG` / `BI_PNG` are refused outright: honouring them re-enters the decoder, which is a recursion surface, not a feature
+6. **RLE (0.5.1)** — termination is structural (every opcode consumes ≥ 2 bytes; the cursor only advances). Bounds-check every write **individually**, not per-run: reject a run past the row end, never clip it, or you decode a different image than the file encodes. Check **delta at the jump** against both dimensions — a delta past the end followed by no writes is still malformed. Top-down + RLE is rejected (the end-of-line escape counts rows from the bottom), and RLE8/RLE4 must match 8/4 bpp
 5. **No checksum exists** — BMP has nothing like PNG's per-chunk CRC, so every byte of a BMP reaching the parser is attacker-chosen with nothing to turn it away but chitra's own bounds. Treat the header parser as the entire perimeter
 
 **GIF** (0.5.0; first frame only — [ADR 0005](docs/adr/0005-gif-first-frame-only.md)):
@@ -194,13 +195,14 @@ File findings in `docs/audit/YYYY-MM-DD-audit.md`. Severity: CRITICAL / HIGH / M
 2. Fuzz clean — `make fuzz` green; both harnesses assert survival **and** the documented `(0, *err_out set)` contract
 3. Reference re-verify — the full decode matrix against ImageMagick
 3. Dead-code / cleanup sweep — stale comments, unused includes, orphaned files
-4. Code-review pass — missed guards, off-by-ones, silently-ignored errors, ABI leaks
-5. Security re-scan — the hardening checklist above
-6. Downstream check — mabda still builds and `gpu_texture_load_png` works against the new `dist/chitra.cyr`; bump the `[deps.chitra]` pins in mabda and kii *after* the tag lands
-7. Benchmark record — `make bench-record`, so `bench-history.csv` has a row per release. Benchmarks are a performance signal, not a correctness gate; they stay out of `test-all` because the numbers are host-dependent
-8. Doc sync — CHANGELOG, roadmap, `docs/development/state.md`, CLAUDE.md (if durable content changed)
-9. Version verify — `make version-check`; intended git tag matches
-10. Clean dist regen — `cyrius distlib` produces a compile-clean bundle
+4. Code-anchor sweep — `./scripts/check-anchors.sh`. The docs cite code by line number, and those move whenever a guard is added above them; this rot has already needed hand-repair twice. The script prints every citation with the line it now points at and flags the ones landing on a brace or past EOF. It does not gate CI — it cannot know what a line was meant to say — but the closeout should not skip it. Dated `docs/audit/` reports are excluded: their anchors are a historical record, not a live claim
+5. Code-review pass — missed guards, off-by-ones, silently-ignored errors, ABI leaks
+6. Security re-scan — the hardening checklist above
+7. Downstream check — mabda still builds and `gpu_texture_load_png` works against the new `dist/chitra.cyr`; bump the `[deps.chitra]` pins in mabda and kii *after* the tag lands
+8. Benchmark record — `make bench-record`, so `bench-history.csv` has a row per release. Benchmarks are a performance signal, not a correctness gate; they stay out of `test-all` because the numbers are host-dependent
+9. Doc sync — CHANGELOG, roadmap, `docs/development/state.md`, CLAUDE.md (if durable content changed)
+10. Version verify — `make version-check`; intended git tag matches
+11. Clean dist regen — `cyrius distlib` produces a compile-clean bundle
 
 ### Task Sizing
 

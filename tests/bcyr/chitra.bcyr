@@ -845,6 +845,136 @@ fn _bench_gif(name): i64 {
 }
 
 # ================================================================
+# BMP run-length (BI_RLE8), 0.5.1.
+#
+# The content is deliberately BLOCKY rather than the gradient the other
+# fixtures use. RLE exists for flat graphic content; encoding a per-pixel
+# gradient would produce almost entirely 1-length runs and measure a case
+# nobody ships. 8x8 blocks give runs of 8, which is representative.
+# ================================================================
+fn _rle_val(x, y): i64 {
+    return ((x / 8) + (y / 8)) & 255;
+}
+
+fn _mk_bmp_rle8(w, h, len_out): i64 {
+    var pal_bytes = 256 * 4;
+    var cap = 14 + 40 + pal_bytes + w * h * 2 + 4096;
+    var b = alloc(cap);
+    var i = 0;
+    while (i < cap) { store8(b + i, 0); i = i + 1; }
+
+    store8(b + 0, 0x42);
+    store8(b + 1, 0x4D);
+    _put_u32le(b + 10, 14 + 40 + pal_bytes);
+    _put_u32le(b + 14, 40);
+    _put_u32le(b + 18, w);
+    _put_u32le(b + 22, h);
+    store8(b + 26, 1);
+    store8(b + 28, 8);
+    _put_u32le(b + 30, 1);            # BI_RLE8
+    _put_u32le(b + 46, 256);
+
+    var e = 0;
+    while (e < 256) {
+        store8(b + 54 + e * 4 + 0, (e * 7) & 255);
+        store8(b + 54 + e * 4 + 1, (e * 3) & 255);
+        store8(b + 54 + e * 4 + 2, e);
+        e = e + 1;
+    }
+
+    var o = 14 + 40 + pal_bytes;
+    var rr = 0;
+    var y = 0;
+    var x = 0;
+    var run = 0;
+    var v = 0;
+    var scanning = 0;
+    while (rr < h) {
+        y = h - 1 - rr;               # rows run bottom-up
+        x = 0;
+        while (x < w) {
+            v = _rle_val(x, y);
+            # Extend the run while the value holds, the row lasts, and the
+            # count stays inside a byte. Flag-driven rather than `break`,
+            # which is unreliable in a var-declaring while.
+            run = 0;
+            scanning = 1;
+            while (scanning == 1) {
+                scanning = 0;
+                if (x + run < w) {
+                    if (run < 255) {
+                        if (_rle_val(x + run, y) == v) {
+                            run = run + 1;
+                            scanning = 1;
+                        }
+                    }
+                }
+            }
+            store8(b + o, run);
+            store8(b + o + 1, v);
+            o = o + 2;
+            x = x + run;
+        }
+        store8(b + o, 0); store8(b + o + 1, 0);     # end of line
+        o = o + 2;
+        rr = rr + 1;
+    }
+    store8(b + o, 0); store8(b + o + 1, 1);         # end of bitmap
+    o = o + 2;
+    store64(len_out, o);
+    return b;
+}
+
+fn _verify_bmp_rle(bytes, len, w, h, label): i64 {
+    var err = 0;
+    var img = chitra_bmp_decode(bytes, len, &err);
+    if (img == 0) { _fail(label); return 0; }
+    if (chitra_image_width(img) != w) { _fail(label); return 0; }
+    if (chitra_image_height(img) != h) { _fail(label); return 0; }
+    # Round-trip: the palette maps index i -> (i, 3i, 7i), so every sampled
+    # pixel must come back as its own _rle_val. This is what proves the encoder
+    # above and chitra's RLE decoder agree rather than being wrong alike.
+    var px = chitra_image_pixels(img);
+    var vy = 0;
+    var vx = 0;
+    while (vy < h) {
+        vx = 0;
+        while (vx < w) {
+            if (load8(px + (vy * w + vx) * 4) != _rle_val(vx, vy)) { _fail(label); return 0; }
+            vx = vx + 17;
+        }
+        vy = vy + 13;
+    }
+    return 1;
+}
+
+fn _check_bmp_rle(w, h, label): i64 {
+    var lo = 0;
+    var b = _mk_bmp_rle8(w, h, &lo);
+    if (_verify_bmp_rle(b, lo, w, h, label) == 1) { _ok(label); }
+    return 0;
+}
+
+fn _bench_bmp_rle(name): i64 {
+    var lo = 0;
+    var bytes = _mk_bmp_rle8(BENCH_DIM, BENCH_DIM, &lo);
+    if (_verify_bmp_rle(bytes, lo, BENCH_DIM, BENCH_DIM, name) == 0) { return 0; }
+    var b = bench_new(name);
+    var err = 0;
+    var r = 0;
+    while (r < ROUNDS) {
+        bench_start(b);
+        chitra_bmp_decode(bytes, lo, &err);
+        bench_stop(b);
+        r = r + 1;
+    }
+    bench_report(b);
+    _csv_row(b);
+    _per_pixel(b, BENCH_DIM * BENCH_DIM);
+    return 0;
+}
+
+# ================================================================
 # Benchmarks
 #
 # NOTE ON MEMORY: chitra's allocator is a bump allocator and
@@ -955,6 +1085,7 @@ fn main(): i64 {
     _check_bmp(64, 64, 32, "bmp 32bpp");
     _check_bmp(64, 64, 8, "bmp 8bpp palette");
     _check_gif(64, 64, "gif lzw round-trip");
+    _check_bmp_rle(64, 64, "bmp rle8 round-trip");
 
     println("");
     println("-- PNG decode, 256x256 --");
@@ -977,6 +1108,7 @@ fn main(): i64 {
     _bench_bmp("bmp_rgb24_256", 24);
     _bench_bmp("bmp_rgba32_256", 32);
     _bench_bmp("bmp_palette8_256", 8);
+    _bench_bmp_rle("bmp_rle8_256");
 
     println("");
     println("-- GIF decode, 256x256 --");

@@ -1,6 +1,6 @@
 # chitra
 
-Version: 0.5.0
+Version: 0.5.1
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder, a sibling AGNOS package in the mould of `sakshi` /
@@ -19,7 +19,7 @@ always 4 channels, always at the source dimensions, whatever went in.
 |---|---|
 | **PNG** | Every spec-legal bit depth × color type: 1/2/4/8/16 across types 0/2/3/4/6 (§ 11.2.2 Table 11.1), plus **Adam7 interlace** for every cell. PLTE palettes, tRNS transparency (keyed and per-entry). IDAT inflate via `sankoch`. |
 | **JPEG** | JFIF **baseline** (SOF0 sequential Huffman, 8-bit): grayscale + YCbCr, chroma subsampling 4:4:4 / 4:2:2 / 4:2:0 and general `Hi,Vi` box upsampling, DRI / RST0–7 restart markers. Verified **byte-identical to ImageMagick**. |
-| **BMP** | `BI_RGB` uncompressed at 1 / 4 / 8 bpp (palette) and 24 / 32 bpp; `BITMAPINFOHEADER` + `BITMAPCOREHEADER`; bottom-up **and** top-down row order. Verified **identical to ImageMagick**. |
+| **BMP** | `BI_RGB` uncompressed at 1 / 4 / 8 bpp (palette) and 24 / 32 bpp, plus **`BI_RLE8` / `BI_RLE4`** run-length; `BITMAPINFOHEADER` + `BITMAPCOREHEADER`; bottom-up **and** top-down row order. Verified **identical to ImageMagick**. |
 | **GIF** | GIF87a/89a, LZW, global **and** local color tables, 4-pass row interlace, transparency from a Graphic Control Extension. **First frame only** — see [ADR 0005](docs/adr/0005-gif-first-frame-only.md). Verified against two independent decoders. |
 
 ```
@@ -42,7 +42,7 @@ and the shape a future multi-frame surface would take are in ADR 0005.
 chitra **rejects loud rather than half-decoding**. A decoder that mis-renders
 one cell of its matrix is worse than one that declines it cleanly, so every
 unsupported mode gets its own `CHITRA_ERR_*` code instead of a guess:
-progressive / arithmetic / 12-bit / hierarchical / CMYK JPEG; BMP RLE4/RLE8,
+progressive / arithmetic / 12-bit / hierarchical / CMYK JPEG; BMP
 `BI_BITFIELDS`, 16 bpp and the V4/V5 headers; and any illegal PNG
 depth × color-type pair.
 
@@ -60,22 +60,23 @@ Untrusted bytes are the whole input surface, so the guards are the product:
   JPEG's output:input amplification cap (which JPEG needs *more*, because its
   bit-reader zero-pads past end-of-data and so needs no payload at all to
   drive a full-size decode).
-- **`make fuzz`** — one harness per format, **~1.9 M adversarial decode cases,
-  6,543,842 assertions, 0 failures**. They assert *both* that the decoder
+- **`make fuzz`** — one harness per format, **~2.1 M adversarial decode cases,
+  7,182,567 assertions, 0 failures**. They assert *both* that the decoder
   survives and that it honours the documented `(0, *err_out set)` contract —
   the invariant a crash-only fuzzer misses.
-- **`make bench`** — 16 decode benchmarks with committed
-  [CSV history](bench-history.csv). BMP **6 ns/px**, JPEG grayscale and GIF
-  **43 ns/px**, PNG RGBA8 **83 ns/px** at 256×256.
+- **`make bench`** — 17 decode benchmarks with committed
+  [CSV history](bench-history.csv). BMP **6 ns/px** (RLE8 **18**, where
+  per-opcode branching costs more than the bytes it saves), JPEG grayscale and
+  GIF **43 ns/px**, PNG RGBA8 **83 ns/px** at 256×256.
 - Three security audits in [`docs/audit/`](docs/audit/); the most recent is a
   ten-lens adversarial sweep of both compressed paths that found **no
   memory-safety defect**.
 
 Per-release detail — including the four input classes 0.3.3 began rejecting
 deliberately — is in [`CHANGELOG.md`](CHANGELOG.md). Sequencing is in
-[`docs/development/roadmap.md`](docs/development/roadmap.md): **0.5.1/0.5.2**
-the BMP deferrals, **0.6.0** deferred JPEG geometry plus a streaming API, then
-the v1.0 API/ABI freeze.
+[`docs/development/roadmap.md`](docs/development/roadmap.md): **0.5.2** the
+remaining BMP deferrals (`BI_BITFIELDS`, 16 bpp, V4/V5 headers), **0.6.0**
+deferred JPEG geometry plus a streaming API, then the v1.0 API/ABI freeze.
 
 ## Relationships
 
@@ -108,9 +109,9 @@ All deps are pinned in `cyrius.cyml`; the toolchain pin is
 ```bash
 cyrius deps          # resolve stdlib + sankoch + thread into lib/
 make build           # link-check the include chain (→ build/chitra_smoke)
-make test            # 1700 assertions across tests/tcyr/
-make fuzz            # ~1.9 M adversarial decode cases (fuzz/*.fcyr)
-make bench           # 16 decode benchmarks (tests/bcyr/chitra.bcyr)
+make test            # 2261 assertions across tests/tcyr/
+make fuzz            # ~2.1 M adversarial decode cases (fuzz/*.fcyr)
+make bench           # 17 decode benchmarks (tests/bcyr/chitra.bcyr)
 make dist            # regenerate dist/chitra.cyr — the artifact consumers link
 make test-all        # version-check + dist + test + fuzz (the pre-release gate)
 ```
