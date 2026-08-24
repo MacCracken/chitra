@@ -1326,6 +1326,100 @@ fn fx_jpeg_real_gradient(len_out): i64 {
     return b;
 }
 
+# ---- 0.3.3 hardening regressions -------------------------------------
+
+# T.81 Table B.1: SOI, the 0x00 stuffing byte and the reserved 0x02-0xBF range
+# are NOT length-bearing segments. Classifying them as such made the walk read
+# the next two stream bytes as a segment length and skip that far.
+fn _expect_jpeg_marker_reject(b0, b1, b2, b3, label) {
+    var lo = 0;
+    var b = fx_jpeg4(&lo, b0, b1, b2, b3);
+    var err = 0;
+    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    assert(f == 0, label);
+    assert(err != 0, label);
+    if (err != 0) { assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_MARKER, label); }
+    return 0;
+}
+
+fn test_reject_nonsegment_markers() {
+    _expect_jpeg_marker_reject(0xFF, 0xD8, 0xFF, 0xD8, "second SOI rejected as non-segment");
+    _expect_jpeg_marker_reject(0xFF, 0xD8, 0xFF, 0x00, "FF00 stuffing rejected in header walk");
+    _expect_jpeg_marker_reject(0xFF, 0xD8, 0xFF, 0x50, "reserved marker 0x50 rejected");
+    _expect_jpeg_marker_reject(0xFF, 0xD8, 0xFF, 0x02, "reserved marker 0x02 (range low) rejected");
+    _expect_jpeg_marker_reject(0xFF, 0xD8, 0xFF, 0xBF, "reserved marker 0xBF (range high) rejected");
+    return 0;
+}
+
+# Both fixtures patch the known-good 8x8 grayscale JPEG in place rather than
+# duplicating it: SOF0 sits at byte 71, so height is at b+76,77, width at
+# b+78,79 and the component's packed H/V nibble at b+82.
+
+# T.81 § A.2: a single-component scan is NON-interleaved. chitra implements
+# only the interleaved geometry, which diverges as soon as the lone component
+# has H>1 or V>1 (at w=24,H=2 it decodes 4 blocks where T.81 wants 3, so the
+# entropy stream desyncs). It must reject, not mis-render.
+fn fx_jpeg_gray_h2(len_out): i64 {
+    var b = fx_jpeg_gray_8x8(len_out);
+    store8(b + 78, 0x00);
+    store8(b + 79, 24);        # width 24
+    store8(b + 82, 0x21);      # H=2, V=1 on the only component
+    return b;
+}
+
+# A ~150-byte file declaring 4096x4096. The entropy bit-reader zero-pads past
+# end-of-data, so no real scan payload is needed: without the amplification
+# cap this allocates ~67 MB of RGBA (plus planes) that the bump allocator
+# never reclaims, from a file that fits in a packet.
+fn fx_jpeg_bomb_dims(len_out): i64 {
+    var b = fx_jpeg_gray_8x8(len_out);
+    store8(b + 76, 0x10);
+    store8(b + 77, 0x00);      # height 4096
+    store8(b + 78, 0x10);
+    store8(b + 79, 0x00);      # width 4096
+    return b;
+}
+
+fn test_reject_single_component_noninterleaved() {
+    var lo = 0;
+    var b = fx_jpeg_gray_h2(&lo);
+    var err = 0;
+    var img = chitra_jpeg_decode(b, lo, &err);
+    assert(img == 0, "1-comp H=2 scan rejected (non-interleaved unsupported)");
+    assert(err != 0, "1-comp H=2 sets err_out");
+    # guard the deref: if the cap ever regresses, err is 0 and this must
+    # report a clean FAIL rather than null-deref the whole suite away.
+    if (err != 0) { assert_eq(chitra_err_code(err), CHITRA_ERR_UNSUPPORTED, "1-comp H=2 -> UNSUPPORTED"); }
+    return 0;
+}
+
+fn test_reject_jpeg_amplification_bomb() {
+    var lo = 0;
+    var b = fx_jpeg_bomb_dims(&lo);
+    var err = 0;
+    var img = chitra_jpeg_decode(b, lo, &err);
+    assert(img == 0, "geometry-only JPEG bomb rejected");
+    assert(err != 0, "JPEG bomb sets err_out");
+    # guard the deref: if the cap ever regresses, err is 0 and this must
+    # report a clean FAIL rather than null-deref the whole suite away.
+    if (err != 0) { assert_eq(chitra_err_code(err), CHITRA_ERR_DIMENSIONS, "JPEG bomb -> DIMENSIONS"); }
+    return 0;
+}
+
+# The cap must not reject legitimate images: the unmodified 8x8 fixture and
+# the real 16x16 ImageMagick gradient both stay decodable.
+fn test_amplification_cap_allows_real_images() {
+    var lo = 0;
+    var b = fx_jpeg_gray_8x8(&lo);
+    var err = 0;
+    assert(chitra_jpeg_decode(b, lo, &err) != 0, "cap allows the 8x8 gray fixture");
+    var glo = 0;
+    var gb = fx_jpeg_real_gradient(&glo);
+    var gerr = 0;
+    assert(chitra_jpeg_decode(gb, glo, &gerr) != 0, "cap allows the real 16x16 gradient");
+    return 0;
+}
+
 fn test_decode_real_gradient() {
     var lo = 0;
     var b = fx_jpeg_real_gradient(&lo);
@@ -1503,6 +1597,10 @@ fn main() {
     test_decode_420();
     test_decode_restart();
     test_decode_real_gradient();
+    test_reject_single_component_noninterleaved();
+    test_reject_jpeg_amplification_bomb();
+    test_reject_nonsegment_markers();
+    test_amplification_cap_allows_real_images();
     test_jpeg_decode_rgba8();
     test_image_decode_dispatch();
     test_reject_dc_oversize();

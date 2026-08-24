@@ -1,0 +1,566 @@
+# chitra — JPEG decode fuzz harness (`cyrius fuzz`).
+#
+# chitra's threat model is a HOSTILE ENCODED IMAGE: untrusted (src, len)
+# bytes reach a public entry point. This harness drives the baseline JPEG path with
+# adversarial input and asserts the two invariants every decode must hold,
+# no matter how malformed the input:
+#
+#   1. SURVIVAL   — the decoder returns. It must not fault, corrupt memory,
+#                   or loop forever on any byte sequence.
+#   2. CONTRACT   — the documented result shape holds on every path:
+#                   failure => returns 0 AND *err_out is a non-zero ChitraErr;
+#                   success => non-zero image, err_out untouched (0), and
+#                   width/height/pixels all sane.
+#
+# Invariant 2 is the one a crash-only fuzzer misses: a decoder that returns
+# 0 without setting *err_out hands the caller a stale or zero error, and
+# mabda maps ChitraErr straight onto GpuErr.
+#
+# The JPEG path is the priority fuzz target: unlike the PNG decoder (a fork
+# of kii's fuzz-hardened code) the marker walk, Huffman entropy decoder and
+# IDCT are original code, and JPEG carries NO checksum — every byte of a
+# scan is attacker-chosen with nothing to reject it but chitra's own bounds.
+# Case 5 below mutates ONLY the post-SOS entropy segment, so the marker
+# parse succeeds and hostile bits reach the bit-reader / DECODE directly.
+#
+# Stack-array pointer note: `var buf[N]` reserves N bytes, but `buf` as an
+# rvalue yields the first 8 bytes, not the address — pass `&buf`.
+
+include "src/lib.cyr"
+include "lib/assert.cyr"
+
+# ================================================================
+# Deterministic PRNG (LCG) — seeded per case so every failure reproduces.
+# ================================================================
+var _fuzz_state = 0;
+
+fn _fuzz_seed(s): i64 {
+    _fuzz_state = s;
+    return 0;
+}
+
+fn _fuzz_next(): i64 {
+    _fuzz_state = _fuzz_state * 6364136223846793005 + 1442695040888963407;
+    return (_fuzz_state >> 33) & 255;
+}
+
+fn _fuzz_fill(buf, len): i64 {
+    var i = 0;
+    while (i < len) {
+        store8(buf + i, _fuzz_next());
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn fx_jpeg_gray_8x8(len_out): i64 {
+    var b = alloc(150);
+    var i = 0;
+    # SOI
+    store8(b + 0, 0xFF);
+    store8(b + 1, 0xD8);
+    # DQT: table 0, 64 ones
+    store8(b + 2, 0xFF);
+    store8(b + 3, 0xDB);
+    store8(b + 4, 0x00);
+    store8(b + 5, 0x43);
+    store8(b + 6, 0x00);
+    i = 0;
+    while (i < 64) { store8(b + 7 + i, 1); i = i + 1; }
+    # SOF0: 8x8, 1 component (id 1, H/V 1, Tq 0)
+    store8(b + 71, 0xFF);
+    store8(b + 72, 0xC0);
+    store8(b + 73, 0x00);
+    store8(b + 74, 0x0B);
+    store8(b + 75, 0x08);
+    store8(b + 76, 0x00);
+    store8(b + 77, 0x08);
+    store8(b + 78, 0x00);
+    store8(b + 79, 0x08);
+    store8(b + 80, 0x01);
+    store8(b + 81, 0x01);
+    store8(b + 82, 0x11);
+    store8(b + 83, 0x00);
+    # DHT: DC table 0 (Annex K) + AC table 0 (2 symbols)
+    store8(b + 84, 0xFF);
+    store8(b + 85, 0xC4);
+    store8(b + 86, 0x00);
+    store8(b + 87, 0x32);
+    store8(b + 88, 0x00);                # DC Tc/Th
+    store8(b + 89, 0x00);                # DC BITS L1..L16
+    store8(b + 90, 0x01);
+    store8(b + 91, 0x05);
+    store8(b + 92, 0x01);
+    store8(b + 93, 0x01);
+    store8(b + 94, 0x01);
+    store8(b + 95, 0x01);
+    store8(b + 96, 0x01);
+    store8(b + 97, 0x01);
+    store8(b + 98, 0x00);
+    store8(b + 99, 0x00);
+    store8(b + 100, 0x00);
+    store8(b + 101, 0x00);
+    store8(b + 102, 0x00);
+    store8(b + 103, 0x00);
+    store8(b + 104, 0x00);
+    i = 0;
+    while (i < 12) { store8(b + 105 + i, i); i = i + 1; }   # DC huffval 0..11
+    store8(b + 117, 0x10);               # AC Tc/Th = 0x10
+    store8(b + 118, 0x00);               # AC BITS: L2 = 2, rest 0
+    store8(b + 119, 0x02);
+    i = 0;
+    while (i < 14) { store8(b + 120 + i, 0); i = i + 1; }
+    store8(b + 134, 0x00);               # AC huffval 0x00 (EOB), 0x01
+    store8(b + 135, 0x01);
+    # SOS: 1 component (Cs 1, Td/Ta 0), Ss 0 Se 63 Ah/Al 0
+    store8(b + 136, 0xFF);
+    store8(b + 137, 0xDA);
+    store8(b + 138, 0x00);
+    store8(b + 139, 0x08);
+    store8(b + 140, 0x01);
+    store8(b + 141, 0x01);
+    store8(b + 142, 0x00);
+    store8(b + 143, 0x00);
+    store8(b + 144, 0x3F);
+    store8(b + 145, 0x00);
+    # entropy: "101"(DC size 4) + "1000"(=8) + "00"(EOB) -> 0xB0 0x00
+    store8(b + 146, 0xB0);
+    store8(b + 147, 0x00);
+    # EOI
+    store8(b + 148, 0xFF);
+    store8(b + 149, 0xD9);
+    store64(len_out, 150);
+    return b;
+}
+
+fn fx_jpeg_real_gradient(len_out): i64 {
+    var b = alloc(174);
+    store8(b + 0, 0xFF);
+    store8(b + 1, 0xD8);
+    store8(b + 2, 0xFF);
+    store8(b + 3, 0xE0);
+    store8(b + 4, 0x00);
+    store8(b + 5, 0x10);
+    store8(b + 6, 0x4A);
+    store8(b + 7, 0x46);
+    store8(b + 8, 0x49);
+    store8(b + 9, 0x46);
+    store8(b + 10, 0x00);
+    store8(b + 11, 0x01);
+    store8(b + 12, 0x01);
+    store8(b + 13, 0x00);
+    store8(b + 14, 0x00);
+    store8(b + 15, 0x01);
+    store8(b + 16, 0x00);
+    store8(b + 17, 0x01);
+    store8(b + 18, 0x00);
+    store8(b + 19, 0x00);
+    store8(b + 20, 0xFF);
+    store8(b + 21, 0xDB);
+    store8(b + 22, 0x00);
+    store8(b + 23, 0x43);
+    store8(b + 24, 0x00);
+    store8(b + 25, 0x06);
+    store8(b + 26, 0x04);
+    store8(b + 27, 0x05);
+    store8(b + 28, 0x06);
+    store8(b + 29, 0x05);
+    store8(b + 30, 0x04);
+    store8(b + 31, 0x06);
+    store8(b + 32, 0x06);
+    store8(b + 33, 0x05);
+    store8(b + 34, 0x06);
+    store8(b + 35, 0x07);
+    store8(b + 36, 0x07);
+    store8(b + 37, 0x06);
+    store8(b + 38, 0x08);
+    store8(b + 39, 0x0A);
+    store8(b + 40, 0x10);
+    store8(b + 41, 0x0A);
+    store8(b + 42, 0x0A);
+    store8(b + 43, 0x09);
+    store8(b + 44, 0x09);
+    store8(b + 45, 0x0A);
+    store8(b + 46, 0x14);
+    store8(b + 47, 0x0E);
+    store8(b + 48, 0x0F);
+    store8(b + 49, 0x0C);
+    store8(b + 50, 0x10);
+    store8(b + 51, 0x17);
+    store8(b + 52, 0x14);
+    store8(b + 53, 0x18);
+    store8(b + 54, 0x18);
+    store8(b + 55, 0x17);
+    store8(b + 56, 0x14);
+    store8(b + 57, 0x16);
+    store8(b + 58, 0x16);
+    store8(b + 59, 0x1A);
+    store8(b + 60, 0x1D);
+    store8(b + 61, 0x25);
+    store8(b + 62, 0x1F);
+    store8(b + 63, 0x1A);
+    store8(b + 64, 0x1B);
+    store8(b + 65, 0x23);
+    store8(b + 66, 0x1C);
+    store8(b + 67, 0x16);
+    store8(b + 68, 0x16);
+    store8(b + 69, 0x20);
+    store8(b + 70, 0x2C);
+    store8(b + 71, 0x20);
+    store8(b + 72, 0x23);
+    store8(b + 73, 0x26);
+    store8(b + 74, 0x27);
+    store8(b + 75, 0x29);
+    store8(b + 76, 0x2A);
+    store8(b + 77, 0x29);
+    store8(b + 78, 0x19);
+    store8(b + 79, 0x1F);
+    store8(b + 80, 0x2D);
+    store8(b + 81, 0x30);
+    store8(b + 82, 0x2D);
+    store8(b + 83, 0x28);
+    store8(b + 84, 0x30);
+    store8(b + 85, 0x25);
+    store8(b + 86, 0x28);
+    store8(b + 87, 0x29);
+    store8(b + 88, 0x28);
+    store8(b + 89, 0xFF);
+    store8(b + 90, 0xC0);
+    store8(b + 91, 0x00);
+    store8(b + 92, 0x0B);
+    store8(b + 93, 0x08);
+    store8(b + 94, 0x00);
+    store8(b + 95, 0x10);
+    store8(b + 96, 0x00);
+    store8(b + 97, 0x10);
+    store8(b + 98, 0x01);
+    store8(b + 99, 0x01);
+    store8(b + 100, 0x11);
+    store8(b + 101, 0x00);
+    store8(b + 102, 0xFF);
+    store8(b + 103, 0xC4);
+    store8(b + 104, 0x00);
+    store8(b + 105, 0x15);
+    store8(b + 106, 0x00);
+    store8(b + 107, 0x01);
+    store8(b + 108, 0x01);
+    store8(b + 109, 0x00);
+    store8(b + 110, 0x00);
+    store8(b + 111, 0x00);
+    store8(b + 112, 0x00);
+    store8(b + 113, 0x00);
+    store8(b + 114, 0x00);
+    store8(b + 115, 0x00);
+    store8(b + 116, 0x00);
+    store8(b + 117, 0x00);
+    store8(b + 118, 0x00);
+    store8(b + 119, 0x00);
+    store8(b + 120, 0x00);
+    store8(b + 121, 0x00);
+    store8(b + 122, 0x00);
+    store8(b + 123, 0x08);
+    store8(b + 124, 0x07);
+    store8(b + 125, 0xFF);
+    store8(b + 126, 0xC4);
+    store8(b + 127, 0x00);
+    store8(b + 128, 0x16);
+    store8(b + 129, 0x10);
+    store8(b + 130, 0x00);
+    store8(b + 131, 0x03);
+    store8(b + 132, 0x00);
+    store8(b + 133, 0x00);
+    store8(b + 134, 0x00);
+    store8(b + 135, 0x00);
+    store8(b + 136, 0x00);
+    store8(b + 137, 0x00);
+    store8(b + 138, 0x00);
+    store8(b + 139, 0x00);
+    store8(b + 140, 0x00);
+    store8(b + 141, 0x00);
+    store8(b + 142, 0x00);
+    store8(b + 143, 0x00);
+    store8(b + 144, 0x00);
+    store8(b + 145, 0x00);
+    store8(b + 146, 0x00);
+    store8(b + 147, 0x07);
+    store8(b + 148, 0x43);
+    store8(b + 149, 0xFF);
+    store8(b + 150, 0xDA);
+    store8(b + 151, 0x00);
+    store8(b + 152, 0x08);
+    store8(b + 153, 0x01);
+    store8(b + 154, 0x01);
+    store8(b + 155, 0x00);
+    store8(b + 156, 0x00);
+    store8(b + 157, 0x3F);
+    store8(b + 158, 0x00);
+    store8(b + 159, 0xAD);
+    store8(b + 160, 0x33);
+    store8(b + 161, 0xAC);
+    store8(b + 162, 0x12);
+    store8(b + 163, 0x99);
+    store8(b + 164, 0xD6);
+    store8(b + 165, 0x16);
+    store8(b + 166, 0xAC);
+    store8(b + 167, 0xEB);
+    store8(b + 168, 0x04);
+    store8(b + 169, 0xA6);
+    store8(b + 170, 0x75);
+    store8(b + 171, 0x8F);
+    store8(b + 172, 0xFF);
+    store8(b + 173, 0xD9);
+    store64(len_out, 174);
+    return b;
+}
+
+# ================================================================
+# The contract gate — same two invariants as the PNG harness, against
+# chitra_jpeg_decode.
+# ================================================================
+fn _jpeg_contract(buf, n, label): i64 {
+    var err = 0;
+    var img = chitra_jpeg_decode(buf, n, &err);
+    if (img == 0) {
+        assert(err != 0, label);
+        if (err != 0) {
+            assert(chitra_err_code(err) != CHITRA_OK, label);
+            assert(chitra_err_name(chitra_err_code(err)) != 0, label);
+        }
+    }
+    if (img != 0) {
+        assert(err == 0, label);
+        assert(chitra_image_width(img) > 0, label);
+        assert(chitra_image_height(img) > 0, label);
+        assert(chitra_image_pixels(img) != 0, label);
+        assert(chitra_image_channels(img) == 4, label);
+        # JPEG sentinel: src_ctype is 0x100 | ncomp -> 0x101 gray, 0x103 YCbCr
+        assert(chitra_image_source_color_type(img) > 256, label);
+    }
+    return 0;
+}
+
+fn _jrouter_contract(buf, n, label): i64 {
+    var err = 0;
+    var img = chitra_image_decode(buf, n, &err);
+    if (img == 0) { assert(err != 0, label); }
+    if (img != 0) {
+        assert(err == 0, label);
+        assert(chitra_image_pixels(img) != 0, label);
+    }
+    return 0;
+}
+
+# Locate the SOS marker (FF DA) and return the offset of the first entropy
+# byte after its segment header, or -1. Used to target the entropy segment.
+fn _find_entropy_start(b, n): i64 {
+    var i = 0;
+    var hit = 0 - 1;
+    while (i + 1 < n) {
+        if (hit < 0) {
+            if (load8(b + i) == 0xFF) {
+                if (load8(b + i + 1) == 0xDA) {
+                    # FF DA, then a 2-byte segment length covering the header
+                    if (i + 3 < n) {
+                        hit = i + 2 + (load8(b + i + 2) * 256 + load8(b + i + 3));
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    if (hit >= n) { hit = 0 - 1; }
+    return hit;
+}
+
+# ---- 1. Pure random bytes -------------------------------------------
+fn fuzz_jpeg_random(seed, n): i64 {
+    _fuzz_seed(seed);
+    var buf[512];
+    var capped = n;
+    if (capped > 512) { capped = 512; }
+    if (capped < 0) { capped = 0; }
+    _fuzz_fill(&buf, capped);
+    _jpeg_contract(&buf, capped, "jpeg random bytes");
+    _jrouter_contract(&buf, capped, "router random bytes");
+    return 0;
+}
+
+# ---- 2. SOI prefix + random tail -------------------------------------
+# Past the signature gate: the marker walk gets hostile segment lengths,
+# unknown markers, non-baseline SOFs and truncated segments.
+fn fuzz_jpeg_soiprefix(seed, n): i64 {
+    _fuzz_seed(seed);
+    var buf[512];
+    var capped = n;
+    if (capped > 510) { capped = 510; }
+    if (capped < 0) { capped = 0; }
+    store8(&buf + 0, 0xFF);
+    store8(&buf + 1, 0xD8);
+    _fuzz_fill(&buf + 2, capped);
+    _jpeg_contract(&buf, capped + 2, "jpeg SOI + random markers");
+    return 0;
+}
+
+# ---- 3. Bit-flipped valid fixture ------------------------------------
+fn fuzz_jpeg_mutate(seed, nmut): i64 {
+    _fuzz_seed(seed);
+    var lo = 0;
+    var b = fx_jpeg_gray_8x8(&lo);
+    var m = 0;
+    var pos = 0;
+    while (m < nmut) {
+        pos = (_fuzz_next() * 256 + _fuzz_next()) % lo;
+        store8(b + pos, _fuzz_next());
+        m = m + 1;
+    }
+    _jpeg_contract(b, lo, "jpeg mutated fixture");
+    return 0;
+}
+
+# ---- 4. Truncation sweep ---------------------------------------------
+fn fuzz_jpeg_truncate(): i64 {
+    var lo = 0;
+    var b = fx_jpeg_gray_8x8(&lo);
+    var cut = 0;
+    while (cut <= lo) {
+        _jpeg_contract(b, cut, "jpeg truncated prefix");
+        cut = cut + 1;
+    }
+    return 0;
+}
+
+# ---- 5. Entropy-segment mutation (the priority target) ----------------
+# Header stays intact so the marker walk SUCCEEDS; only post-SOS entropy
+# bytes are corrupted. This is the path with no checksum and the newest
+# code: bit-reader, DECODE, RECEIVE/EXTEND, restart resync, IDCT.
+fn fuzz_jpeg_entropy(seed, nmut): i64 {
+    _fuzz_seed(seed);
+    var lo = 0;
+    var b = fx_jpeg_gray_8x8(&lo);
+    var es = _find_entropy_start(b, lo);
+    if (es < 0) { return 0; }
+    var span = lo - es;
+    if (span <= 0) { return 0; }
+    var m = 0;
+    var pos = 0;
+    while (m < nmut) {
+        pos = es + ((_fuzz_next() * 256 + _fuzz_next()) % span);
+        store8(b + pos, _fuzz_next());
+        m = m + 1;
+    }
+    _jpeg_contract(b, lo, "jpeg entropy-segment mutation");
+    return 0;
+}
+
+# ---- 5b. Entropy mutation against the REAL ImageMagick fixture --------
+# fx_jpeg_gray_8x8 is a hand-built minimum: its entropy segment is only a
+# few bytes, so it barely exercises DECODE. The 16x16 gradient carries real
+# Annex K Huffman tables and genuine AC content, giving the bit-reader a
+# substantially wider hostile surface.
+fn fuzz_jpeg_entropy_real(seed, nmut): i64 {
+    _fuzz_seed(seed);
+    var lo = 0;
+    var b = fx_jpeg_real_gradient(&lo);
+    var es = _find_entropy_start(b, lo);
+    if (es < 0) { return 0; }
+    var span = lo - es;
+    if (span <= 0) { return 0; }
+    var m = 0;
+    var pos = 0;
+    while (m < nmut) {
+        pos = es + ((_fuzz_next() * 256 + _fuzz_next()) % span);
+        store8(b + pos, _fuzz_next());
+        m = m + 1;
+    }
+    _jpeg_contract(b, lo, "jpeg real-fixture entropy mutation");
+    return 0;
+}
+
+# ---- Harness self-check ----------------------------------------------
+# A fuzz harness that silently no-ops is worse than none. Assert that both
+# fixtures are valid, that SOS is actually located, and that the entropy
+# span is wide enough for mutation to mean something.
+fn fuzz_jpeg_selfcheck(): i64 {
+    var lo = 0;
+    var b = fx_jpeg_gray_8x8(&lo);
+    var err = 0;
+    assert(chitra_jpeg_decode(b, lo, &err) != 0, "selfcheck: gray_8x8 fixture decodes clean");
+    assert(_find_entropy_start(b, lo) > 0, "selfcheck: gray_8x8 SOS located");
+
+    var glo = 0;
+    var gb = fx_jpeg_real_gradient(&glo);
+    var gerr = 0;
+    var gimg = chitra_jpeg_decode(gb, glo, &gerr);
+    assert(gimg != 0, "selfcheck: real gradient fixture decodes clean");
+    assert(chitra_image_width(gimg) == 16, "selfcheck: real gradient is 16 wide");
+    var ges = _find_entropy_start(gb, glo);
+    assert(ges > 0, "selfcheck: real gradient SOS located");
+    assert(glo - ges >= 8, "selfcheck: real gradient entropy span is fuzzable");
+    return 0;
+}
+
+# ---- 6. Degenerate lengths -------------------------------------------
+fn fuzz_jpeg_degenerate(): i64 {
+    var lo = 0;
+    var b = fx_jpeg_gray_8x8(&lo);
+    _jpeg_contract(b, 0, "jpeg len 0");
+    _jpeg_contract(b, 1, "jpeg len 1");
+    _jpeg_contract(b, 2, "jpeg len 2 (SOI only)");
+    _jpeg_contract(b, 0 - 1, "jpeg negative len");
+    _jpeg_contract(b, 0 - 1000000, "jpeg large negative len");
+    return 0;
+}
+
+fn main(): i64 {
+    var seed = 1;
+
+    fuzz_jpeg_selfcheck();
+    println("fuzz_jpeg: harness self-check passed (fixtures valid, entropy reachable)");
+
+    seed = 1;
+    while (seed <= 100000) {
+        fuzz_jpeg_random(seed * 2654435761, (seed * 7) % 512);
+        seed = seed + 1;
+    }
+    println("fuzz_jpeg: 100000 random-byte cases survived");
+
+    seed = 1;
+    while (seed <= 150000) {
+        fuzz_jpeg_soiprefix(seed * 40503, (seed * 11) % 510);
+        seed = seed + 1;
+    }
+    println("fuzz_jpeg: 150000 SOI-prefixed marker-walk cases survived");
+
+    seed = 1;
+    while (seed <= 100000) {
+        fuzz_jpeg_mutate(seed * 97, (seed % 4) + 1);
+        seed = seed + 1;
+    }
+    println("fuzz_jpeg: 100000 mutated-fixture cases survived");
+
+    fuzz_jpeg_truncate();
+    println("fuzz_jpeg: truncation sweep survived");
+
+    # The priority target — hostile entropy bits behind a valid header.
+    seed = 1;
+    while (seed <= 75000) {
+        fuzz_jpeg_entropy(seed * 131, (seed % 6) + 1);
+        seed = seed + 1;
+    }
+    println("fuzz_jpeg: 75000 entropy-segment mutation cases survived");
+
+    seed = 1;
+    while (seed <= 75000) {
+        fuzz_jpeg_entropy_real(seed * 277, (seed % 6) + 1);
+        seed = seed + 1;
+    }
+    println("fuzz_jpeg: 75000 real-fixture entropy mutation cases survived");
+
+    fuzz_jpeg_degenerate();
+    println("fuzz_jpeg: degenerate-length cases survived");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

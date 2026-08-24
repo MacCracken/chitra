@@ -1,15 +1,15 @@
 # chitra — Roadmap
 
-> **Last Updated**: 2026-08-23
+> **Last Updated**: 2026-08-23 (0.3.3)
 >
 > Sequencing — what ships, in what order, against what gates. Volatile state
 > (current version, sizes, assertion counts, in-flight work) lives in
-> [`state.md`](state.md), not here. **chitra is pre-v1** (current: 0.3.2) and
+> [`state.md`](state.md), not here. **chitra is pre-v1** (current: 0.3.3) and
 > both decode paths are **feature-complete for their scope** — every spec-legal
 > PNG depth × color-type × interlace combination, and JFIF **baseline** JPEG
 > (grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0, restart markers), decode to
 > canonical RGBA8. What remains before a v1.0 freeze is hardening
-> infrastructure (fuzz + bench harnesses), an API/ABI freeze, and the next
+> infrastructure (the bench harness; fuzz landed in 0.3.3), an API/ABI freeze, and the next
 > formats.
 
 The roadmap is **smallest-first** per AGNOS bite-discipline: each release is a
@@ -54,13 +54,16 @@ surface freeze.
   full guard parity with the kii lineage and no real OOB / overflow gap;
   open items are cosmetic doc-drift only (see audit + the stale enum comments
   in `src/error.cyr`).
-- [ ] **In-tree fuzz harness at 10⁶ iterations clean** — **NOT done.** The
-  README calls the decoder "fuzz-corpus-tested" from its kii lineage, but
-  chitra itself ships **no fuzz harness file** today. That lineage covers the
-  PNG path only; the **JPEG byte-buffer / entropy surface has not been fuzzed
-  in-tree** (its hardening is forked from the kii/PNG fork, not re-exercised).
-  v1.0 needs a chitra-owned harness driving `chitra_png_decode` **and**
-  `chitra_jpeg_decode` over a mutated corpus, clean at 10⁶ iters.
+- [x] **In-tree fuzz harness at 10⁶ iterations clean** — **DONE in 0.3.3.**
+  `fuzz/fuzz_png.fcyr` + `fuzz/fuzz_jpeg.fcyr`, run by `make fuzz` and wired
+  into `make test-all`: **~1,000,237 decode cases / 3,464,838 assertions, 0
+  failures**, in ~10 s. Both public decode entries are driven over random,
+  signature-prefixed, bit-flipped, truncated and degenerate-length input, plus
+  **entropy-segment-only mutation** for JPEG — the surface that was previously
+  unfuzzed, since its hardening was forked from the kii/PNG lineage rather
+  than re-exercised. The harnesses assert the documented `(0, *err_out set)`
+  contract as well as survival. See
+  [`docs/audit/2026-08-23-audit.md`](../audit/2026-08-23-audit.md) § 5.
 - [ ] **Benchmark harness + CSV history** — **NOT done.** No benchmark file
   in-tree yet; decode latency is **not yet measured** for either format. AGNOS
   shared crates require benches, so a `bench`-backed harness over a fixture
@@ -96,13 +99,10 @@ infrastructure that gates v1.0.
   `[deps.chitra]` re-pin. GIF raises animation / multi-frame questions to
   settle in scope (see Out of scope) before committing; BMP is the simpler
   of the two and likely lands first.
-- **In-tree fuzz + benchmark harnesses** (v1.0 blockers) — a fuzz harness
-  driving both `chitra_png_decode` and `chitra_jpeg_decode` over a mutated
-  corpus, clean at 10⁶ iters, and a `bench`-backed decode-latency harness with
-  committed CSV history. Both are v1.0 criteria above; called out here because
-  they unblock the freeze. The JPEG entropy surface is the highest-value fuzz
-  target — its byte-buffer / bit-reader path is the one piece of new attack
-  surface not inherited (and re-fuzzed) from the kii/PNG lineage.
+- **Benchmark harness** (the remaining v1.0 blocker) — a `bench`-backed
+  decode-latency harness with committed CSV history. Decode latency and
+  throughput are still not measured in-repo for either format. The fuzz
+  half of this pair closed in 0.3.3.
 - **Possible streaming / byte-budget API** — a chunked-input or
   bounded-allocation decode entry point for consumers that cannot hand the
   whole encoded buffer at once, or that need a hard memory ceiling. Speculative

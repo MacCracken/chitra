@@ -27,13 +27,6 @@
 # byte strides the color pass walks the scanline with.
 # ================================================================
 
-# Resolve a PLTE entry count from the captured span (length / 3). A 0
-# length means "no PLTE" — callers must reject palette images then.
-fn _chitra_plte_entry_count(raw): i64 {
-    var plen = chitra_raw_plte_len(raw);
-    return plen / 3;
-}
-
 # ================================================================
 # chitra_png_color_to_rgba8 — the AL.P0d color pass.
 #
@@ -192,26 +185,30 @@ fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
 
     # ---- grayscale (0): g -> (g,g,g,255); tRNS = one gray sample ----
     if (color_type == 0) {
-        # tRNS for grayscale is a 2-byte big-endian sample. Key on the
-        # same 8-bit value the pixel reduces to: the low byte at depth 8
-        # (high byte is 0), the high byte at depth 16 (the truncation).
-        var key_g = 0 - 1;     # -1 == no key
+        # tRNS for grayscale is a 2-byte big-endian sample. Compare at FULL
+        # sample width, not at the truncated 8-bit output width: at depth 16
+        # the pixel reduces to its high byte, so keying on that byte alone
+        # made every one of the 256 samples sharing it transparent (0x12FF
+        # keyed off a 0x1234 tRNS). The spec keys one exact value (§ 11.3.2).
+        # At depth 8 the key's high byte is 0, so the full-width compare is
+        # identical there — except that an out-of-range key (high byte != 0)
+        # now correctly matches nothing instead of aliasing onto its low byte.
+        var key_g = 0 - 1;     # -1 == no key (never equals a sample)
         if (has_trns == 1) {
             if (trns_len != 2) {
                 store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
                 return 0;
             }
-            if (bps == 2) {
-                key_g = load8(trns_ptr + 0);
-            } else {
-                key_g = load8(trns_ptr + 1);
-            }
+            key_g = load8(trns_ptr + 0) * 256 + load8(trns_ptr + 1);
         }
         var i = 0;
         while (i < npix) {
-            var g = load8(scan + i * bps);
+            var so = scan + i * bps;
+            var g = load8(so);          # the 8-bit value the pixel reduces to
+            var gfull = g;              # depth 8: the sample IS g
+            if (bps == 2) { gfull = g * 256 + load8(so + 1); }
             var a = 255;
-            if (g == key_g) { a = 0; }
+            if (gfull == key_g) { a = 0; }
             var o = out + i * 4;
             store8(o + 0, g);
             store8(o + 1, g);
@@ -228,22 +225,17 @@ fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
         var key_g2 = 0;
         var key_b = 0;
         if (has_trns == 1) {
-            # tRNS is three 2-byte big-endian samples (R,G,B). Key on the
-            # high byte at depth 16, the low byte at depth 8 — matching the
-            # per-channel pixel truncation below.
+            # tRNS is three 2-byte big-endian samples (R,G,B). Compared at
+            # FULL sample width — see the grayscale branch above; keying on
+            # the depth-16 high bytes alone made 2^24 colors transparent
+            # instead of the one the chunk names.
             if (trns_len != 6) {
                 store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
                 return 0;
             }
-            if (bps == 2) {
-                key_r = load8(trns_ptr + 0);
-                key_g2 = load8(trns_ptr + 2);
-                key_b = load8(trns_ptr + 4);
-            } else {
-                key_r = load8(trns_ptr + 1);
-                key_g2 = load8(trns_ptr + 3);
-                key_b = load8(trns_ptr + 5);
-            }
+            key_r = load8(trns_ptr + 0) * 256 + load8(trns_ptr + 1);
+            key_g2 = load8(trns_ptr + 2) * 256 + load8(trns_ptr + 3);
+            key_b = load8(trns_ptr + 4) * 256 + load8(trns_ptr + 5);
         }
         var i = 0;
         while (i < npix) {
@@ -251,8 +243,16 @@ fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
             var r = load8(s + 0);
             var g = load8(s + 1 * bps);
             var b = load8(s + 2 * bps);
+            var rf = r;
+            var gf = g;
+            var bf = b;
+            if (bps == 2) {
+                rf = r * 256 + load8(s + 1);
+                gf = g * 256 + load8(s + 3);
+                bf = b * 256 + load8(s + 5);
+            }
             var a = 255;
-            if (r == key_r && g == key_g2 && b == key_b) { a = 0; }
+            if (rf == key_r && gf == key_g2 && bf == key_b) { a = 0; }
             var o = out + i * 4;
             store8(o + 0, r);
             store8(o + 1, g);

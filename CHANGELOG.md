@@ -5,6 +5,156 @@ All notable changes to chitra are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.3] - 2026-08-23
+
+**P-1 audit, hardening and repair cut.** A ten-lens adversarial sweep of both
+decode paths — each finding put to two independent skeptics before it was
+accepted — plus the repair of everything confirmed and chitra's **first
+in-tree fuzz harnesses**, which closes one of the two v1.0 hardening gates.
+Full report: [`docs/audit/2026-08-23-audit.md`](docs/audit/2026-08-23-audit.md).
+
+**No memory-safety defect was found.** No OOB read, OOB write, or integer
+overflow into an allocation. The entropy bounds, Adam7 geometry, plane-write
+indices, signed-shift discipline and palette/span validation were all examined
+closely and found correct — see § 2 of the report. Everything below is a
+correctness, conformance, resource or defence-in-depth repair.
+
+Every repair carries a regression test that was **verified to fail against the
+pre-repair code**. **784 test assertions** (up from 728), and **3,464,838 fuzz
+assertions over ~1,000,000 decode cases** in ~10 s, 0 failures — clearing the
+roadmap's *10⁶ iterations clean* v1.0 criterion outright.
+
+### Behaviour changes (no API change)
+
+No public signature, struct offset or symbol changed — `dist/chitra.cyr` is
+ABI-identical, so mabda and kii re-pin mechanically. But four input classes
+that previously **decoded** now **reject**, deliberately. Each was producing
+either wrong pixels or unbounded work, so rejection is the correction, not a
+regression — listed here so consumers are not surprised:
+
+- A single-component JPEG whose lone component has `H > 1` or `V > 1` →
+  `CHITRA_ERR_UNSUPPORTED` (previously decoded to fabricated content).
+- A JPEG whose declared RGBA output exceeds 4096× its file size →
+  `CHITRA_ERR_DIMENSIONS` (previously decoded at unbounded, unreclaimable
+  memory cost).
+- A PNG carrying an unknown **critical** chunk → `CHITRA_ERR_UNSUPPORTED`
+  (previously the chunk was skipped and the image rendered anyway, contrary
+  to § 5.4). Unknown **ancillary** chunks are unaffected.
+- A PNG with a duplicate tRNS, a post-IDAT tRNS, or a PLTE hidden behind a
+  zero-length IDAT → `CHITRA_ERR_BAD_CHUNK`.
+
+### Added
+
+- **`fuzz/fuzz_png.fcyr` + `fuzz/fuzz_jpeg.fcyr`** — the first in-tree
+  adversarial-input harnesses, run by `make fuzz` (= `cyrius fuzz`) and wired
+  into `make test-all`. They assert **two** invariants, not one: *survival*
+  (the decoder returns on any byte sequence) and *contract* (failure returns 0
+  **and** sets `*err_out` to a non-zero `ChitraErr`; success leaves it 0). The
+  second is what a crash-only fuzzer misses, and it matters because mabda maps
+  `ChitraErr` straight onto `GpuErr`. Cases: random bytes, signature-prefixed
+  garbage driving the chunk/marker walk, bit-flipped fixtures, full truncation
+  sweeps, degenerate and negative lengths, and — for JPEG — **entropy-segment
+  -only mutation** against both the hand-built 8×8 and the real ImageMagick
+  16×16 gradient, so hostile bits reach the bit-reader and `DECODE` behind a
+  valid header. `fuzz_jpeg` opens with a self-check asserting its fixtures
+  decode and its entropy span is actually wide enough to mutate: the first
+  draft silently exercised a 4-byte span, and a fuzz harness that no-ops is
+  worse than none.
+- `make fuzz` target; `make lint` and `make fmt-check` now also cover
+  `fuzz/*.fcyr`.
+- `CHITRA_MAX_JPEG_RATIO` (4096:1) — the JPEG analogue of the PNG path's
+  `CHITRA_MAX_INFLATE_RATIO`. See *Security* below.
+
+### Fixed
+
+- **Depth-16 tRNS color key compared at the wrong width**
+  ([`png_color.cyr`](src/png_color.cyr), color types 0 and 2). chitra reduces
+  16-bit samples to their high byte, and the tRNS comparison was done at that
+  reduced width — so a grayscale key of `0x1234` also keyed every sample from
+  `0x1200` to `0x12FF` (and, for truecolor, 2^24 colors instead of one). The
+  spec keys one exact value (§ 11.3.2). Key and sample are now both assembled
+  at full 16-bit width. Depth 8 is unchanged, except that an out-of-range key
+  now correctly matches nothing instead of aliasing onto its low byte.
+- **Single-component JPEG scans decoded with interleaved MCU geometry**
+  ([`jpeg.cyr`](src/jpeg.cyr)). T.81 § A.2 makes a one-component scan
+  non-interleaved. chitra computed the interleaved geometry unconditionally;
+  the two coincide only when the lone component has `H = V = 1` (what every
+  real grayscale encoder emits, and what every existing fixture used). At
+  `w=24, H=2` chitra pulled 4 blocks where T.81 wrote 3 — the surplus
+  zero-padded by the bit reader into fabricated content, with no error raised.
+  chitra does not implement the non-interleaved layout, so it now **rejects**
+  with `CHITRA_ERR_UNSUPPORTED` rather than mis-rendering — the same
+  defer-don't-half-implement posture as the non-baseline SOF modes.
+- **`chitra_err_new` inverted its own contract on allocation failure**
+  ([`error.cyr`](src/error.cyr)). The 16-byte allocation was unchecked, so on
+  failure it stored through a **null pointer** and returned **0** — which every
+  caller reads as *no error*, inverting the failure contract at the exact
+  moment a failure must be reported, on every error path including OOM. It now
+  falls back to a BSS-resident `ChitraErr` and never returns 0.
+- **Entropy bit reader rejected valid files with 0xFF fill bytes**
+  ([`jpeg_huffman.cyr`](src/jpeg_huffman.cyr)). T.81 § B.1.1.2 permits any
+  number of `0xFF` fill bytes before a marker; the reader treated the second
+  as a marker code, so a well-formed `FF FF D0` restart stream was rejected.
+  The header marker walk already handled this correctly — only the entropy
+  side was missing it. Both sides now collapse the run.
+- **ZRL overrun reported a corrupt block as a clean decode**
+  ([`jpeg_huffman.cyr`](src/jpeg_huffman.cyr)). A ZRL run past coefficient 63
+  fell out of the AC loop as success, while the equivalent run overrun beside
+  it was rejected. It now rejects with `CHITRA_ERR_JPEG_ENTROPY` too.
+- **Marker classifier treated non-segment markers as length-bearing**
+  ([`jpeg_markers.cyr`](src/jpeg_markers.cyr)). SOI, the `0x00` stuffing byte
+  and the whole T.81 Table B.1 reserved range `0x02`–`0xBF` fell through to
+  "skip by length", so the walk read the next two stream bytes as a segment
+  length and skipped that far — a parser desync steered by attacker bytes.
+  All three now reject with `CHITRA_ERR_JPEG_MARKER`.
+- **PNG chunk-ordering guards were incomplete**
+  ([`png_filter.cyr`](src/png_filter.cyr)): the PLTE-after-IDAT guard tested
+  `idat_total > 0` and was therefore defeated by a spec-legal **zero-length
+  IDAT**; and tRNS had no ordering or duplicate guard at all, so a second tRNS
+  silently overwrote the first captured span and a post-IDAT tRNS was honoured
+  against already-committed pixels. Both now use an explicit `seen_idat` flag
+  and reject per § 5.6 / § 11.3.2.
+- **Unknown critical chunks were silently skipped**
+  ([`png_filter.cyr`](src/png_filter.cyr)). PNG § 5.4 requires a decoder that
+  does not recognise a **critical** chunk to abort — such a chunk by definition
+  changes how the image is to be interpreted. Now rejected via the ancillary
+  bit with `CHITRA_ERR_UNSUPPORTED`. Unknown **ancillary** chunks stay
+  skippable, and a dedicated control test asserts the image still decodes so
+  this cannot silently become blanket rejection.
+
+### Security
+
+- **JPEG decompression-bomb cap.** The PNG path has always bounded inflate
+  output against IDAT input at `CHITRA_MAX_INFLATE_RATIO`; the JPEG path had
+  **no analogue**, and needs one *more* than PNG does — the entropy bit reader
+  zero-pads past end-of-data, so a hostile file needs no scan payload at all
+  and the declared SOF0 geometry alone drives the work. A ~150-byte file
+  declaring 4096×4096 allocates ~67 MB of RGBA plus planes and runs hundreds
+  of thousands of IDCT blocks; because the bump allocator never reclaims, this
+  is **cumulative across decodes**, so a handful of such files exhausts a
+  long-running consumer. Demonstrated empirically, not merely argued: with the
+  cap disabled a 150-byte fixture decodes to a full 4096×4096 image. Now
+  bounded by `CHITRA_MAX_JPEG_RATIO` (4096:1) before any plane is allocated —
+  roughly 6× headroom over the most compressible real image, three orders of
+  magnitude below the geometry-only bomb. A companion test asserts both real
+  fixtures still decode, since a cap that rejects legitimate images would be
+  worse than the bug.
+- **Constant data no longer owns a failure mode.** The JPEG zig-zag map was
+  built into an unchecked `alloc(512)` that wrote 64 values through a null
+  pointer on failure; it now lives in BSS with no allocation at all
+  ([`jpeg_idct.cyr`](src/jpeg_idct.cyr)).
+- **Huffman table storage is zeroed**, matching the quant storage beside it
+  ([`jpeg_markers.cyr`](src/jpeg_markers.cyr)). `JF_HUFF_PRESENT` already
+  gated every selector against a table a DHT actually defined, so this closes
+  an asymmetry rather than a live bug.
+
+### Changed
+
+- Removed the orphaned `_chitra_plte_entry_count` helper from
+  [`png_color.cyr`](src/png_color.cyr) — defined, documented, and never called.
+- `build/chitra_smoke` 551,320 → 559,656 bytes; `dist/chitra.cyr`
+  124,651 → 133,286 bytes (3,075 lines).
+
 ## [0.3.2] - 2026-08-23
 
 Toolchain catch-up release. No decode-path behaviour changes — the PNG and

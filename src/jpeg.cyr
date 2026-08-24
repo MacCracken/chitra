@@ -144,6 +144,42 @@ fn _jpeg_decode_scan(frame, src, len, entropy_start, err_out): i64 {
     var mcu_cols = (w + mcu_w - 1) / mcu_w;
     var mcu_rows = (h + mcu_h - 1) / mcu_h;
 
+    # T.81 § A.2: a scan carrying a SINGLE component is NON-interleaved — its
+    # MCU is one 8x8 data unit and the block grid is ceil(x_i/8) x ceil(y_i/8)
+    # over the component's own sample dimensions. The geometry above is the
+    # INTERLEAVED one (MCU = max_h x max_v data units), which only coincides
+    # with the non-interleaved layout when the lone component has H=V=1 (what
+    # every real grayscale encoder emits). At H=2,V=1 with w=24 the two
+    # disagree — interleaved decodes ceil(24/16)=2 MCUs x 2 blocks = 4 blocks
+    # where T.81 wants ceil(24/8)=3 — so the entropy stream desyncs and the
+    # image decodes wrong. chitra does not implement the non-interleaved
+    # layout, so it REJECTS rather than mis-renders (the same
+    # defer-don't-half-implement posture as the non-baseline SOF modes).
+    if (ncomp == 1) {
+        if (max_h > 1 || max_v > 1) {
+            store64(err_out, chitra_err(CHITRA_ERR_UNSUPPORTED));
+            return 0;
+        }
+    }
+
+    # Decompression-bomb cap. The PNG path bounds inflate output against IDAT
+    # input at CHITRA_MAX_INFLATE_RATIO; the JPEG path had no analogue, and it
+    # needs one MORE than PNG does: the entropy bit-reader zero-pads past
+    # end-of-data, so a hostile file needs no real scan payload at all. A
+    # ~150-byte file declaring SOF0 4096x4096x3 drives ~786k IDCT blocks and
+    # ~117 MB of allocation that the bump allocator never reclaims, so a
+    # handful of them exhausts a long-running consumer (mabda decodes into
+    # textures). Capping the RGBA output against the input length bounds the
+    # planes too — they sum to under 1x the RGBA buffer for every supported
+    # sampling. A genuinely flat 4096x4096 JPEG still carries ~2 bits per
+    # block (~98 KB, ~685:1), so 4096:1 leaves ~6x headroom over the most
+    # compressible real image while rejecting the geometry-only bomb by
+    # three orders of magnitude.
+    if (w * h * 4 > len * CHITRA_MAX_JPEG_RATIO) {
+        store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
+        return 0;
+    }
+
     # per-component arrays (<= 3 components)
     var planes[32];
     var preds[32];

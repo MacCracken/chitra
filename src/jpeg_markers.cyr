@@ -31,6 +31,9 @@ var CHITRA_MAX_SAMP_FACTOR    = 4;    # Hi, Vi each in 1..4 (T.81 § B.2.2)
 var CHITRA_MAX_BLOCKS_PER_MCU = 10;   # ΣHi·Vi ≤ 10 data units per MCU (T.81 § A.2.2)
 var CHITRA_MAX_QUANT_TABLES   = 4;    # Tq in 0..3
 var CHITRA_MAX_HUFF_TABLES    = 4;    # Th in 0..3 (per class)
+# Output:input amplification ceiling — the JPEG analogue of the PNG path's
+# CHITRA_MAX_INFLATE_RATIO. See the bomb-cap note in jpeg.cyr's decode scan.
+var CHITRA_MAX_JPEG_RATIO     = 4096;
 
 # ================================================================
 # ChitraJpegFrame — the marker-walk handoff record (internal). Filled by the
@@ -150,6 +153,14 @@ fn _jpeg_marker_action(m): i64 {
     if (m == 0xD9) { return CHITRA_ERR_JPEG_MARKER; }     # EOI before SOS — no scan present
     if (m >= 0xD0 && m <= 0xD7) { return 3; }             # RSTn standalone
     if (m == 0x01) { return 3; }                          # TEM standalone
+    # T.81 Table B.1 — everything below is NOT a length-bearing segment, so
+    # falling through to action 4 made the walk read the next two stream bytes
+    # as a segment length and skip that far: a parser desync steered entirely
+    # by attacker bytes (bounds-checked, so not an overread, but it can jump
+    # the cursor over a real segment).
+    if (m == 0x00) { return CHITRA_ERR_JPEG_MARKER; }     # FF00 is entropy stuffing, not a marker
+    if (m == 0xD8) { return CHITRA_ERR_JPEG_MARKER; }     # SOI is standalone; a second one is malformed
+    if (m >= 0x02 && m <= 0xBF) { return CHITRA_ERR_JPEG_MARKER; }   # reserved (RES)
     return 4;   # APPn / COM / DNL / ... — length-bearing, skipped (not decoded)
 }
 
@@ -428,6 +439,17 @@ fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
     var huff = alloc(8 * HT_SIZE);
     if (huff == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
     store64(frame + JF_HUFF, huff);
+    # Zero the Huffman storage exactly as the quant storage above is zeroed.
+    # JF_HUFF_PRESENT already gates every table selector against a table that
+    # a DHT actually defined, so this is defence in depth rather than a live
+    # bug — but an un-zeroed table reached through any future path would decode
+    # from whatever the bump allocator last left there. 8 * HT_SIZE bytes is
+    # 8 * 2464 = 19712, i.e. HT_SIZE i64 slots.
+    z = 0;
+    while (z < HT_SIZE) {
+        store64(huff + z * 8, 0);
+        z = z + 1;
+    }
 
     var cur[24];
     _cur_init(&cur, src, len);

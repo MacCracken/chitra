@@ -387,6 +387,12 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
     var idat_total = 0;
     var seen_iend = 0;
     var seen_plte = 0;
+    # Ordering state must be tracked as a SEEN FLAG, not inferred from
+    # idat_total: a zero-length IDAT is spec-legal and adds 0 to the total,
+    # so "idat_total > 0" let a PLTE (or tRNS) slip in after IDAT simply by
+    # prefixing an empty IDAT chunk.
+    var seen_idat = 0;
+    var seen_trns = 0;
     var walking = 1;
     while (walking == 1) {
         # A chunk header is 8 bytes (4 length + 4 type). Fewer remaining
@@ -434,6 +440,7 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
                 }
 
                 if (is_idat == 1) {
+                    seen_idat = 1;
                     idat_total = idat_total + chunk_len;
                     if (idat_total > CHITRA_MAX_RAW_BYTES) {
                         store64(err_out, chitra_err(CHITRA_ERR_OOM));
@@ -445,7 +452,7 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
                     # length a multiple of 3, <= 768. Capture the span (bytes
                     # processed by the AL.P0d color pass, not here).
                     if (seen_plte == 1)      { store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK)); return 0; }
-                    if (idat_total > 0)      { store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK)); return 0; }
+                    if (seen_idat == 1)      { store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK)); return 0; }
                     if (chunk_len > 768)     { store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK)); return 0; }
                     if (chunk_len % 3 != 0)  { store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK)); return 0; }
                     store64(raw + RAW_PLTE_OFF_OFFSET, data_off);
@@ -453,11 +460,36 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
                     seen_plte = 1;
                 }
                 if (is_trns == 1) {
-                    # tRNS span captured for the color pass; format validation
-                    # is color-type-dependent and lands in the AL.P0d color
-                    # bite (mabda v3.3 punchlist Phase AL.P0).
+                    # Spec § 5.6 / 11.3.2: at most one tRNS, it must precede
+                    # IDAT, and for a palette image it must follow PLTE. The
+                    # sibling PLTE branch above has always enforced its
+                    # ordering; tRNS had none, so a second tRNS silently
+                    # overwrote the first span and a post-IDAT tRNS was honoured
+                    # against already-committed pixel data. Length/color-type
+                    # validation stays in the color pass, which is where the
+                    # color type is known.
+                    if (seen_trns == 1) { store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK)); return 0; }
+                    if (seen_idat == 1) { store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK)); return 0; }
                     store64(raw + RAW_TRNS_OFF_OFFSET, data_off);
                     store64(raw + RAW_TRNS_LEN_OFFSET, chunk_len);
+                    seen_trns = 1;
+                }
+                # Spec § 5.4: bit 5 of the first type byte is the ancillary
+                # bit — clear (uppercase) means CRITICAL. A decoder that does
+                # not recognise a critical chunk MUST abort, because that chunk
+                # changes how the image is to be interpreted. Skipping it, as
+                # this walk previously did, means happily rendering a stream
+                # whose meaning we demonstrably do not understand. Ancillary
+                # chunks (gAMA, pHYs, tEXt, ...) stay safely skippable.
+                if ((load8(type_ptr) & 0x20) == 0) {
+                    var known = 0;
+                    if (is_idat == 1) { known = 1; }
+                    if (is_iend == 1) { known = 1; }
+                    if (is_plte == 1) { known = 1; }
+                    if (known == 0) {
+                        store64(err_out, chitra_err(CHITRA_ERR_UNSUPPORTED));
+                        return 0;
+                    }
                 }
                 if (is_iend == 1) {
                     # IEND carries no data (spec § 11.2.5) — a non-zero

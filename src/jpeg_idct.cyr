@@ -38,10 +38,14 @@ var FIX_3_072711026 = 25172;
 # once into a 64-i64 table. Coefficients and quant tables arrive in zig-zag
 # order; dequant scatters them into natural order via this map.
 # ================================================================
-var _jpeg_zz_ptr = 0;
+# The zig-zag map is constant data, so it lives in BSS rather than the heap:
+# the previous alloc(512) was unchecked, and on failure it stored 64 values
+# through a NULL pointer. Const data has no business owning a failure mode.
+var _jpeg_zz_tbl[512];        # 64 i64 — BSS, no alloc dep
+var _jpeg_zz_ready = 0;
 fn _jpeg_zigzag_table(): i64 {
-    if (_jpeg_zz_ptr != 0) { return _jpeg_zz_ptr; }
-    var t = alloc(64 * 8);
+    if (_jpeg_zz_ready != 0) { return &_jpeg_zz_tbl; }
+    var t = &_jpeg_zz_tbl;
     store64(t + 0 * 8, 0);
     store64(t + 1 * 8, 1);
     store64(t + 2 * 8, 8);
@@ -106,7 +110,7 @@ fn _jpeg_zigzag_table(): i64 {
     store64(t + 61 * 8, 55);
     store64(t + 62 * 8, 62);
     store64(t + 63 * 8, 63);
-    _jpeg_zz_ptr = t;
+    _jpeg_zz_ready = 1;
     return t;
 }
 

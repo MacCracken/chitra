@@ -2256,6 +2256,551 @@ fn test_decode_rgba16() {
     return 0;
 }
 
+# PLTE preceded by a ZERO-LENGTH IDAT. The old ordering guard tested
+# idat_total > 0, which an empty IDAT leaves at 0 — so this slipped through.
+fn fx_plte_after_empty_idat(len_out): i64 {
+    var b = alloc(98);
+    store64(len_out, 98);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 2);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 2);
+    store8(b + 24, 8);
+    store8(b + 25, 0);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 87);
+    store8(b + 30, 221);
+    store8(b + 31, 82);
+    store8(b + 32, 248);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 0);
+    store8(b + 37, 73);
+    store8(b + 38, 68);
+    store8(b + 39, 65);
+    store8(b + 40, 84);
+    store8(b + 41, 53);
+    store8(b + 42, 175);
+    store8(b + 43, 6);
+    store8(b + 44, 30);
+    store8(b + 45, 0);
+    store8(b + 46, 0);
+    store8(b + 47, 0);
+    store8(b + 48, 3);
+    store8(b + 49, 80);
+    store8(b + 50, 76);
+    store8(b + 51, 84);
+    store8(b + 52, 69);
+    store8(b + 53, 1);
+    store8(b + 54, 2);
+    store8(b + 55, 3);
+    store8(b + 56, 13);
+    store8(b + 57, 135);
+    store8(b + 58, 100);
+    store8(b + 59, 213);
+    store8(b + 60, 0);
+    store8(b + 61, 0);
+    store8(b + 62, 0);
+    store8(b + 63, 14);
+    store8(b + 64, 73);
+    store8(b + 65, 68);
+    store8(b + 66, 65);
+    store8(b + 67, 84);
+    store8(b + 68, 120);
+    store8(b + 69, 218);
+    store8(b + 70, 99);
+    store8(b + 71, 224);
+    store8(b + 72, 18);
+    store8(b + 73, 97);
+    store8(b + 74, 144);
+    store8(b + 75, 211);
+    store8(b + 76, 0);
+    store8(b + 77, 0);
+    store8(b + 78, 0);
+    store8(b + 79, 236);
+    store8(b + 80, 0);
+    store8(b + 81, 101);
+    store8(b + 82, 253);
+    store8(b + 83, 144);
+    store8(b + 84, 18);
+    store8(b + 85, 165);
+    store8(b + 86, 0);
+    store8(b + 87, 0);
+    store8(b + 88, 0);
+    store8(b + 89, 0);
+    store8(b + 90, 73);
+    store8(b + 91, 69);
+    store8(b + 92, 78);
+    store8(b + 93, 68);
+    store8(b + 94, 174);
+    store8(b + 95, 66);
+    store8(b + 96, 96);
+    store8(b + 97, 130);
+    return b;
+}
+
+# Two tRNS chunks. The second silently overwrote the first captured span.
+fn fx_trns_duplicate(len_out): i64 {
+    var b = alloc(99);
+    store64(len_out, 99);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 2);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 2);
+    store8(b + 24, 8);
+    store8(b + 25, 0);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 87);
+    store8(b + 30, 221);
+    store8(b + 31, 82);
+    store8(b + 32, 248);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 2);
+    store8(b + 37, 116);
+    store8(b + 38, 82);
+    store8(b + 39, 78);
+    store8(b + 40, 83);
+    store8(b + 41, 0);
+    store8(b + 42, 10);
+    store8(b + 43, 150);
+    store8(b + 44, 70);
+    store8(b + 45, 36);
+    store8(b + 46, 38);
+    store8(b + 47, 0);
+    store8(b + 48, 0);
+    store8(b + 49, 0);
+    store8(b + 50, 2);
+    store8(b + 51, 116);
+    store8(b + 52, 82);
+    store8(b + 53, 78);
+    store8(b + 54, 83);
+    store8(b + 55, 0);
+    store8(b + 56, 10);
+    store8(b + 57, 150);
+    store8(b + 58, 70);
+    store8(b + 59, 36);
+    store8(b + 60, 38);
+    store8(b + 61, 0);
+    store8(b + 62, 0);
+    store8(b + 63, 0);
+    store8(b + 64, 14);
+    store8(b + 65, 73);
+    store8(b + 66, 68);
+    store8(b + 67, 65);
+    store8(b + 68, 84);
+    store8(b + 69, 120);
+    store8(b + 70, 218);
+    store8(b + 71, 99);
+    store8(b + 72, 224);
+    store8(b + 73, 18);
+    store8(b + 74, 97);
+    store8(b + 75, 144);
+    store8(b + 76, 211);
+    store8(b + 77, 0);
+    store8(b + 78, 0);
+    store8(b + 79, 0);
+    store8(b + 80, 236);
+    store8(b + 81, 0);
+    store8(b + 82, 101);
+    store8(b + 83, 253);
+    store8(b + 84, 144);
+    store8(b + 85, 18);
+    store8(b + 86, 165);
+    store8(b + 87, 0);
+    store8(b + 88, 0);
+    store8(b + 89, 0);
+    store8(b + 90, 0);
+    store8(b + 91, 73);
+    store8(b + 92, 69);
+    store8(b + 93, 78);
+    store8(b + 94, 68);
+    store8(b + 95, 174);
+    store8(b + 96, 66);
+    store8(b + 97, 96);
+    store8(b + 98, 130);
+    return b;
+}
+
+# tRNS after IDAT — transparency declared against already-committed pixels.
+fn fx_trns_after_idat(len_out): i64 {
+    var b = alloc(85);
+    store64(len_out, 85);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 2);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 2);
+    store8(b + 24, 8);
+    store8(b + 25, 0);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 87);
+    store8(b + 30, 221);
+    store8(b + 31, 82);
+    store8(b + 32, 248);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 14);
+    store8(b + 37, 73);
+    store8(b + 38, 68);
+    store8(b + 39, 65);
+    store8(b + 40, 84);
+    store8(b + 41, 120);
+    store8(b + 42, 218);
+    store8(b + 43, 99);
+    store8(b + 44, 224);
+    store8(b + 45, 18);
+    store8(b + 46, 97);
+    store8(b + 47, 144);
+    store8(b + 48, 211);
+    store8(b + 49, 0);
+    store8(b + 50, 0);
+    store8(b + 51, 0);
+    store8(b + 52, 236);
+    store8(b + 53, 0);
+    store8(b + 54, 101);
+    store8(b + 55, 253);
+    store8(b + 56, 144);
+    store8(b + 57, 18);
+    store8(b + 58, 165);
+    store8(b + 59, 0);
+    store8(b + 60, 0);
+    store8(b + 61, 0);
+    store8(b + 62, 2);
+    store8(b + 63, 116);
+    store8(b + 64, 82);
+    store8(b + 65, 78);
+    store8(b + 66, 83);
+    store8(b + 67, 0);
+    store8(b + 68, 10);
+    store8(b + 69, 150);
+    store8(b + 70, 70);
+    store8(b + 71, 36);
+    store8(b + 72, 38);
+    store8(b + 73, 0);
+    store8(b + 74, 0);
+    store8(b + 75, 0);
+    store8(b + 76, 0);
+    store8(b + 77, 73);
+    store8(b + 78, 69);
+    store8(b + 79, 78);
+    store8(b + 80, 68);
+    store8(b + 81, 174);
+    store8(b + 82, 66);
+    store8(b + 83, 96);
+    store8(b + 84, 130);
+    return b;
+}
+
+# An unknown CRITICAL chunk ('TEST', uppercase T => ancillary bit clear).
+# Spec § 5.4 requires a decoder that does not recognise it to abort.
+fn fx_unknown_critical(len_out): i64 {
+    var b = alloc(84);
+    store64(len_out, 84);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 2);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 2);
+    store8(b + 24, 8);
+    store8(b + 25, 0);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 87);
+    store8(b + 30, 221);
+    store8(b + 31, 82);
+    store8(b + 32, 248);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 1);
+    store8(b + 37, 84);
+    store8(b + 38, 69);
+    store8(b + 39, 83);
+    store8(b + 40, 84);
+    store8(b + 41, 0);
+    store8(b + 42, 23);
+    store8(b + 43, 86);
+    store8(b + 44, 62);
+    store8(b + 45, 160);
+    store8(b + 46, 0);
+    store8(b + 47, 0);
+    store8(b + 48, 0);
+    store8(b + 49, 14);
+    store8(b + 50, 73);
+    store8(b + 51, 68);
+    store8(b + 52, 65);
+    store8(b + 53, 84);
+    store8(b + 54, 120);
+    store8(b + 55, 218);
+    store8(b + 56, 99);
+    store8(b + 57, 224);
+    store8(b + 58, 18);
+    store8(b + 59, 97);
+    store8(b + 60, 144);
+    store8(b + 61, 211);
+    store8(b + 62, 0);
+    store8(b + 63, 0);
+    store8(b + 64, 0);
+    store8(b + 65, 236);
+    store8(b + 66, 0);
+    store8(b + 67, 101);
+    store8(b + 68, 253);
+    store8(b + 69, 144);
+    store8(b + 70, 18);
+    store8(b + 71, 165);
+    store8(b + 72, 0);
+    store8(b + 73, 0);
+    store8(b + 74, 0);
+    store8(b + 75, 0);
+    store8(b + 76, 73);
+    store8(b + 77, 69);
+    store8(b + 78, 78);
+    store8(b + 79, 68);
+    store8(b + 80, 174);
+    store8(b + 81, 66);
+    store8(b + 82, 96);
+    store8(b + 83, 130);
+    return b;
+}
+
+# An unknown ANCILLARY chunk ('tEXt'). This one MUST still decode — it is
+# the control proving the § 5.4 rejection did not become over-rejection.
+fn fx_unknown_ancillary(len_out): i64 {
+    var b = alloc(86);
+    store64(len_out, 86);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 2);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 2);
+    store8(b + 24, 8);
+    store8(b + 25, 0);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 87);
+    store8(b + 30, 221);
+    store8(b + 31, 82);
+    store8(b + 32, 248);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 3);
+    store8(b + 37, 116);
+    store8(b + 38, 69);
+    store8(b + 39, 88);
+    store8(b + 40, 116);
+    store8(b + 41, 107);
+    store8(b + 42, 0);
+    store8(b + 43, 118);
+    store8(b + 44, 203);
+    store8(b + 45, 4);
+    store8(b + 46, 243);
+    store8(b + 47, 144);
+    store8(b + 48, 0);
+    store8(b + 49, 0);
+    store8(b + 50, 0);
+    store8(b + 51, 14);
+    store8(b + 52, 73);
+    store8(b + 53, 68);
+    store8(b + 54, 65);
+    store8(b + 55, 84);
+    store8(b + 56, 120);
+    store8(b + 57, 218);
+    store8(b + 58, 99);
+    store8(b + 59, 224);
+    store8(b + 60, 18);
+    store8(b + 61, 97);
+    store8(b + 62, 144);
+    store8(b + 63, 211);
+    store8(b + 64, 0);
+    store8(b + 65, 0);
+    store8(b + 66, 0);
+    store8(b + 67, 236);
+    store8(b + 68, 0);
+    store8(b + 69, 101);
+    store8(b + 70, 253);
+    store8(b + 71, 144);
+    store8(b + 72, 18);
+    store8(b + 73, 165);
+    store8(b + 74, 0);
+    store8(b + 75, 0);
+    store8(b + 76, 0);
+    store8(b + 77, 0);
+    store8(b + 78, 73);
+    store8(b + 79, 69);
+    store8(b + 80, 78);
+    store8(b + 81, 68);
+    store8(b + 82, 174);
+    store8(b + 83, 66);
+    store8(b + 84, 96);
+    store8(b + 85, 130);
+    return b;
+}
+
+# ---- 0.3.3 chunk-ordering / § 5.4 hardening regressions ---------------
+fn _expect_reject(bytes, lo, code, label) {
+    var err = 0;
+    var img = chitra_png_decode(bytes, lo, &err);
+    assert(img == 0, label);
+    assert(err != 0, label);
+    if (err != 0) { assert_eq(chitra_err_code(err), code, label); }
+    return 0;
+}
+
+fn test_reject_plte_after_empty_idat() {
+    var lo = 0;
+    var b = fx_plte_after_empty_idat(&lo);
+    _expect_reject(b, lo, CHITRA_ERR_BAD_CHUNK, "PLTE after zero-length IDAT rejected");
+    return 0;
+}
+
+fn test_reject_duplicate_trns() {
+    var lo = 0;
+    var b = fx_trns_duplicate(&lo);
+    _expect_reject(b, lo, CHITRA_ERR_BAD_CHUNK, "duplicate tRNS rejected");
+    return 0;
+}
+
+fn test_reject_trns_after_idat() {
+    var lo = 0;
+    var b = fx_trns_after_idat(&lo);
+    _expect_reject(b, lo, CHITRA_ERR_BAD_CHUNK, "tRNS after IDAT rejected");
+    return 0;
+}
+
+fn test_reject_unknown_critical_chunk() {
+    var lo = 0;
+    var b = fx_unknown_critical(&lo);
+    _expect_reject(b, lo, CHITRA_ERR_UNSUPPORTED, "unknown critical chunk rejected (§ 5.4)");
+    return 0;
+}
+
+# The control: § 5.4 rejection must NOT have become blanket rejection.
+# An unknown ANCILLARY chunk stays skippable and the image still decodes.
+fn test_unknown_ancillary_chunk_still_decodes() {
+    var lo = 0;
+    var b = fx_unknown_ancillary(&lo);
+    var err = 0;
+    var img = chitra_png_decode(b, lo, &err);
+    assert(img != 0, "unknown ancillary chunk still decodes");
+    assert(err == 0, "unknown ancillary chunk sets no error");
+    if (img != 0) {
+        assert(chitra_image_width(img) == 2, "ancillary-chunk image width 2");
+        var px = chitra_image_pixels(img);
+        _assert_px(px, 0, 10, 10, 10, 255, "ancillary-chunk px0 intact");
+    }
+    return 0;
+}
+
 fn test_decode_gray16_trns() {
     var lo = 0;
     var bytes = fx_gray16_trns_2x1(&lo);
@@ -2265,6 +2810,25 @@ fn test_decode_gray16_trns() {
     var px = chitra_image_pixels(img);
     _assert_px(px, 0, 18, 18, 18, 0, "gray16t px0 keyed");
     _assert_px(px, 1, 255, 255, 255, 255, "gray16t px1");
+    return 0;
+}
+
+# Regression (0.3.3): the depth-16 tRNS color key must be compared at FULL
+# sample width. px0 (0x1234) is the key and is transparent; px1 (0x12FF)
+# shares the key's high byte and reduces to the SAME 8-bit output value, so
+# a high-byte-only comparison made it transparent too — 256x too many pixels
+# keyed. px1 must come back OPAQUE.
+fn test_decode_gray16_trns_no_high_byte_alias() {
+    var lo = 0;
+    var bytes = fx_gray16_trns_alias_3x1(&lo);
+    var err = 0;
+    var img = chitra_png_decode(bytes, lo, &err);
+    assert(img != 0, "gray16t-alias decodes");
+    assert(chitra_image_width(img) == 3, "gray16t-alias width 3");
+    var px = chitra_image_pixels(img);
+    _assert_px(px, 0, 18, 18, 18, 0, "gray16t-alias px0 (0x1234 == key) keyed");
+    _assert_px(px, 1, 18, 18, 18, 255, "gray16t-alias px1 (0x12FF) NOT keyed");
+    _assert_px(px, 2, 255, 255, 255, 255, "gray16t-alias px2 opaque");
     return 0;
 }
 
@@ -2437,6 +3001,102 @@ fn fx_rgba16_2x1(len_out): i64 {
     return b;
 }
 
+# 3x1 gray16 + tRNS key 0x1234. px0 == the key (transparent); px1 is
+# 0x12FF — it shares the key's HIGH byte and reduces to the same 8-bit
+# output (18), so a high-byte-only key comparison wrongly keys it too.
+# px1 staying OPAQUE is the whole point of this fixture.
+fn fx_gray16_trns_alias_3x1(len_out): i64 {
+    var b = alloc(86);
+    store64(len_out, 86);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 3);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 1);
+    store8(b + 24, 16);
+    store8(b + 25, 0);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 110);
+    store8(b + 30, 27);
+    store8(b + 31, 151);
+    store8(b + 32, 43);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 2);
+    store8(b + 37, 116);
+    store8(b + 38, 82);
+    store8(b + 39, 78);
+    store8(b + 40, 83);
+    store8(b + 41, 18);
+    store8(b + 42, 52);
+    store8(b + 43, 47);
+    store8(b + 44, 211);
+    store8(b + 45, 73);
+    store8(b + 46, 94);
+    store8(b + 47, 0);
+    store8(b + 48, 0);
+    store8(b + 49, 0);
+    store8(b + 50, 15);
+    store8(b + 51, 73);
+    store8(b + 52, 68);
+    store8(b + 53, 65);
+    store8(b + 54, 84);
+    store8(b + 55, 120);
+    store8(b + 56, 218);
+    store8(b + 57, 99);
+    store8(b + 58, 16);
+    store8(b + 59, 50);
+    store8(b + 60, 17);
+    store8(b + 61, 250);
+    store8(b + 62, 255);
+    store8(b + 63, 255);
+    store8(b + 64, 63);
+    store8(b + 65, 0);
+    store8(b + 66, 7);
+    store8(b + 67, 185);
+    store8(b + 68, 3);
+    store8(b + 69, 86);
+    store8(b + 70, 58);
+    store8(b + 71, 203);
+    store8(b + 72, 116);
+    store8(b + 73, 142);
+    store8(b + 74, 0);
+    store8(b + 75, 0);
+    store8(b + 76, 0);
+    store8(b + 77, 0);
+    store8(b + 78, 73);
+    store8(b + 79, 69);
+    store8(b + 80, 78);
+    store8(b + 81, 68);
+    store8(b + 82, 174);
+    store8(b + 83, 66);
+    store8(b + 84, 96);
+    store8(b + 85, 130);
+    return b;
+}
+
 fn fx_gray16_trns_2x1(len_out): i64 {
     var b = alloc(84);
     store64(len_out, 84);
@@ -2606,6 +3266,12 @@ fn main() {
     test_decode_graya16();
     test_decode_rgba16();
     test_decode_gray16_trns();
+    test_decode_gray16_trns_no_high_byte_alias();
+    test_reject_plte_after_empty_idat();
+    test_reject_duplicate_trns();
+    test_reject_trns_after_idat();
+    test_reject_unknown_critical_chunk();
+    test_unknown_ancillary_chunk_still_decodes();
     test_reject_palette_depth16();
     test_reject_no_idat();
     test_reject_iend_nonzero();

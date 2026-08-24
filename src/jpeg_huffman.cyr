@@ -125,6 +125,20 @@ fn _jpeg_br_restart(reader): i64 {
     var base = load64(reader + BR_BASE);
     var pos = load64(reader + BR_POS);
     var end = load64(reader + BR_END);
+    # Skip 0xFF fill bytes (T.81 § B.1.1.2), leaving pos on the LAST 0xFF so
+    # the marker code sits at pos+1.
+    var skip = 1;
+    while (skip == 1) {
+        skip = 0;
+        if (pos + 1 < end) {
+            if (load8(base + pos) == 0xFF) {
+                if (load8(base + pos + 1) == 0xFF) {
+                    pos = pos + 1;
+                    skip = 1;
+                }
+            }
+        }
+    }
     if (pos + 1 >= end) { return 0 - 1; }
     if (load8(base + pos) != 0xFF) { return 0 - 1; }
     var m = load8(base + pos + 1);
@@ -150,6 +164,22 @@ fn _jpeg_br_load_byte(reader): i64 {
     b = load8(base + pos);
     pos = pos + 1;
     if (b == 0xFF) {
+        # T.81 § B.1.1.2: a marker may be preceded by ANY number of 0xFF fill
+        # bytes. Collapse the run so "FF FF D0" resolves to RST0 instead of a
+        # bogus marker 0xFF — which made _jpeg_br_restart reject a perfectly
+        # well-formed restart stream. `b` stays 0xFF (every byte in the run is
+        # the same value), and pos-1 still points at the LAST 0xFF, which is
+        # exactly where the restart resync expects to find it.
+        var fill = 1;
+        while (fill == 1) {
+            fill = 0;
+            if (pos < end) {
+                if (load8(base + pos) == 0xFF) {
+                    pos = pos + 1;
+                    fill = 1;
+                }
+            }
+        }
         if (pos >= end) {
             store64(reader + BR_MARKER, 0xD9);
             store64(reader + BR_POS, pos - 1);
@@ -269,7 +299,18 @@ fn _jpeg_decode_block(reader, dct, act, pred, zz_out, err_out): i64 {
             }
             if (done == 0) {
                 if (s == 0) {
-                    if (r == 15) { k = k + 16; }   # ZRL: a run of 16 zeros
+                    if (r == 15) {
+                        # ZRL: a run of 16 zeros, filling k..k+15. Legal only
+                        # while that run ends inside the block. Overrunning it
+                        # is exactly as corrupt as the r-run overrun rejected
+                        # below, and used to slip out of the loop as a CLEAN
+                        # decode — a corrupt stream reported as success.
+                        k = k + 16;
+                        if (k > 64) {
+                            store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY));
+                            done = 1;
+                        }
+                    }
                     if (r != 15) { done = 1; }     # EOB: remaining coeffs are zero
                 }
                 if (s != 0) {

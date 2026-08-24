@@ -6,11 +6,12 @@
 #
 # Quick reference:
 #   make test           — CPU-only tests (globs tests/tcyr/*.tcyr domain suites)
+#   make fuzz           — adversarial-input harnesses (globs fuzz/*.fcyr)
 #   make build          — link-check the library (programs/smoke.cyr)
 #   make dist           — regenerate dist/chitra.cyr via `cyrius distlib`
 #   make lint / fmt-check / vet  — quality gates
 #   make version-check  — VERSION / cyrius.cyml / CHANGELOG / README agree
-#   make test-all       — version-check + dist regen + CPU tests
+#   make test-all       — version-check + dist regen + CPU tests + fuzz
 #   make clean          — scrub build/
 
 CYRIUS ?= cyrius
@@ -49,7 +50,7 @@ test: check-lib-wiring
 .PHONY: lint
 lint:
 	@fail=0; \
-	for f in src/*.cyr programs/*.cyr tests/tcyr/*.tcyr; do \
+	for f in src/*.cyr programs/*.cyr tests/tcyr/*.tcyr fuzz/*.fcyr; do \
 		out=$$($(CYRIUS) lint $$f 2>&1); echo "$$out"; \
 		echo "$$out" | grep -qE '^\s*warn ' && fail=1; \
 	done; \
@@ -61,7 +62,7 @@ fmt-check:
 	@# CODE only (0 = clean, non-zero = needs fmt). The file goes BEFORE the
 	@# --check flag.
 	@fail=0; \
-	for f in src/*.cyr programs/*.cyr tests/tcyr/*.tcyr; do \
+	for f in src/*.cyr programs/*.cyr tests/tcyr/*.tcyr fuzz/*.fcyr; do \
 		if ! $(CYRIUS) fmt $$f --check > /dev/null 2>&1; then \
 			echo "needs fmt: $$f"; fail=1; \
 		fi; \
@@ -76,6 +77,14 @@ vet:
 dist:
 	$(CYRIUS) distlib
 
+.PHONY: fuzz
+# Adversarial-input harnesses under fuzz/ (`cyrius fuzz` globs fuzz/*.fcyr).
+# Each drives a public decode entry with random / signature-prefixed /
+# bit-flipped / truncated / entropy-mutated input and asserts BOTH the
+# survival invariant and the documented (0 + *err_out set) contract.
+fuzz: check-lib-wiring
+	$(CYRIUS) fuzz
+
 .PHONY: version-check
 version-check:
 	@./scripts/version-check.sh
@@ -85,7 +94,7 @@ count-assertions:
 	@./scripts/count-test-assertions.sh
 
 .PHONY: test-all
-test-all: version-check dist test
+test-all: version-check dist test fuzz
 
 .PHONY: clean
 clean:

@@ -1,6 +1,6 @@
 # chitra
 
-Version: 0.3.2
+Version: 0.3.3
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder, a sibling AGNOS package in the mould of `sakshi` /
@@ -18,8 +18,8 @@ and GIF / BMP can join later without a rename.
   `zlib_decompress`), the five unfilter predictors, canonical-RGBA8
   output, and the kii security guards (decompression-bomb caps,
   lying-IHDR rejection, ratio caps). No Adam7 interlace (single-pass
-  only). The decoder is complete and inherits kii's fuzz-hardening (a
-  chitra-native fuzz harness is a tracked v1.0 gap) — the public
+  only). The decoder is complete and inherits kii's fuzz-hardening
+  (chitra grew its own in-tree harness in v0.3.3) — the public
   entry points are `chitra_png_decode` (→ an owned RGBA8 `ChitraImage`)
   and the `chitra_png_decode_rgba8` convenience wrapper.
 - **v0.2.0 — bit depth 16 + hardening parity.** Adds 16-bit decode for
@@ -48,9 +48,20 @@ and GIF / BMP can join later without a rename.
   verified **byte-identical to ImageMagick** on a real baseline JPEG.
   Non-baseline modes (progressive, arithmetic, 12-bit, hierarchical /
   lossless, CMYK) are cleanly rejected with distinct error codes.
+- **v0.3.3 — P-1 audit, hardening and repair.** A ten-lens adversarial sweep
+  of both decode paths, every finding put to two independent skeptics, plus
+  the repair of everything confirmed. **No memory-safety defect was found**;
+  the repairs are correctness, conformance and resource hardening —
+  full-width depth-16 tRNS keying, rejection of single-component
+  non-interleaved JPEG scans, a JPEG decompression-bomb cap (the analogue of
+  the PNG inflate-ratio cap), a `chitra_err_new` that can no longer return 0,
+  T.81 fill-byte handling, and the PNG § 5.4 / § 5.6 chunk-ordering guards.
+  Adds chitra's **first in-tree fuzz harnesses** (`make fuzz`): ~1,000,237
+  adversarial decode cases, 0 failures, clearing the 10⁶-iteration v1.0 gate.
+  See [`docs/audit/2026-08-23-audit.md`](docs/audit/2026-08-23-audit.md).
 - **Staged (tracked, not silently dropped):** **GIF / BMP** → after JPEG;
-  an in-tree fuzz + benchmark harness (a v1.0 gate). PNG and baseline JPEG
-  are feature-complete.
+  an in-tree **benchmark** harness (the remaining v1.0 gate — the fuzz half
+  landed in v0.3.3). PNG and baseline JPEG are feature-complete.
 
 ## Relationships
 

@@ -47,9 +47,24 @@ enum ChitraErrCode {
 # ChitraErr struct
 # ================================================================
 
+# BSS-resident fallback ChitraErr (no alloc dependency). The 16-byte alloc
+# below fails only under true heap exhaustion, but the unguarded version was
+# wrong twice over: it stored through a NULL pointer, and it returned 0 —
+# which every caller reads as "no error", inverting the failure contract at
+# the exact moment a failure must be reported. Last-writer-wins on a shared
+# record is an acceptable trade when the heap is gone; a live, correctly-coded
+# ChitraErr beats both a fault and a silent success.
+var _chitra_err_fallback[16];
+
 # Create a ChitraErr with code and an optional detail string (0 = none).
+# Never returns 0 — see _chitra_err_fallback above.
 fn chitra_err_new(code, detail): i64 {
     var e = alloc(16);
+    if (e == 0) {
+        store64(&_chitra_err_fallback, code);
+        store64(&_chitra_err_fallback + 8, detail);
+        return &_chitra_err_fallback;
+    }
     store64(e, code);
     store64(e + 8, detail);
     return e;

@@ -188,9 +188,18 @@ beyond spec.
   [`src/jpeg.cyr`](src/jpeg.cyr)); verdict: memory-safe — no reachable
   out-of-bounds, overflow, or divide-by-zero.
 
-> Coverage gap to be transparent about: chitra ships **no in-tree fuzz harness
-> and no benchmark harness** yet. The defensive guards above are exercised by
-> the test suites under `tests/tcyr/`, and the decoder's lineage is
-> fuzz-hardened in kii, but chitra itself has not re-run a fuzz corpus against
-> its own byte-buffer I/O boundary. Standing up a fuzz harness is tracked in
+- [`docs/audit/2026-08-23-audit.md`](docs/audit/2026-08-23-audit.md) — the
+  P-1 sweep of **both** decode paths (ten adversarial lenses, every finding
+  put to two independent skeptics), gating 0.3.3. Verdict: **no memory-safety
+  defect** — the confirmed findings were correctness, conformance, resource
+  and defence-in-depth, and all were repaired in that cut. Introduced the
+  in-tree fuzz harnesses.
+
+> Coverage gap to be transparent about: chitra ships **no benchmark harness**
+> yet, so decode latency and throughput are unmeasured in-repo. The fuzz gap
+> is **closed as of 0.3.3** — `make fuzz` drives both public decode entries
+> over ~1,000,237 adversarial cases (3,464,838 assertions, 0 failures),
+> including JPEG entropy-segment mutation, and asserts the documented
+> `(0, *err_out set)` failure contract as well as survival. The remaining
+> benchmark work is tracked in
 > [`docs/development/roadmap.md`](docs/development/roadmap.md).
