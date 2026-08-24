@@ -204,7 +204,7 @@ fn chitra_png_check_signature(src, len): i64 {
 # ================================================================
 fn _chunk_is(p, c0, c1, c2, c3): i64 {
     if (load8(p + 0) == c0 && load8(p + 1) == c1 &&
-    load8(p + 2) == c2 && load8(p + 3) == c3) { return 1; }
+      load8(p + 2) == c2 && load8(p + 3) == c3) { return 1; }
     return 0;
 }
 fn _chunk_is_ihdr(p): i64 { return _chunk_is(p, 0x49, 0x48, 0x44, 0x52); }

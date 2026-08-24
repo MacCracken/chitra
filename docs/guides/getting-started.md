@@ -20,7 +20,7 @@ GIF / BMP can land later without a rename.
 ## Build & verify locally
 
 You need the Cyrius toolchain pinned in
-[`cyrius.cyml`](../../cyrius.cyml) (`cyrius = "6.2.44"`). If `cyrius`
+[`cyrius.cyml`](../../cyrius.cyml) (`cyrius = "6.5.35"`). If `cyrius`
 isn't on your PATH yet, see the agnosticos bootstrap.
 
 ```bash
@@ -42,7 +42,7 @@ A few notes on what each step proves:
   and exits 0.
 - **`make test`** runs the five suites under `tests/tcyr/` — each is a
   standalone `main()`: `error.tcyr` (20), `interlace.tcyr` (35),
-  `png.tcyr` (327), `subbyte.tcyr` (143).
+  `jpeg.tcyr` (203), `png.tcyr` (327), `subbyte.tcyr` (143).
 - **`make dist`** concatenates the flat source modules into the single
   distributable `dist/chitra.cyr` — see
   [architecture note 002](../architecture/002-flat-modules-distlib-concatenation.md).
@@ -57,7 +57,7 @@ released tag and pulling that one module:
 ```toml
 [deps.chitra]
 git     = "https://github.com/MacCracken/chitra"
-tag     = "0.3.0"
+tag     = "0.3.2"
 modules = ["dist/chitra.cyr"]
 ```
 
@@ -139,7 +139,7 @@ no-op: the stdlib `alloc` is a bump allocator with no per-block free —
 see [architecture note 003](../architecture/003-bump-allocator-no-free.md).
 
 You can probe the linked version at runtime with `chitra_version()`,
-which returns `300` for 0.3.0 (`major*10000 + minor*100 + patch`).
+which returns `302` for 0.3.2 (`major*10000 + minor*100 + patch`).
 
 ## Error handling
 
@@ -166,8 +166,8 @@ the pixels. A *malformed* IEND (e.g. non-zero length) is a hard error.
 
 | Code | Value | Triggers when |
 |---|---|---|
-| `CHITRA_ERR_OK` | 0 | No error (success path) |
-| `CHITRA_ERR_SIGNATURE` | 1 | First 8 bytes are not the PNG signature |
+| `CHITRA_OK` | 0 | No error (success path) |
+| `CHITRA_ERR_SIGNATURE` | 1 | Bytes match neither the 8-byte PNG signature nor the JPEG SOI marker |
 | `CHITRA_ERR_TRUNCATED` | 2 | Stream ends mid-chunk / mid-field |
 | `CHITRA_ERR_BAD_CHUNK` | 3 | Chunk framing is malformed |
 | `CHITRA_ERR_UNSUPPORTED` | 4 | A construct chitra does not handle |
@@ -179,14 +179,24 @@ the pixels. A *malformed* IEND (e.g. non-zero length) is a hard error.
 | `CHITRA_ERR_DIMENSIONS` | 10 | IHDR dimensions exceed policy / are invalid |
 | `CHITRA_ERR_FILTER` | 11 | Filter byte ∉ {0,1,2,3,4} (spec § 9) |
 | `CHITRA_ERR_NO_IDAT` | 12 | Structurally valid PNG with zero pixel data |
+| `CHITRA_ERR_JPEG_MARKER` | 13 | Malformed/misplaced marker or bad 16-bit segment length |
+| `CHITRA_ERR_JPEG_SOF` | 14 | Invalid SOF0 frame header (precision / components / sampling / dims) |
+| `CHITRA_ERR_JPEG_DQT` | 15 | Malformed DQT quantization table |
+| `CHITRA_ERR_JPEG_DHT` | 16 | Malformed DHT / Huffman-table build failure |
+| `CHITRA_ERR_JPEG_SOS` | 17 | Invalid scan header |
+| `CHITRA_ERR_JPEG_ENTROPY` | 18 | Entropy-coded data violates a decode bound |
+| `CHITRA_ERR_JPEG_PROGRESSIVE` | 19 | Progressive JPEG (SOF2) — not decoded, rejected |
+| `CHITRA_ERR_JPEG_ARITHMETIC` | 20 | Arithmetic-coded JPEG — not decoded, rejected |
+| `CHITRA_ERR_JPEG_PRECISION` | 21 | Sample precision other than 8-bit |
+| `CHITRA_ERR_JPEG_MODE` | 22 | Hierarchical / lossless / differential mode |
+| `CHITRA_ERR_JPEG_COMPONENTS` | 23 | Unsupported component count (e.g. 4-component CMYK / YCCK) |
 | `CHITRA_ERR_OTHER` | 99 | Anything else |
 
-Heads-up on stale comments: the enum comments in
-[`src/error.cyr`](../../src/error.cyr) for `CHITRA_ERR_INTERLACE`
-("single-pass only") and `CHITRA_ERR_BIT_DEPTH` ("bit_depth != 8") date
-from 0.2 and are now out of date — 0.2.1 decodes Adam7 *and* all bit
-depths, so those two codes only fire for genuinely illegal combinations
-(e.g. color type 3 at bit depth 16).
+Note that `CHITRA_ERR_INTERLACE` and `CHITRA_ERR_BIT_DEPTH` are narrower
+than their names suggest: Adam7 *and* every spec-legal bit depth decode,
+so those two fire only on genuinely illegal values — an interlace method
+other than 0/1, or a bit-depth × color-type pair outside § 11.2.2
+Table 11.1 (e.g. color type 3 at bit depth 16).
 
 ## What's supported
 

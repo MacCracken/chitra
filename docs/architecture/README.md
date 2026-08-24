@@ -8,7 +8,7 @@ chitra is a **library** — there is no CLI, no stdout emit, no terminal/ANSI su
 
 ## Module map
 
-The pipeline runs left-to-right; each module owns one stage. Data flows by value through two records — `ChitraPngRaw` (parse output) and `ChitraImage` (public result) — not a shared scratch buffer. The include order is fixed by `[lib].modules` in [`../../cyrius.cyml`](../../cyrius.cyml): `error → png_chunks → png_filter → png_color → png`.
+The pipeline runs left-to-right; each module owns one stage. Data flows by value through two records — `ChitraPngRaw` (parse output) and `ChitraImage` (public result) — not a shared scratch buffer. The include order is fixed by `[lib].modules` in [`../../cyrius.cyml`](../../cyrius.cyml): `error → png_chunks → png_filter → png_color → png → jpeg_huffman → jpeg_idct → jpeg_markers → jpeg`. The diagram and table below trace the PNG stages; the four JPEG modules are covered in [item 004](004-jpeg-decode-pipeline.md).
 
 ```
   (src, len)                                                    ChitraImage

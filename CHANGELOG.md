@@ -5,6 +5,75 @@ All notable changes to chitra are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.2] - 2026-08-23
+
+Toolchain catch-up release. No decode-path behaviour changes — the PNG and
+JPEG matrices are byte-for-byte what 0.3.1 shipped; **728 assertions across
+5 suites, 0 failures**.
+
+### Changed
+
+- cyrius pin 6.5.27 -> **6.5.35**. `lib/` re-vendored from the 6.5.35 stdlib
+  snapshot (108 `.cyr` files), which clears the two drift warnings the 0.3.1
+  build emitted: the shadow-lib mismatch (`patra` 1.13.0 vendored vs 1.13.8
+  pinned) and the `pins 6.5.27 but cycc is 6.5.35` toolchain-drift note.
+  `build/chitra_smoke` unchanged at 551,320 bytes — verified byte-identical
+  when compiled by both the 6.5.27 and the 6.5.35 `cycc` against this tree.
+  (The 555,416 figure the 0.3.1 entry records does not reproduce here; it
+  was measured against that cut's `lib/` vendoring, not this one.)
+  `dist/chitra.cyr` 124,630 -> 124,651 bytes (2,925 lines).
+- Formatter reflow for 6.5.35's `cyrfmt`, which indents wrapped continuation
+  lines +2 relative to the statement: `src/png_chunks.cyr`,
+  `src/png_filter.cyr`, `tests/tcyr/error.tcyr`. **Whitespace only** — no
+  token changed, and the suite is green before and after.
+
+### Fixed
+
+- `chitra_version()` returned **300** on 0.3.1 — the release bumped
+  `VERSION`, `cyrius.cyml`, `CHANGELOG.md`, and `README.md` but left the
+  hand-maintained packed literal in [`src/png.cyr`](src/png.cyr) at its
+  0.3.0 value, so every consumer probing the version saw a release-behind
+  number. Now returns **302**, and `tests/tcyr/error.tcyr` asserts it.
+
+### Added
+
+- `scripts/version-check.sh` (= `make version-check`) now gates
+  `chitra_version()` against `VERSION`, packing `major*10000 + minor*100 +
+  patch` and diffing it against the literal parsed out of `src/png.cyr`.
+  This is the check that would have caught the 0.3.1 drift above; the OK
+  line now names all five sources of truth. The check is pre-release-safe:
+  it strips a `-rc.N` / `-beta.N` / `-alpha.N` suffix before packing (the
+  release workflow's tag filter accepts those and requires `VERSION == tag`),
+  and a malformed `VERSION` yields a clean `FAIL:` line rather than aborting
+  the script under `set -euo pipefail`.
+
+### Documentation
+
+- Doc-drift sweep against the current tree. `docs/development/state.md`
+  refreshed from measured numbers (it had been stuck at 0.3.0 / pin 6.2.44).
+  Corrected: the `chitra_image_decode` router description, which claimed
+  unrecognized bytes fall through to `chitra_png_decode` — the router
+  actually tries PNG magic, then JPEG SOI, then rejects with
+  `CHITRA_ERR_SIGNATURE` ([`jpeg.cyr:424`](src/jpeg.cyr)); the
+  `getting-started` error-code table, which stopped at 12 and omitted every
+  JPEG code 13-23, and named the success constant `CHITRA_ERR_OK` rather
+  than `CHITRA_OK`; the `make test` suite list, which omitted `jpeg.tcyr`
+  (203) so its counts summed to 525 rather than 728; the `[deps.chitra]`
+  example, pinned at 0.3.0; two stale `src/png_chunks.cyr` line anchors in
+  [`docs/adr/0002`](docs/adr/0002-security-model.md) and `SECURITY.md`
+  (`:184` -> `:196`, `:210` -> `:222`); the architecture module-map include
+  order, which predated the four JPEG modules; and CLAUDE.md's
+  decompression-bomb checklist item, which conflated the IDAT *input*
+  accumulator cap (-> `CHITRA_ERR_OOM`) with the IHDR-derived *output* size
+  caps (-> `CHITRA_ERR_DIMENSIONS`).
+- Stale `src/error.cyr` enum comments corrected — a drift item tracked open
+  since 0.2.1. `CHITRA_ERR_INTERLACE` said "single-pass only" and
+  `CHITRA_ERR_BIT_DEPTH` said "bit_depth != 8"; both are validity
+  rejections, not capability limits (Adam7 and every spec-legal depth
+  decode). Their `chitra_err_name` strings still read as capability limits;
+  rewording them changes public output, so that is deferred to the v1.0 API
+  freeze.
+
 ## [0.3.1] - 2026-08-17
 
 ### Changed

@@ -17,7 +17,7 @@ it, and GIF / BMP can join later without a rename.
 
 - **Type**: Shared library (no CLI binary — consumers link `dist/chitra.cyr`)
 - **License**: GPL-3.0-only
-- **Language**: Cyrius (toolchain pinned in `cyrius.cyml [package].cyrius`, currently `6.2.44`)
+- **Language**: Cyrius (toolchain pinned in `cyrius.cyml [package].cyrius` — that pin is the source of truth; do not inline the number here)
 - **Version**: `VERSION` at the project root is the source of truth — do not inline the number here. SemVer (pre-1.0: surface still moving).
 - **Genesis repo**: [agnosticos](https://github.com/MacCracken/agnosticos)
 - **Standards**: [First-Party Standards](https://github.com/MacCracken/agnosticos/blob/main/docs/development/first-party/first-party-standards.md) · [First-Party Documentation](https://github.com/MacCracken/agnosticos/blob/main/docs/development/first-party/first-party-documentation.md)
@@ -139,9 +139,9 @@ non-negotiable — re-verify each before tagging.
 
 **PNG** (the kii-inherited guards):
 
-1. **Decompression-bomb caps** — IDAT inflate output is capped; over-cap → `CHITRA_ERR_OOM`
+1. **Decompression-bomb caps** — two distinct gates: the fused IDAT *input* accumulator is capped at `CHITRA_MAX_RAW_BYTES` → `CHITRA_ERR_OOM` (`png_filter.cyr:438`), and the IHDR-derived inflated/pixel *output* sizes are capped → `CHITRA_ERR_DIMENSIONS` (`png_filter.cyr:500`-`507`)
 2. **Lying-IHDR rejection** — declared dimensions cross-checked against actual data → `CHITRA_ERR_DIMENSIONS`
-3. **Ratio caps** — output:input expansion bounded
+3. **Ratio caps** — output:input expansion bounded by `CHITRA_MAX_INFLATE_RATIO` → `CHITRA_ERR_DIMENSIONS` (`png_filter.cyr:519`)
 4. **Chunk-CRC validation** — every chunk's CRC-32 checked → `CHITRA_ERR_CRC`
 5. **Bounds on every read** — truncated input → `CHITRA_ERR_TRUNCATED`, never an OOB read
 6. **Filter-byte validation** — per-row filter ∈ {0,1,2,3,4} → else `CHITRA_ERR_FILTER`

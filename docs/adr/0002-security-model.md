@@ -97,12 +97,12 @@ the audit ([`../audit/2026-06-26-audit.md`](../audit/2026-06-26-audit.md)).
 
 | Guard | Code | Error |
 |---|---|---|
-| 8-byte signature length + magic check | `chitra_png_check_signature` (`src/png_chunks.cyr:184`) | `CHITRA_ERR_SIGNATURE` |
+| 8-byte signature length + magic check | `chitra_png_check_signature` (`src/png_chunks.cyr:196`) | `CHITRA_ERR_SIGNATURE` |
 | Self-validating bounds-checked cursor | `_cur_can_read` / `_cur_u8` / `_cur_u32_be` (`src/png_chunks.cyr:138`-`167`) | `CHITRA_ERR_TRUNCATED` |
 | IHDR length must equal 13 | `src/png_filter.cyr:131` | `CHITRA_ERR_BAD_CHUNK` |
 | IHDR is the first chunk + type tag | `src/png_filter.cyr:138` | `CHITRA_ERR_BAD_CHUNK` |
 | IHDR CRC-32 verification | `src/png_filter.cyr:145`-`147` | `CHITRA_ERR_CRC` |
-| Color-type allow-list `{0,2,3,4,6}` | `chitra_png_color_channels` (`src/png_chunks.cyr:210`) + `src/png_filter.cyr:164` | `CHITRA_ERR_UNSUPPORTED` |
+| Color-type allow-list `{0,2,3,4,6}` | `chitra_png_color_channels` (`src/png_chunks.cyr:222`) + `src/png_filter.cyr:164` | `CHITRA_ERR_UNSUPPORTED` |
 | Compression + filter method must be 0 | `src/png_filter.cyr:168`-`169` | `CHITRA_ERR_UNSUPPORTED` |
 | Interlace value gate `{0,1}` | `src/png_filter.cyr:171` | `CHITRA_ERR_INTERLACE` |
 | Bit-depth × color-type Table 11.1 allow-list | `src/png_filter.cyr:175`-`185` | `CHITRA_ERR_BIT_DEPTH` |

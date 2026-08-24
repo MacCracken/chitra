@@ -23,8 +23,8 @@ enum ChitraErrCode {
     CHITRA_ERR_INFLATE    = 5;   # sankoch zlib_decompress reported failure
     CHITRA_ERR_OOM        = 6;   # allocation failed / decompression-bomb cap hit
     CHITRA_ERR_CRC        = 7;   # chunk CRC-32 mismatch (corruption / tamper)
-    CHITRA_ERR_INTERLACE  = 8;   # interlace != 0 (Adam7) — single-pass only (chitra 0.2)
-    CHITRA_ERR_BIT_DEPTH  = 9;   # bit_depth != 8 — 1/2/4/16 are chitra 0.2 / AL.P0d scope
+    CHITRA_ERR_INTERLACE  = 8;   # interlace method not 0 (none) or 1 (Adam7) — both are decoded
+    CHITRA_ERR_BIT_DEPTH  = 9;   # bit_depth × color_type not spec-legal (§ 11.2.2 Table 11.1)
     CHITRA_ERR_DIMENSIONS = 10;  # width/height vs data: lying-IHDR / overflow / bomb caps
     CHITRA_ERR_FILTER     = 11;  # per-row filter byte not in {0,1,2,3,4} (spec § 9)
     CHITRA_ERR_NO_IDAT    = 12;  # structurally valid PNG with zero IDAT (no pixel data)

@@ -5,7 +5,7 @@ description = "chitra (चित्र — image / picture) — pure-Cyrius CPU 
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/chitra"
 language = "cyrius"
-cyrius = "6.5.27"
+cyrius = "6.5.35"
 
 # chitra is a library — no CLI binary. `cyrius build` targets a smoke
 # program that links the full include chain to prove lib.cyr parses clean.

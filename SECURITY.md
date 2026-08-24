@@ -58,7 +58,7 @@ decode. Each maps to a `ChitraErrCode`
 
 - ✅ **PNG signature check** — the 8-byte magic is length-validated and matched
   before any chunk is read (`chitra_png_check_signature`,
-  [`src/png_chunks.cyr:184`](src/png_chunks.cyr)). Failure →
+  [`src/png_chunks.cyr:196`](src/png_chunks.cyr)). Failure →
   `CHITRA_ERR_SIGNATURE`.
 - ✅ **Self-validating bounds-checked cursor** — every read goes through a
   cursor that rejects negative lengths and reads past the end of the input
@@ -122,12 +122,12 @@ decode. Each maps to a `ChitraErrCode`
   all bounds-checked against the remaining input before they are scanned, so a
   truncated stream is detected during the walk rather than read past.
 
-> Note on stale enum comments: the inline comments on `CHITRA_ERR_INTERLACE`
-> and `CHITRA_ERR_BIT_DEPTH` ([`src/error.cyr:26-27`](src/error.cyr)) still say
-> "single-pass only" / "bit_depth != 8". This is cosmetic doc drift — as of
-> 0.2.1 chitra decodes Adam7 and every spec-legal bit depth, so those two codes
-> now fire only for genuinely illegal combinations (e.g. color-type-3 at depth
-> 16), not for legal interlace or sub-byte input. See
+> Note on two narrow codes: `CHITRA_ERR_INTERLACE` and `CHITRA_ERR_BIT_DEPTH`
+> ([`src/error.cyr:26-27`](src/error.cyr)) are validity rejections, not
+> capability limits — chitra decodes Adam7 and every spec-legal bit depth, so
+> they fire only on genuinely illegal values (an interlace method outside
+> {0,1}, or a bit-depth × color-type pair outside § 11.2.2 Table 11.1, e.g.
+> color-type-3 at depth 16). Their enum comments were corrected in 0.3.2. See
 > [`docs/audit/2026-06-26-audit.md`](docs/audit/2026-06-26-audit.md).
 
 ## What chitra does NOT do

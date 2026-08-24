@@ -45,7 +45,7 @@ fn test_chitra_err_no_detail() {
 fn test_chitra_err_name() {
     assert(streq(chitra_err_name(CHITRA_OK), "ok"), "ok name");
     assert(streq(chitra_err_name(CHITRA_ERR_SIGNATURE), "bad PNG signature"),
-    "signature name");
+      "signature name");
     assert(streq(chitra_err_name(CHITRA_ERR_OOM), "out of memory"), "oom name");
     assert(streq(chitra_err_name(CHITRA_ERR_NO_IDAT), "no IDAT chunks"), "no_idat name");
     # Unknown code → the non-null fallback, never a null deref.
@@ -57,7 +57,7 @@ fn test_chitra_err_name() {
 # chitra_version() — major*10000 + minor*100 + patch
 # ================================================================
 fn test_chitra_version() {
-    assert_eq(chitra_version(), 300, "version 0.3.0 packs to 300");
+    assert_eq(chitra_version(), 302, "version 0.3.2 packs to 302");
     return 0;
 }
 

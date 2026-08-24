@@ -30,6 +30,34 @@ if ! grep -q "^## \[$FILE_VERSION\]" CHANGELOG.md; then
     fail=1
 fi
 
+# chitra_version() packs the release as major*10000 + minor*100 + patch.
+# It is a hand-maintained literal in src/png.cyr, so it drifted silently in
+# 0.3.1 (VERSION said 0.3.1, the function still returned 300). Gate it here.
+#
+# VERSION may carry a pre-release suffix: release.yml's tag filter accepts
+# x.y.z-{rc,beta,alpha}.N and requires VERSION == tag. chitra_version() packs
+# only the x.y.z core, so the suffix is stripped BEFORE the arithmetic --
+# feeding "2-rc.1" to $(( )) aborts the whole script under `set -euo pipefail`
+# with a raw bash error instead of a clean FAIL line.
+if [ -f src/png.cyr ]; then
+    if ! printf '%s' "$FILE_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+        echo "  FAIL: VERSION ($FILE_VERSION) is not MAJOR.MINOR.PATCH[-prerelease]"
+        fail=1
+    else
+        IFS=. read -r V_MAJ V_MIN V_PAT <<< "${FILE_VERSION%%-*}"
+        EXPECT_PACKED=$(( V_MAJ * 10000 + V_MIN * 100 + V_PAT ))
+        ACTUAL_PACKED=$(sed -n '/^fn chitra_version()/,/^}/p' src/png.cyr \
+            | grep -oE 'return [0-9]+;' | head -1 | grep -oE '[0-9]+' || echo "")
+        if [ -z "$ACTUAL_PACKED" ]; then
+            echo "  FAIL: could not read chitra_version() literal from src/png.cyr"
+            fail=1
+        elif [ "$ACTUAL_PACKED" != "$EXPECT_PACKED" ]; then
+            echo "  FAIL: chitra_version() returns $ACTUAL_PACKED, VERSION $FILE_VERSION packs to $EXPECT_PACKED"
+            fail=1
+        fi
+    fi
+fi
+
 if [ -f README.md ] && grep -q "^Version:" README.md; then
     README_VERSION=$(grep '^Version:' README.md | head -1 | awk '{print $2}')
     if [ "$README_VERSION" != "$FILE_VERSION" ]; then
@@ -39,7 +67,7 @@ if [ -f README.md ] && grep -q "^Version:" README.md; then
 fi
 
 if [ $fail -eq 0 ]; then
-    echo "  OK: version $FILE_VERSION consistent across VERSION, cyrius.cyml, CHANGELOG.md"
+    echo "  OK: version $FILE_VERSION consistent across VERSION, cyrius.cyml, CHANGELOG.md, README.md, chitra_version()"
 fi
 
 exit $fail

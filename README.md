@@ -1,6 +1,6 @@
 # chitra
 
-Version: 0.3.1
+Version: 0.3.2
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder, a sibling AGNOS package in the mould of `sakshi` /
@@ -73,7 +73,7 @@ and GIF / BMP can join later without a rename.
   Resolved by `cyrius deps` into `lib/`.
 
 All deps are pinned in `cyrius.cyml`; the toolchain pin is
-`cyrius = "6.2.44"`.
+`cyrius = "6.5.35"`.
 
 ## Quick Start
 
