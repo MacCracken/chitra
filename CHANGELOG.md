@@ -5,6 +5,85 @@ All notable changes to chitra are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.2] - 2026-08-24
+
+**BMP channel masks, 16 bpp, and the V4/V5 headers.** The last of the 0.4.0
+deferrals, landed as one cut because they are the same feature seen from three
+angles: 16 bpp was deferred *because* of the masks, and the masks live in the
+extended headers.
+
+**This retires the 32-bpp alpha heuristic — for the files that declare a mask.**
+That precision matters. When a header carries an alpha mask (V3+ or
+`BI_ALPHABITFIELDS`), chitra now reads it instead of inferring. For plain 32-bpp
+`BI_RGB` the fourth byte remains formally undefined and no mask says otherwise,
+so the heuristic still governs there. Claiming the heuristic is simply "gone"
+would be wrong.
+
+### Added
+
+- **`BI_BITFIELDS`** (and `BI_ALPHABITFIELDS`) — explicit per-channel bit masks
+  at 16 and 32 bpp. Masks are read from inside the header for V2 and later, or
+  from the DWORDs following a 40-byte `BITMAPINFOHEADER`.
+- **16 bpp.** Deferred in 0.4.0 on the grounds that 5-5-5 was convention rather
+  than declaration; with the mask machinery in place, `BI_BITFIELDS` declares
+  the layout outright, and the `BI_RGB` default is **documented by Microsoft**
+  as X1R5G5B5 — so applying it is reading the spec, not guessing.
+- **`BITMAPV4HEADER` (108) and `BITMAPV5HEADER` (124)**, plus the V2 (52) and
+  V3 (56) intermediates. All are `BITMAPINFOHEADER` with fields *appended*, so
+  the common 40-byte prefix is parsed as before and only the channel masks at
+  +40..+55 are additionally read. The color-space, gamma, rendering-intent and
+  ICC-profile fields are **skipped, not guessed at**: chitra emits raw
+  sRGB-ordered samples and performs no color management, so honouring a color
+  space would be claiming a transform it does not do.
+- `CHITRA_ERR_BMP_MASK` (33) — a mask that is non-contiguous, overlapping,
+  wider than the pixel word, or leaves no color channel at all.
+- **+155 test assertions** (`bmp.tcyr` 855 → 1,010), every pixel of every new
+  fixture asserted against ImageMagick's decode of the same bytes. The V4 and
+  V5 fixtures encode the same image, so they must decode identically.
+- **+100,000 fuzz cases** — a channel-mask mutation mode that splices random
+  DWORDs into the mask fields, since those four values drive every shift and
+  width the pixel loop uses. BMP fuzz now 2,758,258 assertions, 0 failures.
+
+### Fixed
+
+- **Channel scaling used the wrong formula, twice.** Widening a 5- or 6-bit
+  channel to 8 bits is **bit replication** — shift left and fill the vacated
+  low bits with copies of the field's own high bits — not `v * 255 / max`.
+  The first draft truncated (a 5-bit 16 became 131 instead of 132, every
+  16-bit pixel one level low); round-to-nearest fixed that case but still
+  disagreed at 6 bits (48 → 194, where the answer is 195). Only replication
+  matches the reference at every width and value, because replication is what
+  the hardware mapping actually is. Caught by cross-checking against
+  ImageMagick; a whole-image color shift, not an edge case.
+- **16 bpp was routed through the palette path.** `bpp < 24` had been a safe
+  shorthand for "indexed" since 0.4.0 and stopped being one the moment 16 bpp
+  landed — a packed-pixel depth was falling into the palette-lookup branch and
+  failing with `CHITRA_ERR_BMP_PALETTE`. Narrowed to `bpp < 16`, with a test
+  asserting a 16-bit image is not treated as indexed.
+
+### Security
+
+- **Masks are attacker-controlled and validated as such.** Each must be a
+  single contiguous run of bits (`0xA800` names no channel any format
+  produces); channels must not overlap (two claiming the same bit is a
+  contradiction, not a blend); every mask must fit inside the pixel word (a
+  24-bit mask on a 16-bpp image reads bits that are not there); and at least
+  one color channel must be present, or the pixel names nothing. All reject
+  with `CHITRA_ERR_BMP_MASK` at parse — an unvalidated width feeds a shift, and
+  an unvalidated shift is how a decoder reads outside its own pixel.
+- `BI_BITFIELDS` is rejected at depths where it is meaningless (anything other
+  than 16 or 32 bpp), and an **unknown DIB header size** still rejects — the
+  set of accepted sizes is an allow-list, not a lower bound.
+- The mask DWORDs following a 40-byte header are bounds-checked against the
+  input before they are read, and they push the implicit pixel-data offset
+  along when the file-header offset is 0.
+
+### Notes
+
+- With 0.5.2 the BMP deferral list from 0.4.0 is **empty**. What remains
+  refused is refused *permanently*, not deferred: `BI_JPEG` and `BI_PNG`, which
+  would have a decoder re-enter itself through attacker-controlled data.
+
 ## [0.5.1] - 2026-08-24
 
 **BMP run-length compression.** `BI_RLE8` and `BI_RLE4`, deferred in 0.4.0 with

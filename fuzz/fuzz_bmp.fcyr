@@ -1172,6 +1172,166 @@ fn fx_bmp_rle8_real(len_out): i64 {
     return b;
 }
 
+fn fx_bmp32_v4_alpha(len_out): i64 {
+    var b = alloc(154);
+    store64(len_out, 154);
+    store8(b + 0, 66);
+    store8(b + 1, 77);
+    store8(b + 2, 154);
+    store8(b + 3, 0);
+    store8(b + 4, 0);
+    store8(b + 5, 0);
+    store8(b + 6, 0);
+    store8(b + 7, 0);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 122);
+    store8(b + 11, 0);
+    store8(b + 12, 0);
+    store8(b + 13, 0);
+    store8(b + 14, 108);
+    store8(b + 15, 0);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 4);
+    store8(b + 19, 0);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 2);
+    store8(b + 23, 0);
+    store8(b + 24, 0);
+    store8(b + 25, 0);
+    store8(b + 26, 1);
+    store8(b + 27, 0);
+    store8(b + 28, 32);
+    store8(b + 29, 0);
+    store8(b + 30, 3);
+    store8(b + 31, 0);
+    store8(b + 32, 0);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 0);
+    store8(b + 37, 0);
+    store8(b + 38, 0);
+    store8(b + 39, 0);
+    store8(b + 40, 0);
+    store8(b + 41, 0);
+    store8(b + 42, 0);
+    store8(b + 43, 0);
+    store8(b + 44, 0);
+    store8(b + 45, 0);
+    store8(b + 46, 0);
+    store8(b + 47, 0);
+    store8(b + 48, 0);
+    store8(b + 49, 0);
+    store8(b + 50, 0);
+    store8(b + 51, 0);
+    store8(b + 52, 0);
+    store8(b + 53, 0);
+    store8(b + 54, 0);
+    store8(b + 55, 0);
+    store8(b + 56, 255);
+    store8(b + 57, 0);
+    store8(b + 58, 0);
+    store8(b + 59, 255);
+    store8(b + 60, 0);
+    store8(b + 61, 0);
+    store8(b + 62, 255);
+    store8(b + 63, 0);
+    store8(b + 64, 0);
+    store8(b + 65, 0);
+    store8(b + 66, 0);
+    store8(b + 67, 0);
+    store8(b + 68, 0);
+    store8(b + 69, 255);
+    store8(b + 70, 0);
+    store8(b + 71, 0);
+    store8(b + 72, 0);
+    store8(b + 73, 0);
+    store8(b + 74, 0);
+    store8(b + 75, 0);
+    store8(b + 76, 0);
+    store8(b + 77, 0);
+    store8(b + 78, 0);
+    store8(b + 79, 0);
+    store8(b + 80, 0);
+    store8(b + 81, 0);
+    store8(b + 82, 0);
+    store8(b + 83, 0);
+    store8(b + 84, 0);
+    store8(b + 85, 0);
+    store8(b + 86, 0);
+    store8(b + 87, 0);
+    store8(b + 88, 0);
+    store8(b + 89, 0);
+    store8(b + 90, 0);
+    store8(b + 91, 0);
+    store8(b + 92, 0);
+    store8(b + 93, 0);
+    store8(b + 94, 0);
+    store8(b + 95, 0);
+    store8(b + 96, 0);
+    store8(b + 97, 0);
+    store8(b + 98, 0);
+    store8(b + 99, 0);
+    store8(b + 100, 0);
+    store8(b + 101, 0);
+    store8(b + 102, 0);
+    store8(b + 103, 0);
+    store8(b + 104, 0);
+    store8(b + 105, 0);
+    store8(b + 106, 0);
+    store8(b + 107, 0);
+    store8(b + 108, 0);
+    store8(b + 109, 0);
+    store8(b + 110, 0);
+    store8(b + 111, 0);
+    store8(b + 112, 0);
+    store8(b + 113, 0);
+    store8(b + 114, 0);
+    store8(b + 115, 0);
+    store8(b + 116, 0);
+    store8(b + 117, 0);
+    store8(b + 118, 0);
+    store8(b + 119, 0);
+    store8(b + 120, 0);
+    store8(b + 121, 0);
+    store8(b + 122, 30);
+    store8(b + 123, 20);
+    store8(b + 124, 10);
+    store8(b + 125, 255);
+    store8(b + 126, 60);
+    store8(b + 127, 50);
+    store8(b + 128, 40);
+    store8(b + 129, 200);
+    store8(b + 130, 90);
+    store8(b + 131, 80);
+    store8(b + 132, 70);
+    store8(b + 133, 100);
+    store8(b + 134, 3);
+    store8(b + 135, 2);
+    store8(b + 136, 1);
+    store8(b + 137, 0);
+    store8(b + 138, 0);
+    store8(b + 139, 0);
+    store8(b + 140, 255);
+    store8(b + 141, 255);
+    store8(b + 142, 0);
+    store8(b + 143, 255);
+    store8(b + 144, 0);
+    store8(b + 145, 128);
+    store8(b + 146, 255);
+    store8(b + 147, 0);
+    store8(b + 148, 0);
+    store8(b + 149, 64);
+    store8(b + 150, 0);
+    store8(b + 151, 255);
+    store8(b + 152, 255);
+    store8(b + 153, 0);
+    return b;
+}
+
 fn fx_bmp24_2x2(len_out): i64 {
     var b = alloc(70);
     store64(len_out, 70);
@@ -1397,6 +1557,26 @@ fn fuzz_bmp_rle_delta(seed): i64 {
     return 0;
 }
 
+# ---- channel-mask mutation (0.5.2) ------------------------------------
+# The BI_BITFIELDS masks are four attacker-controlled DWORDs that drive every
+# shift and width the pixel loop uses. A mask that is non-contiguous,
+# overlapping, wider than the pixel word, or absurdly large must be REJECTED at
+# parse rather than reached — an unvalidated width feeds a shift, and an
+# unvalidated shift is how a decoder reads bits that are not there. The V4
+# fixture keeps its masks inside the header at +54, so splice there.
+fn fuzz_bmp_masks(seed): i64 {
+    _fuzz_seed(seed);
+    var lo = 0;
+    var b = fx_bmp32_v4_alpha(&lo);
+    var at = 54 + ((_fuzz_next() % 4) * 4);
+    store8(b + at + 0, _fuzz_next());
+    store8(b + at + 1, _fuzz_next());
+    store8(b + at + 2, _fuzz_next());
+    store8(b + at + 3, _fuzz_next());
+    _bmp_contract(b, lo, "bmp channel-mask mutation");
+    return 0;
+}
+
 # ---- 5. Truncation sweep + degenerate lengths -------------------------
 fn fuzz_bmp_truncate(): i64 {
     var lo = 0;
@@ -1436,6 +1616,10 @@ fn fuzz_bmp_selfcheck(): i64 {
     var rb = fx_bmp_rle8_real(&rlo);
     var rerr = 0;
     assert(chitra_bmp_decode(rb, rlo, &rerr) != 0, "selfcheck: RLE8 fixture decodes clean");
+    var vlo = 0;
+    var vb = fx_bmp32_v4_alpha(&vlo);
+    var verr = 0;
+    assert(chitra_bmp_decode(vb, vlo, &verr) != 0, "selfcheck: V4 mask fixture decodes clean");
     return 0;
 }
 
@@ -1486,6 +1670,13 @@ fn main(): i64 {
         seed = seed + 1;
     }
     println("fuzz_bmp: 100000 RLE delta-splice cases survived");
+
+    seed = 1;
+    while (seed <= 100000) {
+        fuzz_bmp_masks(seed * 1231);
+        seed = seed + 1;
+    }
+    println("fuzz_bmp: 100000 channel-mask mutation cases survived");
 
     fuzz_bmp_truncate();
     println("fuzz_bmp: truncation sweep survived");

@@ -209,8 +209,19 @@ turn it away, so the header parser *is* the entire perimeter:
   both dimensions **at the jump**, because a delta past the end followed by no
   writes is still malformed. Failure → `CHITRA_ERR_BMP_RLE`. A top-down RLE DIB
   is rejected outright, and `BI_RLE8`/`BI_RLE4` must match 8/4 bpp.
-- ✅ **Still-deferred modes reject with distinct codes** rather than
-  half-decoding: `BI_BITFIELDS`, 16 bpp, and the V4/V5 header extensions. **`BI_JPEG` and `BI_PNG` are refused outright** — honouring them
+- ✅ **Channel masks (0.5.2) are validated as attacker input.** The
+  `BI_BITFIELDS` masks are four DWORDs that drive every shift and width the
+  pixel loop uses, so each must be a single **contiguous** run of bits (a split
+  mask names no channel any format produces), channels must not **overlap**
+  (two claiming the same bit is a contradiction, not a blend), every mask must
+  fit **inside the pixel word** (a 24-bit mask on a 16-bpp image reads bits
+  that are not there), and at least one color channel must be present or the
+  pixel names nothing. All reject at parse with `CHITRA_ERR_BMP_MASK` — an
+  unvalidated width feeds a shift, and an unvalidated shift is how a decoder
+  reads outside its own pixel.
+- ✅ **Accepted DIB header sizes are an allow-list**, not a lower bound:
+  12 / 40 / 52 / 56 / 108 / 124. An unrecognised size rejects rather than being
+  treated as "at least an INFO header". **`BI_JPEG` and `BI_PNG` are refused outright** — honouring them
   would have a decoder re-enter itself, and a recursion surface is better
   declined than bounded.
 - ✅ **`planes != 1` is a malformed header, not a feature.** There has never
@@ -325,7 +336,7 @@ beyond spec.
 
 > Coverage note: as of 0.3.3 both hardening gaps are closed. The fuzz gap
 > is closed — `make fuzz` drives both public decode entries
-> over ~2.1 M adversarial cases (7,182,567 assertions, 0 failures),
+> over ~2.2 M adversarial cases (7,482,610 assertions, 0 failures),
 > including JPEG entropy-segment mutation, and asserts the documented
 > `(0, *err_out set)` failure contract as well as survival; and `make bench`
 > measures decode latency for all four formats with a committed CSV history. Note

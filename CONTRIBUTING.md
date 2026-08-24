@@ -99,14 +99,14 @@ Place each in the matching `tests/tcyr/` suite — `error.tcyr` (error paths),
 `interlace.tcyr` (Adam7), `jpeg.tcyr` (baseline JPEG decode + reject paths),
 `png.tcyr` (the core PNG decode matrix), or `subbyte.tcyr` (1/2/4-bit
 grayscale/palette). The suites are globbed by `make test`; each is a standalone
-`main()`. The current baseline is **2,261 assertions across 7 suites** — PRs that
+`main()`. The current baseline is **2,416 assertions across 7 suites** — PRs that
 lower coverage will be asked to add it.
 Confirm the count with `make count-assertions`.
 
 Beyond the suites, two harness kinds exist and are worth running before you
 send a decode change:
 
-- `make fuzz` — `fuzz/*.fcyr`, ~2.1 M adversarial decode cases across four
+- `make fuzz` — `fuzz/*.fcyr`, ~2.2 M adversarial decode cases across four
   harnesses (PNG, JPEG, BMP, GIF — one per format). Asserts
   **both** survival and the documented `(0, *err_out set)` failure contract.
   A new decode path should gain a case here.

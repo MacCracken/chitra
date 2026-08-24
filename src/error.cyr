@@ -52,6 +52,7 @@ enum ChitraErrCode {
     CHITRA_ERR_GIF_NO_IMAGE     = 31;  # structurally valid GIF with no image descriptor
     # ---- BMP run-length (chitra 0.5.1) ----
     CHITRA_ERR_BMP_RLE          = 32;  # corrupt RLE stream: run/delta leaves the bitmap, or truncated
+    CHITRA_ERR_BMP_MASK         = 33;  # BI_BITFIELDS channel mask non-contiguous, overlapping, or out of range
     CHITRA_ERR_OTHER      = 99;  # catch-all
 }
 
@@ -135,6 +136,7 @@ fn chitra_err_name(code): i64 {
     if (code == CHITRA_ERR_GIF_PALETTE)      { return "GIF color table invalid"; }
     if (code == CHITRA_ERR_GIF_NO_IMAGE)     { return "GIF has no image data"; }
     if (code == CHITRA_ERR_BMP_RLE)          { return "corrupt BMP RLE stream"; }
+    if (code == CHITRA_ERR_BMP_MASK)         { return "invalid BMP channel mask"; }
     if (code == CHITRA_ERR_OTHER)      { return "other error"; }
     return "unknown error";
 }

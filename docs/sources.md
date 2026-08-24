@@ -190,11 +190,18 @@ whole crate. The full guard-to-source mapping is in
   Used by: `src/bmp.cyr` throughout. Three notes on what the format does
   **not** pin down, each of which drove a decision:
   - The fourth byte of a 32-bpp `BI_RGB` pixel is **undefined** — alpha is
-    only official under `BI_BITFIELDS` / the V4 masks. chitra treats an
-    all-zero alpha plane as padding and otherwise honours it; ImageMagick
+    only official under `BI_BITFIELDS` / the V4 masks. Where a mask is
+    declared, 0.5.2 reads it; where none is (plain `BI_RGB`), chitra treats an
+    all-zero alpha plane as padding and otherwise honours it. ImageMagick
     agrees, which is what settled the heuristic.
-  - 16-bpp channel layout is 5-5-5 **by convention only** absent
-    `BI_BITFIELDS`, so 16 bpp is deferred rather than guessed.
+  - 16-bpp layout is X1R5G5B5 for `BI_RGB` — **documented**, not merely
+    conventional — and declared outright under `BI_BITFIELDS`. Supported since
+    0.5.2; the 0.4.0 deferral was on the grounds that the mask machinery did
+    not yet exist to read the declaration.
+  - Widening a sub-8-bit channel to 8 bits is **bit replication**, not
+    `v * 255 / max`. Both arithmetic forms disagree with every reference
+    decoder (a 6-bit 48 is 195, not 194), and the error is a whole-image color
+    shift rather than an edge case. Used by: `src/bmp.cyr` `_bmp_scale_to_8`.
   - `BI_JPEG` / `BI_PNG` embed a whole other format inside the DIB. Refused
     outright: honouring them re-enters the decoder.
 - **CompuServe GIF89a specification** —

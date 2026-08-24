@@ -1,35 +1,35 @@
 # chitra — Current State
 
-> **Last refresh**: 2026-08-24 (0.5.1) | **Refresh cadence**: every release.
+> **Last refresh**: 2026-08-24 (0.5.2) | **Refresh cadence**: every release.
 > [`CLAUDE.md`](../../CLAUDE.md) is preferences / process / architecture
 > (durable); this file is **state** (volatile) — it is the home for the
 > version, sizes, and counts `CLAUDE.md` must not inline.
 
 ## Version
 
-**0.5.1** — cut 2026-08-24. **BMP run-length compression.** `BI_RLE8` and
-`BI_RLE4`, deferred in 0.4.0, now decode — the first of the two cuts paying off
-the BMP deferrals. `BI_BITFIELDS`, 16 bpp and the V4/V5 headers remain deferred
-to 0.5.2.
+**0.5.2** — cut 2026-08-24. **BMP channel masks, 16 bpp, and the V4/V5
+headers** — the last of the 0.4.0 deferrals, landed as one cut because they are
+the same feature from three angles: 16 bpp was deferred *because* of the masks,
+and the masks live in the extended headers. **The BMP deferral list is now
+empty**; what remains refused (`BI_JPEG` / `BI_PNG`) is refused permanently.
 
-The roadmap predicted the guards would outweigh the codec, and they did. Three
-properties carry the safety: **termination is structural** (every opcode
-consumes at least two bytes and the cursor only advances, so the loop cannot
-spin); **every write is bounds-checked individually**, so a run past the row
-end is rejected rather than clipped — clipping would silently decode a
-different image than the file encodes; and **delta is checked at the jump**
-against both dimensions, because a delta landing past the end followed by no
-writes is still malformed.
+It retires the 32-bpp alpha heuristic **for files that declare a mask** — the
+precision matters, since plain `BI_RGB` 32 bpp still has no mask to read and
+the heuristic still governs there.
 
-`chitra_version()` → **501**. **2,261 test assertions** across 7 suites,
-**7,182,567 fuzz assertions** across 4 harnesses, and 17 benchmarks — 0
+Two real bugs were found by cross-checking against ImageMagick, both of which
+would have shipped silently: **channel widening is bit replication**, not
+`v * 255 / max` (a 6-bit 48 is 195, not 194 — a whole-image color shift, not an
+edge case), and **16 bpp was falling into the palette path**, because `bpp < 24`
+had been a safe shorthand for "indexed" since 0.4.0 and stopped being one the
+moment 16 bpp landed.
+
+`chitra_version()` → **502**. **2,416 test assertions** across 7 suites,
+**7,482,610 fuzz assertions** across 4 harnesses, and 17 benchmarks — 0
 failures throughout. See [`CHANGELOG.md`](../../CHANGELOG.md).
 
-The previous cut, **0.5.0**, added GIF — the fourth and last common raster
-format, first frame only ([ADR 0005](../adr/0005-gif-first-frame-only.md)).
-
-Released tags: 0.1.0, 0.2.0, 0.2.1, 0.3.0, 0.3.1, 0.3.2, 0.3.3, 0.4.0, 0.5.0
-(SemVer;
+Released tags: 0.1.0, 0.2.0, 0.2.1, 0.3.0, 0.3.1, 0.3.2, 0.3.3, 0.4.0, 0.5.0,
+0.5.1 (SemVer;
 pre-1.0, the public surface is still moving — no API freeze until v1.0).
 
 ## Toolchain
@@ -116,7 +116,7 @@ Shared:
 - `ChitraImage` accessors: `chitra_image_{width,height,pixels,channels,
   seen_iend,source_color_type}`; `chitra_image_free` (a documented no-op
   under the bump allocator).
-- `chitra_version()` → **`501`** (`major*10000 + minor*100 + patch`).
+- `chitra_version()` → **`502`** (`major*10000 + minor*100 + patch`).
 - Error API: `chitra_err_new` / `chitra_err` / `chitra_err_code` /
   `chitra_err_detail` / `chitra_err_name` / `chitra_err_print_name` + enum
   `ChitraErrCode`.
@@ -285,12 +285,14 @@ JPEG (0.3.0):
 
 BMP (0.4.0):
 
-- `bmp.cyr` (662 L) — the whole BMP path in one module: `chitra_bmp_check_signature`,
+- `bmp.cyr` (937 L) — the whole BMP path in one module: `chitra_bmp_check_signature`,
   little-endian readers (BMP is LE where PNG and JPEG are BE), the
   `BITMAPFILEHEADER` + DIB header parse into `ChitraBmpHdr`, the deferred-mode
   rejections, the MSB-first index extractor, the `BI_RLE8`/`BI_RLE4` run-length
   decoder (0.5.1 — opcode loop, per-write bounds checks, delta validated at the
-  jump), and `chitra_bmp_decode` / `chitra_bmp_decode_rgba8`. Depends on `error.cyr` for codes,
+  jump), the `BI_BITFIELDS` channel-mask machinery (0.5.2 — shift/width
+  extraction, contiguity and overlap validation, and bit-replication widening),
+  and `chitra_bmp_decode` / `chitra_bmp_decode_rgba8`. Depends on `error.cyr` for codes,
   `png_chunks.cyr` for the shared ceilings, and `png.cyr` for `ChitraImage`
   — which is why it comes last in the include order.
 
@@ -309,20 +311,21 @@ Include chain: `lib.cyr` (64 L) pulls the stdlib set then
 `error.cyr` → `png_chunks.cyr` → `png_filter.cyr` → `png_color.cyr` →
 `png.cyr` → `jpeg_huffman.cyr` → `jpeg_idct.cyr` → `jpeg_markers.cyr` →
 `jpeg.cyr` → `bmp.cyr` → `gif_lzw.cyr` → `gif.cyr` (the order in
-`[lib].modules`). Domain-module total: **4,411 L** across 12 files, plus
+`[lib].modules`). Domain-module total: **4,686 L** across 12 files, plus
 `lib.cyr`.
 
 ## Sizes
 
-- `dist/chitra.cyr` — **~185 KB** (189,625 bytes / 4,441 lines; `cyrius
-  distlib` reports 4,401 code lines), regenerated by `cyrius distlib`
-  (= `make dist`). This is the artifact consumers link. 0.5.1 adds **no public
-  function at all** — RLE decodes behind the existing `chitra_bmp_decode` — so
-  the only surface change is one new error code (`CHITRA_ERR_BMP_RLE`, 32) and
-  a class of input that previously rejected now succeeding. No existing signature, struct offset or symbol changed, so consumers
+- `dist/chitra.cyr` — **~197 KB** (201,606 bytes / 4,718 lines; `cyrius
+  distlib` reports 4,678 code lines), regenerated by `cyrius distlib`
+  (= `make dist`). This is the artifact consumers link. Like 0.5.1, **0.5.2
+  adds no public function** — masks and 16 bpp decode behind the existing
+  `chitra_bmp_decode` — so the only surface change is one new error code
+  (`CHITRA_ERR_BMP_MASK`, 33) and further input classes that previously
+  rejected now succeeding. No existing signature, struct offset or symbol changed, so consumers
   re-pin mechanically and gain GIF with no code change.
 - `dist/chitra.deps` — the 13-leaf stdlib sidecar consumers resolve against.
-- `build/chitra_smoke` — **~567 KB** (580,624 bytes), built from
+- `build/chitra_smoke` — **~575 KB** (588,960 bytes), built from
   `programs/smoke.cyr` (19 L) via `make build`. It only proves the include
   chain compiles and links clean — chitra is a library, there is no real CLI
   behind it.
@@ -330,14 +333,14 @@ Include chain: `lib.cyr` (64 L) pulls the stdlib set then
 ## Tests + bench
 
 - `make test` (globs `tests/tcyr/*.tcyr`; each is a standalone `main()`) →
-  **2,261 assertions, all pass** across 7 suites:
+  **2,416 assertions, all pass** across 7 suites:
   - `gif.tcyr` — **622** (signature, plain / interlaced 4×4 and 8×8 /
     transparent / animated-first-frame fixtures with **every pixel asserted**,
     the no-image and bad-min-code-size rejections, a truncation sweep and the
     four-format router). Fixtures are real ImageMagick GIFs; expectations were
     corroborated by a second independent decoder, which is what caught the
     KwKwK bug.
-  - `bmp.tcyr` — **855** (signature, 24/32 bpp, 1/4/8 bpp palette,
+  - `bmp.tcyr` — **1,010** (signature, 24/32 bpp, 1/4/8 bpp palette,
     `BITMAPCOREHEADER`, bottom-up **and** top-down producing identical output,
     the 32-bpp undefined-alpha heuristic, deferred-mode + malformed-header
     rejections, an out-of-range palette index, a full truncation sweep, the
@@ -348,12 +351,15 @@ Include chain: `lib.cyr` (64 L) pulls the stdlib set then
     an over-long run, a truncated absolute run, an unterminated stream, a
     depth mismatch and a top-down RLE DIB. The RLE4-encoded, RLE8-absolute and
     RLE4-absolute fixtures encode the **same image by three different opcode
-    paths**, so they must decode identically). Fixture pixel values are
+    paths**, so they must decode identically. Plus the 0.5.2 mask coverage —
+    16 bpp 5-5-5 and 5-6-5, V4 and V5 headers carrying an alpha mask, and the
+    three mask rejections: non-contiguous, overlapping, and wider than the
+    pixel word). Fixture pixel values are
     distinct per position — a decoder with the row order *or* channel order
     wrong returns the right *set* of pixels in the wrong places, and only
     position-sensitive expectations catch that.
   - `error.tcyr` — **20** (error codes, `chitra_err_*` accessors, name
-    round-trips, `chitra_version` → 501).
+    round-trips, `chitra_version` → 502).
   - `interlace.tcyr` — **35** (Adam7 cross-checked against the trusted
     non-interlaced decode for 7 color/depth/odd-dimension cases).
   - `jpeg.tcyr` — **226** (marker scan + non-baseline rejection, SOF0
@@ -372,8 +378,8 @@ Include chain: `lib.cyr` (64 L) pulls the stdlib set then
 - Reference verification is **embedded in the suite**, not a side script:
   the ImageMagick-encoded fixtures live inside `jpeg.tcyr` / `png.tcyr`, so
   a green `make test` *is* the reference cross-check.
-- `make fuzz` (= `cyrius fuzz`, globbing `fuzz/*.fcyr`) → **7,182,567
-  assertions, 0 failures** over **~2.1 M decode cases**, across 4 harnesses —
+- `make fuzz` (= `cyrius fuzz`, globbing `fuzz/*.fcyr`) → **7,482,610
+  assertions, 0 failures** over **~2.2 M decode cases**, across 4 harnesses —
   one per format (2,626 lines). `fuzz_gif.fcyr` carries an **LZW-stream-only**
   mutation mode that leaves the header intact so hostile bits reach the
   decompressor directly.
@@ -437,13 +443,13 @@ path in the library (no chroma planes, no upsample, no color convert).
 
 ## Quality gates
 
-All green at 0.5.1 on cyrius 6.5.35:
+All green at 0.5.2 on cyrius 6.5.35:
 
 | gate | command | result |
 |---|---|---|
-| link check | `make build` | OK, 580,624 bytes, no warnings |
-| tests | `make test` | 2,261/2,261, 0 failures |
-| fuzz | `make fuzz` | 7,182,567/7,182,567, 0 failures (~2.1 M cases) |
+| link check | `make build` | OK, 588,960 bytes, no warnings |
+| tests | `make test` | 2,416/2,416, 0 failures |
+| fuzz | `make fuzz` | 7,482,610/7,482,610, 0 failures (~2.2 M cases) |
 | bench | `make bench` | 17 benchmarks, fixtures self-verified, ~2 s |
 | lint | `make lint` | 0 warnings (incl. `fuzz/*.fcyr` + `tests/bcyr/*.bcyr`) |
 | fmt | `make fmt-check` | clean |
@@ -488,11 +494,6 @@ and it is exactly what drifted in 0.3.1.
 Per [`docs/development/roadmap.md`](roadmap.md), which now sequences the
 0.5.x arc:
 
-- **0.5.2 — BMP `BI_BITFIELDS`, 16 bpp, and the V4/V5 headers.** One coherent
-  piece of work: 16 bpp is deferred *because* of the masks (absent
-  `BI_BITFIELDS` its 5-5-5 layout is convention, not declaration), and the
-  masks live in the V4/V5 headers. Landing it **retires the 32-bpp alpha
-  heuristic** — with a declared alpha mask chitra stops inferring and reads.
 - **0.6.0 — deferred JPEG geometry + surface work**: the T.81 § A.2
   non-interleaved layout (0.3.3 rejects it rather than mis-rendering), and a
   streaming / byte-budget decode API.
@@ -521,3 +522,5 @@ Per [`docs/development/roadmap.md`](roadmap.md), which now sequences the
 - ~~BMP~~ — **shipped in 0.4.0.**
 - ~~GIF~~ — **shipped in 0.5.0** (first frame only, ADR 0005).
 - ~~BMP RLE8/RLE4~~ — **shipped in 0.5.1.**
+- ~~BMP BITFIELDS / 16 bpp / V4-V5 headers~~ — **shipped in 0.5.2.** The BMP
+  deferral list is now empty.
