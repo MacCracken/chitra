@@ -54,8 +54,9 @@ make fuzz                                            # adversarial-input harness
 make bench                                           # decode benchmarks (tests/bcyr/chitra.bcyr)
 make dist                                            # regenerate dist/chitra.cyr via `cyrius distlib`
 make lint fmt-check vet                              # quality gates
-make version-check                                   # VERSION / cyrius.cyml / CHANGELOG / README agree
-make test-all                                        # version-check + dist regen + full test suite
+make version-check                                   # VERSION / cyrius.cyml / CHANGELOG / README / chitra_version() agree
+make test-all                                        # version-check + dist regen + tests + fuzz (the pre-release gate)
+make bench-record                                    # bench + append to bench-history.csv
 make count-assertions                                # NUL-safe assertion total across suites
 ```
 
@@ -125,12 +126,12 @@ CHANGELOG entry and an ADR:
 
 1. **Work phase** — new format support, decode-matrix cells, bug fixes
 2. **Build check** — `make build` (link-check the include chain)
-3. **Test additions** — a `.tcyr` suite cell for every new decode path (happy + reject)
+3. **Test additions** — a `.tcyr` suite cell for every new decode path (happy + reject), and a `fuzz/*.fcyr` case for any new byte-level surface. A repair without a regression test that was **checked to fail against the pre-repair code** is not finished — a test that passes both ways proves nothing
 4. **Reference verification** — diff decode output against ImageMagick / a known-good corpus
 5. **Internal review** — bounds, memory, correctness, edge cases
-6. **Security check** — any new chunk-length/buffer/inflate-cap handling
+6. **Security check** — any new chunk-length/buffer/inflate-cap handling; `make fuzz` green
 7. **Documentation** — CHANGELOG, `docs/development/state.md`, any ADR the change earned
-8. **Version check** — `make version-check` (VERSION / cyrius.cyml / CHANGELOG / README in sync)
+8. **Version check** — `make version-check` (all five sources of truth in sync)
 9. **Dist regen** — `make dist`, confirm `dist/chitra.cyr` still compiles clean
 10. **Return to step 1**
 
@@ -148,8 +149,11 @@ non-negotiable — re-verify each before tagging.
 5. **Bounds on every read** — truncated input → `CHITRA_ERR_TRUNCATED`, never an OOB read
 6. **Filter-byte validation** — per-row filter ∈ {0,1,2,3,4} → else `CHITRA_ERR_FILTER`
 7. **Spec-legal matrix only** — illegal bit-depth × color-type combos rejected, not guessed
+8. **Unknown critical chunks abort** — § 5.4's ancillary bit is honoured: an unrecognised *critical* chunk changes how the image is to be interpreted, so it is rejected → `CHITRA_ERR_UNSUPPORTED`. Unknown *ancillary* chunks stay skippable — do not let this become blanket rejection
+9. **Chunk ordering + uniqueness** — PLTE and tRNS are each at-most-once and must precede IDAT (§ 5.6 / § 11.3.2). Track "have we seen IDAT" with an explicit flag, never by testing an accumulated byte count: a spec-legal **zero-length IDAT** leaves the count at 0 and defeats the guard
+10. **tRNS keys one exact value** — the § 11.3.2 color key is compared at FULL sample width. Comparing at the truncated 8-bit output width makes every value sharing a high byte transparent
 
-**JPEG** (baseline; see [docs/audit/2026-06-27-audit.md](docs/audit/2026-06-27-audit.md)):
+**JPEG** (baseline; see [docs/audit/2026-06-27-audit.md](docs/audit/2026-06-27-audit.md) and [docs/audit/2026-08-23-audit.md](docs/audit/2026-08-23-audit.md)):
 
 1. **Non-baseline rejection** — progressive / arithmetic / 12-bit / hierarchical-lossless / CMYK rejected at the marker classifier with distinct codes (attack-surface reduction)
 2. **Marker/segment bounds** — every 16-bit segment length validated against the input span
@@ -157,20 +161,26 @@ non-negotiable — re-verify each before tagging.
 4. **Table bounds** — DQT/DHT precision/id checked; Huffman build rejects over-subscription; DECODE rejects out-of-range symbol indices
 5. **Entropy bounds** — DC category ≤ 11, AC size ≤ 10, coefficient index ≤ 63; restart markers resync deterministically
 6. **Plane/dimension caps** — every allocation bounded by `CHITRA_MAX_RAW_BYTES`; upsample indices stay within plane bounds
+7. **Amplification cap** — output:input bounded by `CHITRA_MAX_JPEG_RATIO` → `CHITRA_ERR_DIMENSIONS`. JPEG needs this *more* than PNG does: the entropy bit-reader zero-pads past end-of-data, so a hostile file needs **no scan payload at all** — the declared SOF0 geometry alone drives the work, and the bump allocator never reclaims it
+8. **Only length-bearing markers are skipped by length** — standalone markers (SOI, EOI, RSTn, TEM) and the T.81 Table B.1 reserved range are rejected, not treated as segments. Otherwise the walk reads two attacker bytes as a length and the cursor is steered by the input
+9. **Fill bytes tolerated, both sides** — § B.1.1.2 allows any number of `0xFF` bytes before a marker. The header walk *and* the entropy reader must both collapse the run, or valid files are rejected
+10. **Geometry chitra does not implement is rejected, not approximated** — a single-component scan is non-interleaved per § A.2; since only the interleaved layout is implemented, `H > 1 || V > 1` on a lone component rejects. Mis-rendering a spec-legal file is worse than refusing it
 
 File findings in `docs/audit/YYYY-MM-DD-audit.md`. Severity: CRITICAL / HIGH / MEDIUM / LOW.
 
 ### Closeout Pass (before every minor/major bump)
 
 1. Full test suite — every `.tcyr` passes, zero failures (`make test`)
-2. Reference re-verify — the full decode matrix against ImageMagick
+2. Fuzz clean — `make fuzz` green; both harnesses assert survival **and** the documented `(0, *err_out set)` contract
+3. Reference re-verify — the full decode matrix against ImageMagick
 3. Dead-code / cleanup sweep — stale comments, unused includes, orphaned files
 4. Code-review pass — missed guards, off-by-ones, silently-ignored errors, ABI leaks
 5. Security re-scan — the hardening checklist above
-6. Downstream check — mabda still builds and `gpu_texture_load_png` works against the new `dist/chitra.cyr`
-7. Doc sync — CHANGELOG, roadmap, `docs/development/state.md`, CLAUDE.md (if durable content changed)
-8. Version verify — `make version-check`; intended git tag matches
-9. Clean dist regen — `cyrius distlib` produces a compile-clean bundle
+6. Downstream check — mabda still builds and `gpu_texture_load_png` works against the new `dist/chitra.cyr`; bump the `[deps.chitra]` pins in mabda and kii *after* the tag lands
+7. Benchmark record — `make bench-record`, so `bench-history.csv` has a row per release. Benchmarks are a performance signal, not a correctness gate; they stay out of `test-all` because the numbers are host-dependent
+8. Doc sync — CHANGELOG, roadmap, `docs/development/state.md`, CLAUDE.md (if durable content changed)
+9. Version verify — `make version-check`; intended git tag matches
+10. Clean dist regen — `cyrius distlib` produces a compile-clean bundle
 
 ### Task Sizing
 
@@ -194,6 +204,8 @@ File findings in `docs/audit/YYYY-MM-DD-audit.md`. Severity: CRITICAL / HIGH / M
 - [`docs/development/roadmap.md`](docs/development/roadmap.md) — completed (PNG, baseline JPEG), backlog (GIF, BMP), v1.0 criteria
 - [`docs/development/state.md`](docs/development/state.md) — live state snapshot, refreshed every release
 - [`docs/audit/`](docs/audit/) — security audit reports (`YYYY-MM-DD-audit.md`)
+- [`docs/proposals/`](docs/proposals/) — design notes written *before* a large feature lands (e.g. the baseline-JPEG plan)
+- `fuzz/*.fcyr` (`make fuzz`) and `tests/bcyr/chitra.bcyr` (`make bench`) — the two hardening harnesses; both **generate** their inputs, and both self-verify before asserting anything
 - [`CHANGELOG.md`](CHANGELOG.md) — source of truth for all changes (Keep a Changelog; perf claims carry numbers; breaking changes get a Breaking section)
 
 New quirks land in `docs/architecture/` as numbered items (`NNN-kebab-case.md`).

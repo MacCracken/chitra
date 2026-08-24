@@ -51,6 +51,25 @@ within each, by the module/function that consumes them.
   - Annex A (A.2.1) — component sampling factors Hi/Vi, MCU composition,
     interleaved data-unit ordering. Used by: `src/jpeg.cyr` MCU
     geometry; `src/jpeg.cyr` upsampling layout.
+  - Annex A (A.2) — a scan carrying a SINGLE component is **non-interleaved**
+    (its MCU is one data unit over the component's own dimensions), which
+    diverges from the interleaved layout as soon as the lone component has
+    H > 1 or V > 1. chitra implements only the interleaved geometry and
+    therefore **rejects** that case rather than mis-rendering it (0.3.3,
+    `CHITRA_ERR_UNSUPPORTED`). Used by: `src/jpeg.cyr` decode-scan guard.
+  - § B.1.1.2 — a marker may be preceded by any number of `0xFF` **fill
+    bytes**. Used by: `src/jpeg_huffman.cyr` entropy reader and
+    `src/jpeg_markers.cyr` header walk (0.3.3 — the entropy side previously
+    read the second `0xFF` as a marker code and rejected valid restart
+    streams).
+  - § B.1.1.3 + Table B.1 — which markers are **standalone** (SOI, EOI,
+    RSTn, TEM) versus length-bearing, and the reserved `0x02`–`0xBF` range.
+    Used by: `src/jpeg_markers.cyr` `_jpeg_marker_action` (0.3.3 — these
+    previously fell through to "skip by length", letting attacker bytes
+    steer the cursor).
+  - § B.1.1.5 — `0xFF` data bytes in an entropy-coded segment are stuffed as
+    `FF 00`. Used by: `src/jpeg_huffman.cyr` byte-unstuffing, and by
+    `tests/bcyr/chitra.bcyr`'s bit writer when it synthesises a scan.
   - Annex K — example luminance/chrominance quantization + Huffman tables
     (the standard reference tables). Used by: `tests/tcyr/jpeg.tcyr`
     known-answer table-build tests.
@@ -142,8 +161,15 @@ whole crate. The full guard-to-source mapping is in
 - **W3C PNG Specification, 2nd ed.** <https://www.w3.org/TR/PNG/>
   - § 5.3 — chunk layout + CRC-32. Used by: `src/png_filter.cyr` (per-chunk
     CRC verification, via sankoch's crc32).
+  - § 5.4 — the ancillary bit: a decoder MUST abort on an unrecognised
+    **critical** chunk. Used by: `src/png_filter.cyr` chunk walk (0.3.3 —
+    previously such chunks were skipped; unknown *ancillary* chunks remain
+    skippable).
   - § 5.5–5.6 — chunk ordering constraints. Used by: `src/png_filter.cyr`
-    (IHDR-first, PLTE-before-IDAT, IEND).
+    (IHDR-first, PLTE-before-IDAT, at-most-one-PLTE, IEND; 0.3.3 added the
+    same discipline for tRNS and switched the ordering test from
+    `idat_total > 0` to an explicit `seen_idat` flag, which a spec-legal
+    zero-length IDAT had defeated).
   - § 8 — Adam7 interlace (7-pass). Used by: `src/png_filter.cyr`
     deinterlace.
   - § 9 — filter types 0..4 (None/Sub/Up/Average/Paeth). Used by:
@@ -151,6 +177,10 @@ whole crate. The full guard-to-source mapping is in
   - § 11.2.2 + Table 11.1 — IHDR field validity (color-type × bit-depth
     allow-list). Used by: `src/png_filter.cyr` IHDR validation,
     `src/png_chunks.cyr` `chitra_png_color_channels`.
+  - § 11.3.2 — tRNS semantics: the chunk names ONE exact sample value to
+    treat as transparent. Used by: `src/png_color.cyr` (0.3.3 — the key is
+    now compared at full sample width, so a depth-16 key no longer aliases
+    onto the 256 values sharing its high byte).
 - **RFC 1950 (zlib) + RFC 1951 (DEFLATE)** — IDAT decompression contract;
   § 3.2.5 sets the ~1032:1 ratio backstop behind
   `CHITRA_MAX_INFLATE_RATIO`. **chitra does not implement inflate** — it

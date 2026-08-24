@@ -152,14 +152,23 @@ the DECODE algorithm alone:
 
 - **Byte stuffing.** A `0xFF 0x00` pair in the stream is a literal `0xFF` data
   byte (`_jpeg_br_load_byte` loads the `0xFF` and discards the `0x00`).
-- **Embedded markers stop the reader.** A `0xFF xx` with `xx != 0` (an RSTn, EOI,
-  or any marker) is *not* consumed as data: the marker code is recorded in
-  `BR_MARKER`, `pos` is left pointing **at the `0xFF`** (so a later resync can
-  re-read it), and `BR_CNT` is left 0 so all subsequent bit reads **pad with
-  zeros**. A trailing lone `0xFF` at end-of-data synthesizes an EOI (`0xD9`).
-  This zero-padding-past-marker behavior is what lets a truncated or
+- **Fill bytes are collapsed first (0.3.3).** T.81 § B.1.1.2 permits a marker to
+  be preceded by *any number* of `0xFF` fill bytes, so a run of them is consumed
+  before the next byte is classified. Before 0.3.3 the entropy reader took the
+  second `0xFF` of such a run as the marker code, which made a well-formed
+  `FF FF D0` restart stream fail resync — a **valid file rejected**. The header
+  marker walk had always handled this; only the entropy side was missing it, and
+  the asymmetry is the thing worth remembering here.
+- **Embedded markers stop the reader.** A `0xFF xx` with `xx` neither `0x00` nor
+  `0xFF` (an RSTn, EOI, or any marker) is *not* consumed as data: the marker code
+  is recorded in `BR_MARKER`, `pos` is left pointing **at the last `0xFF`** (so a
+  later resync can re-read it), and `BR_CNT` is left 0 so all subsequent bit reads
+  **pad with zeros**. A trailing lone `0xFF` at end-of-data synthesizes an EOI
+  (`0xD9`). This zero-padding-past-marker behavior is what lets a truncated or
   marker-terminated scan finish the current block deterministically instead of
-  reading out of bounds.
+  reading out of bounds — but note the same property is what makes the JPEG
+  amplification cap necessary (see *Error codes and security ceilings*): a scan
+  needs no payload at all to drive a full-size decode.
 - **Restart resync.** `_jpeg_decode_scan` counts decoded MCUs; when
   `restart_interval > 0` and `mi % ri == 0` (and `mi > 0`), it calls
   `_jpeg_br_restart`, which discards the partial byte (byte-aligns), requires the
@@ -170,9 +179,14 @@ the DECODE algorithm alone:
 
 `_jpeg_decode` and `_jpeg_decode_block` defend the table edges: an undecodable
 code (no length ≤ 16 matched, or a symbol index outside the table's `COUNT`)
-returns −1 → `CHITRA_ERR_JPEG_ENTROPY`; a DC magnitude `t > 16`, or an AC run
-that pushes `k > 63`, is likewise rejected rather than overrunning the 64-coeff
-block.
+returns −1 → `CHITRA_ERR_JPEG_ENTROPY`. The magnitude categories are bounded to
+their 8-bit baseline ranges — **DC `t > 11`** and **AC `s > 10`** are rejected
+(T.81 Tables F.1 / F.2), which is what keeps the subsequent RECEIVE shift and
+EXTEND in range — and an AC run that pushes `k > 63` is rejected rather than
+overrunning the 64-coefficient block. 0.3.3 closed the one asymmetry here: a
+**ZRL** run ending past coefficient 63 used to fall out of the loop as a
+*successful* decode while the equivalent run overrun beside it was rejected; it
+now raises `CHITRA_ERR_JPEG_ENTROPY` too.
 
 ## Cyrius-specific facts (cannot be derived from the algorithm)
 
@@ -221,7 +235,23 @@ pixel/byte/dimension caps come from `png_chunks.cyr`
 `_jpeg_decode_scan` (per-plane and final RGBA byte counts). JPEG adds its own in
 `jpeg_markers.cyr`: `CHITRA_MAX_COMPONENTS` 4, `CHITRA_MAX_SAMP_FACTOR` 4,
 `CHITRA_MAX_BLOCKS_PER_MCU` 10, `CHITRA_MAX_QUANT_TABLES` 4,
-`CHITRA_MAX_HUFF_TABLES` 4. Two specific hardening checks are worth naming:
+`CHITRA_MAX_HUFF_TABLES` 4, and — since 0.3.3 — `CHITRA_MAX_JPEG_RATIO` 4096,
+the output:input amplification ceiling.
+
+That last one is the ceiling a reader is least likely to expect, so it is worth
+stating why it exists separately from the byte caps above. The byte caps bound
+*one* allocation; the ratio cap bounds the allocation against the **input size**.
+JPEG needs that where PNG's equivalent (`CHITRA_MAX_INFLATE_RATIO`) is merely
+prudent, because the entropy bit-reader zero-pads past end-of-data: a hostile
+file supplies a SOF0 declaring 4096×4096 and then *nothing*, and the decoder
+still allocates every plane and runs every IDCT. Combined with the bump
+allocator's never-free property (see
+[`003-bump-allocator-no-free.md`](003-bump-allocator-no-free.md)) the cost is
+cumulative across decodes, so the attack is a handful of ~150-byte files rather
+than a stream of large ones. The cap is checked in `_jpeg_decode_scan` before
+any plane is allocated.
+
+Two further hardening checks are worth naming:
 `_jpeg_parse_sof0` rejects `Hi` or `Vi` of 0 (the CVE-2018-11212 div-by-zero
 class) and rejects duplicate component ids and `ΣHi·Vi > 10`
 ([`../../src/jpeg_markers.cyr`](../../src/jpeg_markers.cyr) lines 340–379); and

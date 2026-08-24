@@ -37,7 +37,7 @@ and GIF / BMP can join later without a rename.
   Adam7's 7 passes are deinterlaced into the same dense buffer the
   non-interlaced path yields, so the color pass is interlace-agnostic.
   Verified against ImageMagick + an interlaced-vs-non-interlaced
-  cross-check (525-assertion suite).
+  cross-check (the suite stood at 525 assertions at that cut).
 - **v0.3.0 — JFIF baseline JPEG.** Adds a baseline (SOF0) JPEG decoder:
   grayscale + YCbCr, all chroma subsampling (4:4:4 / 4:2:2 / 4:2:0), and
   restart markers — Huffman entropy decode, the integer `jpeg_idct_islow`
@@ -72,12 +72,15 @@ and GIF / BMP can join later without a rename.
   and uses it for `gpu_texture_load_png`. A decode failure maps onto
   `GPU_ERR_IMAGE_DECODE`; `ChitraErr` is a 16-byte record
   layout-compatible with mabda's `GpuErr` for that mapping.
-- **kii** (the terminal image → ANSI/ASCII viewer) is where chitra's
-  PNG core is **forked from** — kii's `src/png.cyr` is a proven,
-  fuzz-hardened, W3C-compliant decoder. chitra is a one-time fork plus
-  real new code: a byte-buffer I/O boundary (mabda hands over in-memory
-  bytes, not a path) and a canonical-RGBA8 normalization pass (+ tRNS).
-  No live dependency between the two; kii-bugfix backport is manual.
+- **kii** (the terminal image → ANSI/ASCII viewer) is both chitra's
+  **origin and a consumer**. chitra's PNG core is a one-time fork of kii's
+  proven, fuzz-hardened, W3C-compliant `src/png.cyr`, plus real new code:
+  a byte-buffer I/O boundary (mabda hands over in-memory bytes, not a path)
+  and a canonical-RGBA8 normalization pass (+ tRNS). kii then **adopted
+  chitra back** — its v1.2.0 PNG re-fold deleted its own decoder in favour
+  of `dist/chitra.cyr`, and v1.4.0 wired the JPEG path through
+  `chitra_image_decode`. The fork carries **no live dependency**, so a
+  decode bugfix is a manual backport in whichever direction it is found.
 
 ## Dependencies
 
@@ -92,17 +95,39 @@ All deps are pinned in `cyrius.cyml`; the toolchain pin is
 ## Quick Start
 
 ```bash
-cyrius deps                                   # resolve stdlib + sankoch into lib/
-cyrius build programs/smoke.cyr build/chitra_smoke   # link-check
-make test                                     # CPU assertions across tests/tcyr/
-cyrius distlib                                # → dist/chitra.cyr
+cyrius deps          # resolve stdlib + sankoch + thread into lib/
+make build           # link-check the include chain (→ build/chitra_smoke)
+make test            # 784 assertions across tests/tcyr/
+make fuzz            # ~10⁶ adversarial decode cases (fuzz/*.fcyr)
+make bench           # 12 decode benchmarks (tests/bcyr/chitra.bcyr)
+make dist            # regenerate dist/chitra.cyr — the artifact consumers link
+make test-all        # version-check + dist + test + fuzz (the pre-release gate)
 ```
+
+`make bench` is deliberately **not** part of `test-all`: benchmark numbers are
+host- and load-dependent, so gating a correctness run on them would only
+manufacture flakes. Record a series with `make bench-record`.
 
 ## Design
 
-See the proposal in the mabda repo:
-`docs/proposals/v3.3-chitra-png-decoder-package.md` (the v3.3 "Asset
-Loading" arc, Phase AL.P0).
+Start with [`docs/development/state.md`](docs/development/state.md) for the
+current surface, sizes and decode matrix, then:
+
+- [`docs/architecture/`](docs/architecture/) — the non-obvious constraints
+  (why `lib/` must not be a symlink, why domain modules stay flat for
+  `distlib`, why the bump allocator never frees, how the JPEG pipeline fits
+  together).
+- [`docs/adr/`](docs/adr/) — the decisions and their alternatives (forking
+  kii's decoder, the security model, mabda ABI compatibility, the JPEG
+  decode model).
+- [`docs/guides/getting-started.md`](docs/guides/getting-started.md) —
+  consuming chitra from another package.
+- [`docs/audit/`](docs/audit/) — the security audit reports.
+
+The original package proposal lives in the mabda repo
+(`docs/proposals/v3.3-chitra-png-decoder-package.md`, the v3.3 "Asset
+Loading" arc, Phase AL.P0); chitra's own JPEG design note is
+[`docs/proposals/jpeg-baseline-decoder.md`](docs/proposals/jpeg-baseline-decoder.md).
 
 ## License
 

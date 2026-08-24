@@ -87,6 +87,25 @@ The clean-rejection set is **not a feature gap — it is a primary security
 control.** Rejecting these modes at dispatch removes the most severe JPEG
 CVE classes from chitra before their code paths exist.
 
+### Applied again in 0.3.3: non-interleaved scans
+
+The 0.3.3 audit found that a scan carrying a **single** component is
+non-interleaved per T.81 § A.2 — its MCU is one data unit over the
+component's own dimensions — while chitra computed the interleaved geometry
+unconditionally. The two coincide exactly when the lone component has
+H = V = 1, which is what every real grayscale encoder emits and what every
+in-tree fixture used; they diverge as soon as H > 1 or V > 1, and the
+surplus data units are zero-padded by the bit-reader into fabricated image
+content with no error raised.
+
+This ADR's decision already settled the response: chitra does not implement
+the non-interleaved layout, so it **rejects** (`CHITRA_ERR_UNSUPPORTED`)
+rather than mis-rendering. No new decision was required — the case is
+recorded here because it is the first time the posture was applied to a
+*geometry* rather than to a coding mode, and because implementing the layout
+properly remains open (see
+[`../development/roadmap.md`](../development/roadmap.md)).
+
 ## Consequences
 
 **Positive**:

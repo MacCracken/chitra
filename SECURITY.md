@@ -122,6 +122,56 @@ decode. Each maps to a `ChitraErrCode`
   all bounds-checked against the remaining input before they are scanned, so a
   truncated stream is detected during the walk rather than read past.
 
+Added in **0.3.3** by the [P-1 sweep](docs/audit/2026-08-23-audit.md). That
+audit found **no memory-safety defect** — no out-of-bounds access and no
+integer overflow into an allocation — so the mitigations below are
+conformance, resource and defence-in-depth rather than exploit fixes:
+
+- ✅ **Unknown critical chunks abort** — PNG § 5.4's ancillary bit is honoured.
+  An unrecognised *critical* chunk by definition changes how the image is to be
+  interpreted, so rendering the image anyway means rendering a stream whose
+  meaning the decoder does not understand. Failure → `CHITRA_ERR_UNSUPPORTED`.
+  Unknown *ancillary* chunks remain skippable, and a dedicated test asserts
+  that so this cannot silently become blanket rejection.
+- ✅ **tRNS ordering and uniqueness** — tRNS is now at-most-once and must
+  precede IDAT, matching the discipline PLTE always had. The PLTE ordering test
+  also moved from an accumulated byte count to an explicit `seen_idat` flag: a
+  spec-legal **zero-length IDAT** adds nothing to the count and had defeated
+  the old guard. Failure → `CHITRA_ERR_BAD_CHUNK`.
+- ✅ **JPEG amplification cap** — output:input is bounded by
+  `CHITRA_MAX_JPEG_RATIO`, the JPEG analogue of the PNG inflate-ratio cap.
+  JPEG needs it *more*: the entropy bit-reader zero-pads past end-of-data, so a
+  hostile file needs **no scan payload at all** — the declared SOF0 geometry
+  alone drives every allocation and every IDCT. Because the bump allocator
+  never reclaims, that made exhaustion **cumulative across decodes**: a handful
+  of ~150-byte files rather than a stream of large ones. Demonstrated, not
+  argued — with the cap disabled a 150-byte fixture decodes to a full
+  4096×4096 image. Failure → `CHITRA_ERR_DIMENSIONS`.
+- ✅ **Marker classification is exhaustive** — standalone markers (SOI, EOI,
+  RSTn, TEM) and the T.81 Table B.1 reserved range are rejected rather than
+  skipped by length. Treating them as segments made the walk read the next two
+  stream bytes as a length and skip that far: bounds-checked, so never an
+  overread, but a cursor steered by attacker input. Failure →
+  `CHITRA_ERR_JPEG_MARKER`.
+- ✅ **Entropy-stream conformance** — `0xFF` fill runs are collapsed on both
+  the header and entropy sides (§ B.1.1.2), and a ZRL run past coefficient 63
+  is rejected like the run overrun beside it instead of exiting as a clean
+  decode. The first accepts valid input that was previously refused; the second
+  refuses corrupt input that was previously accepted.
+- ✅ **The error path cannot fail silently** — `chitra_err_new` no longer
+  returns `0` when its 16-byte allocation fails. It previously stored through a
+  null pointer *and* returned 0, which every caller reads as "no error" —
+  inverting the failure contract at the exact moment a failure must be
+  reported. A BSS-resident fallback `ChitraErr` keeps the contract intact once
+  the heap is gone.
+- ✅ **Geometry chitra does not implement is refused, not approximated** — a
+  single-component scan is non-interleaved per T.81 § A.2; only the interleaved
+  layout is implemented, so `H > 1 || V > 1` on a lone component rejects
+  (`CHITRA_ERR_UNSUPPORTED`) rather than emitting zero-padded, fabricated
+  pixels. Note this **rejects input that 0.3.2 decoded** — deliberately; see
+  the CHANGELOG's *Behaviour changes* section for the full list of four such
+  input classes.
+
 > Note on two narrow codes: `CHITRA_ERR_INTERLACE` and `CHITRA_ERR_BIT_DEPTH`
 > ([`src/error.cyr:26-27`](src/error.cyr)) are validity rejections, not
 > capability limits — chitra decodes Adam7 and every spec-legal bit depth, so

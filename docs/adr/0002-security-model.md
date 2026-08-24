@@ -126,11 +126,41 @@ the audit ([`../audit/2026-06-26-audit.md`](../audit/2026-06-26-audit.md)).
 | Palette images require non-empty, in-bounds PLTE | `src/png_color.cyr:157`,`:272`-`280` | `CHITRA_ERR_BAD_CHUNK` |
 | Allocation-failure check on every alloc | throughout `src/png_filter.cyr`, `src/png_color.cyr`, `src/png.cyr` | `CHITRA_ERR_OOM` |
 
+**Added in 0.3.3** (see [`../audit/2026-08-23-audit.md`](../audit/2026-08-23-audit.md)).
+The first four close gaps in the PNG perimeter; the rest extend the same
+posture to the JPEG path, which until then had no analogue of the inflate
+ratio cap:
+
+| Guard | Code | Error |
+|---|---|---|
+| Unknown **critical** chunk aborts (§ 5.4 ancillary bit) | `src/png_filter.cyr` chunk walk | `CHITRA_ERR_UNSUPPORTED` |
+| tRNS at-most-once and pre-IDAT (§ 5.6 / § 11.3.2) | `src/png_filter.cyr` chunk walk | `CHITRA_ERR_BAD_CHUNK` |
+| PLTE ordering tracked by an explicit `seen_idat` flag, not an accumulated byte count (a zero-length IDAT is spec-legal and defeated the old test) | `src/png_filter.cyr` chunk walk | `CHITRA_ERR_BAD_CHUNK` |
+| tRNS color key compared at FULL sample width (§ 11.3.2 names one exact value) | `src/png_color.cyr` color types 0 / 2 | — (correctness) |
+| `chitra_err_new` cannot return 0 — a BSS fallback `ChitraErr` keeps the failure contract intact when the heap is gone | `src/error.cyr` | — (contract) |
+| JPEG output:input amplification cap `CHITRA_MAX_JPEG_RATIO` | `src/jpeg.cyr` decode-scan entry | `CHITRA_ERR_DIMENSIONS` |
+| Non-segment JPEG markers rejected, not skipped by length (T.81 Table B.1) | `src/jpeg_markers.cyr` `_jpeg_marker_action` | `CHITRA_ERR_JPEG_MARKER` |
+| `0xFF` fill runs collapsed on **both** the header and entropy sides (§ B.1.1.2) | `src/jpeg_markers.cyr`, `src/jpeg_huffman.cyr` | — (accepts valid input) |
+| ZRL run past coefficient 63 rejected, matching the run overrun beside it | `src/jpeg_huffman.cyr` AC loop | `CHITRA_ERR_JPEG_ENTROPY` |
+
+The JPEG amplification cap deserves its own note, because it is the one
+guard whose *necessity* is stronger here than in the PNG case it mirrors.
+PNG bounds inflate output against IDAT input, and a hostile PNG must at
+least supply IDAT bytes to expand. A hostile JPEG need supply nothing: the
+entropy bit-reader zero-pads past end-of-data, so the declared SOF0
+geometry alone drives every allocation and every IDCT. Combined with a bump
+allocator that never reclaims (see
+[`../architecture/003-bump-allocator-no-free.md`](../architecture/003-bump-allocator-no-free.md)),
+that made resource exhaustion **cumulative across decodes** — a handful of
+~150-byte files, not a stream of large ones.
+
 Test coverage exercises each cap and rejection path; the suite counts
-live in [`../development/state.md`](../development/state.md). There is
-**no in-tree fuzz or benchmark harness yet** — the README calls the
-decoder "fuzz-corpus-tested" from its kii lineage, but chitra itself
-ships neither file; both are tracked gaps (see Consequences).
+live in [`../development/state.md`](../development/state.md). As of 0.3.3
+the perimeter is also exercised **generatively**: `make fuzz` drives both
+public decode entries over ~10⁶ adversarial cases and asserts not only
+survival but the documented `(0, *err_out set)` failure contract, and
+`make bench` records the decode cost of the guarded paths. Both were
+tracked gaps in this ADR's original text; both are now closed.
 
 ## Consequences
 

@@ -26,8 +26,11 @@ isn't on your PATH yet, see the agnosticos bootstrap.
 ```bash
 cyrius deps        # resolve stdlib + sankoch + thread into lib/
 make build         # link-check: builds build/chitra_smoke from programs/smoke.cyr
-make test          # 728 assertions across tests/tcyr/
+make test          # 784 assertions across tests/tcyr/
+make fuzz          # ~10⁶ adversarial decode cases across fuzz/*.fcyr
+make bench         # 12 decode benchmarks (tests/bcyr/chitra.bcyr)
 make dist          # = cyrius distlib → dist/chitra.cyr
+make test-all      # version-check + dist + test + fuzz — the pre-release gate
 ```
 
 A few notes on what each step proves:
@@ -42,7 +45,18 @@ A few notes on what each step proves:
   and exits 0.
 - **`make test`** runs the five suites under `tests/tcyr/` — each is a
   standalone `main()`: `error.tcyr` (20), `interlace.tcyr` (35),
-  `jpeg.tcyr` (203), `png.tcyr` (327), `subbyte.tcyr` (143).
+  `jpeg.tcyr` (226), `png.tcyr` (360), `subbyte.tcyr` (143).
+- **`make fuzz`** drives both public decode entries over random,
+  signature-prefixed, bit-flipped, truncated and entropy-mutated input —
+  ~1,000,237 cases. It asserts **both** that the decoder survives and that
+  it honours the documented contract (failure returns 0 *and* sets
+  `*err_out`). Part of `make test-all`.
+- **`make bench`** measures decode latency. It generates its own fixtures
+  at 256×256 — the test fixtures above are 2×2..16×16 and would measure
+  fixed overhead, not throughput — and decode-verifies each before timing
+  it. Deliberately **not** in `test-all`: the numbers are host-dependent.
+  Record a series with `make bench-record` →
+  [`bench-history.csv`](../../bench-history.csv).
 - **`make dist`** concatenates the flat source modules into the single
   distributable `dist/chitra.cyr` — see
   [architecture note 002](../architecture/002-flat-modules-distlib-concatenation.md).
@@ -57,7 +71,7 @@ released tag and pulling that one module:
 ```toml
 [deps.chitra]
 git     = "https://github.com/MacCracken/chitra"
-tag     = "0.3.2"
+tag     = "0.3.3"
 modules = ["dist/chitra.cyr"]
 ```
 
@@ -139,7 +153,9 @@ no-op: the stdlib `alloc` is a bump allocator with no per-block free —
 see [architecture note 003](../architecture/003-bump-allocator-no-free.md).
 
 You can probe the linked version at runtime with `chitra_version()`,
-which returns `302` for 0.3.2 (`major*10000 + minor*100 + patch`).
+which returns `303` for 0.3.3 (`major*10000 + minor*100 + patch`).
+`make version-check` gates that literal against `VERSION`, so it cannot
+drift silently again.
 
 ## Error handling
 
