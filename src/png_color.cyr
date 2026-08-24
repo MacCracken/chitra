@@ -46,6 +46,28 @@
 #   - tRNS wrong length for the color type      -> CHITRA_ERR_BAD_CHUNK
 #       (gray:2 bytes, RGB:6 bytes, palette:<=entry_count bytes)
 # ================================================================
+# _png_scale16 — one 16-bit sample, reduced to 8 bits.
+#
+# It is a RESCALE, not a truncation: PNG § 13.13 gives the conversion between
+# sample depths as
+# `floor(input * MAXOUT / MAXIN + 0.5)`, and `(v * 255 + 32767) / 65535` is
+# that formula in integer arithmetic (65535/2 = 32767 is the round-half-up
+# bias). `v * 255` peaks at 16,711,425, nowhere near an i64 edge.
+#
+# chitra took the HIGH BYTE through 0.7.0, which is libpng's `png_set_strip_16`
+# — a function libpng itself documents as the fast, inaccurate option next to
+# `png_set_scale_16`. It is wrong by up to 1 per channel, and it is wrong
+# exactly where 16-bit precision was the point of the file: measured on a
+# depth-16 grayscale fixture, samples 0x00FF and 0x01FF reduced to 0 and 1
+# where ImageMagick gives 1 and 2. The tree's own doc called the reduction
+# "unchanged rendered output", which was a claim about a reference nobody had
+# checked it against.
+# ================================================================
+fn _png_scale16(v): i64 {
+    return (v * 255 + 32767) / 65535;
+}
+
+# ================================================================
 fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
     store64(err_out, 0);
 
@@ -212,9 +234,12 @@ fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
         var i = 0;
         while (i < npix) {
             var so = scan + i * bps;
-            var g = load8(so);          # the 8-bit value the pixel reduces to
-            var gfull = g;              # depth 8: the sample IS g
-            if (bps == 2) { gfull = g * 256 + load8(so + 1); }
+            var g = load8(so);          # depth 8: the sample IS the byte
+            var gfull = g;
+            if (bps == 2) {
+                gfull = g * 256 + load8(so + 1);
+                g = _png_scale16(gfull);
+            }
             var a = 255;
             if (gfull == key_g) { a = 0; }
             var o = out + i * 4;
@@ -255,9 +280,18 @@ fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
             var gf = g;
             var bf = b;
             if (bps == 2) {
+                # Build the full-width values FIRST — they are what the § 11.3.2
+                # key compares against — then reduce. Deriving one from the
+                # other in the wrong order is the trap here: through 0.7.0 the
+                # reduced value was the untouched high byte, so `rf = r * 256 +
+                # ...` happened to work; with a rescale it would key on a
+                # different number entirely.
                 rf = r * 256 + load8(s + 1);
                 gf = g * 256 + load8(s + 3);
                 bf = b * 256 + load8(s + 5);
+                r = _png_scale16(rf);
+                g = _png_scale16(gf);
+                b = _png_scale16(bf);
             }
             var a = 255;
             if (rf == key_r && gf == key_g2 && bf == key_b) { a = 0; }
@@ -321,6 +355,10 @@ fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
             var s = scan + i * 2 * bps;
             var g = load8(s + 0);
             var a = load8(s + 1 * bps);
+            if (bps == 2) {
+                g = _png_scale16(g * 256 + load8(s + 1));
+                a = _png_scale16(a * 256 + load8(s + 3));
+            }
             var o = out + i * 4;
             store8(o + 0, g);
             store8(o + 1, g);
@@ -337,10 +375,23 @@ fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
         while (i < npix) {
             var s = scan + i * 4 * bps;
             var o = out + i * 4;
-            store8(o + 0, load8(s + 0));
-            store8(o + 1, load8(s + 1 * bps));
-            store8(o + 2, load8(s + 2 * bps));
-            store8(o + 3, load8(s + 3 * bps));
+            # Depth 8 stays a straight byte copy: hoisting the rescale behind
+            # one branch per pixel keeps the common path exactly as fast as it
+            # was. A per-SAMPLE helper call here cost 13% on png_rgba8_256,
+            # which is a real price to pay on every 8-bit image for a change
+            # that only concerns 16-bit ones.
+            if (bps == 1) {
+                store8(o + 0, load8(s + 0));
+                store8(o + 1, load8(s + 1));
+                store8(o + 2, load8(s + 2));
+                store8(o + 3, load8(s + 3));
+            }
+            if (bps == 2) {
+                store8(o + 0, _png_scale16(load8(s + 0) * 256 + load8(s + 1)));
+                store8(o + 1, _png_scale16(load8(s + 2) * 256 + load8(s + 3)));
+                store8(o + 2, _png_scale16(load8(s + 4) * 256 + load8(s + 5)));
+                store8(o + 3, _png_scale16(load8(s + 6) * 256 + load8(s + 7)));
+            }
             i = i + 1;
         }
         return out;

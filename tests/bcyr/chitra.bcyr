@@ -231,7 +231,23 @@ fn _fail(label): i64 {
     return 0;
 }
 
-fn _verify_png(bytes, len, w, h, ct, label): i64 {
+# The 8-bit value a generated sample decodes to. At depth 8 that is the sample
+# itself; at depth 16 the generator writes high byte `s` and low byte
+# `(s * 7) & 255`, and chitra RESCALES the pair per PNG § 13.13 rather than
+# keeping the high byte (0.7.1).
+#
+# This helper exists because the verifier used to expect `s` outright, which
+# was the truncation rule restated — the harness was checking chitra against
+# chitra, exactly as the depth-16 test cells were. It caught the 0.7.1 change
+# and aborted the run, which is the harness working: a benchmark whose fixture
+# decodes wrongly is timing the wrong thing.
+fn _expect8(s, depth): i64 {
+    if (depth == 8) { return s; }
+    var v = s * 256 + ((s * 7) & 255);
+    return (v * 255 + 32767) / 65535;
+}
+
+fn _verify_png(bytes, len, w, h, ct, depth, label): i64 {
     var err = 0;
     var img = chitra_png_decode(bytes, len, &err);
     if (img == 0) { _fail(label); return 0; }
@@ -251,19 +267,21 @@ fn _verify_png(bytes, len, w, h, ct, label): i64 {
         var o = px + idx * 4;
         var s0 = _sample(x, y, 0);
         if (ct == 0) {
-            if (load8(o + 0) != s0) { _fail(label); return 0; }
+            if (load8(o + 0) != _expect8(s0, depth)) { _fail(label); return 0; }
             if (load8(o + 3) != 255) { _fail(label); return 0; }
         }
         if (ct == 2) {
-            if (load8(o + 0) != s0) { _fail(label); return 0; }
-            if (load8(o + 1) != _sample(x, y, 1)) { _fail(label); return 0; }
-            if (load8(o + 2) != _sample(x, y, 2)) { _fail(label); return 0; }
+            if (load8(o + 0) != _expect8(s0, depth)) { _fail(label); return 0; }
+            if (load8(o + 1) != _expect8(_sample(x, y, 1), depth)) { _fail(label); return 0; }
+            if (load8(o + 2) != _expect8(_sample(x, y, 2), depth)) { _fail(label); return 0; }
         }
         if (ct == 6) {
-            if (load8(o + 0) != s0) { _fail(label); return 0; }
-            if (load8(o + 3) != _sample(x, y, 3)) { _fail(label); return 0; }
+            if (load8(o + 0) != _expect8(s0, depth)) { _fail(label); return 0; }
+            if (load8(o + 3) != _expect8(_sample(x, y, 3), depth)) { _fail(label); return 0; }
         }
         if (ct == 3) {
+            # Palette indices are 8-bit whatever the sample depth, and the PLTE
+            # entries are bytes — no rescale applies on this path.
             if (load8(o + 0) != s0) { _fail(label); return 0; }
             if (load8(o + 1) != ((s0 * 3) & 255)) { _fail(label); return 0; }
             if (load8(o + 2) != ((s0 * 7) & 255)) { _fail(label); return 0; }
@@ -487,7 +505,7 @@ fn _ok(label): i64 {
 fn _check_png(w, h, ct, depth, il, label): i64 {
     var lo = 0;
     var b = _mk_png(w, h, ct, depth, il, &lo);
-    if (_verify_png(b, lo, w, h, ct, label) == 1) { _ok(label); }
+    if (_verify_png(b, lo, w, h, ct, depth, label) == 1) { _ok(label); }
     return 0;
 }
 
@@ -991,7 +1009,7 @@ var ROUNDS = 20;
 fn _bench_png(name, ct, depth, interlace): i64 {
     var lo = 0;
     var bytes = _mk_png(BENCH_DIM, BENCH_DIM, ct, depth, interlace, &lo);
-    if (_verify_png(bytes, lo, BENCH_DIM, BENCH_DIM, ct, name) == 0) { return 0; }
+    if (_verify_png(bytes, lo, BENCH_DIM, BENCH_DIM, ct, depth, name) == 0) { return 0; }
     var b = bench_new(name);
     var err = 0;
     var r = 0;

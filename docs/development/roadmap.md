@@ -1,10 +1,10 @@
 # chitra — Roadmap
 
-> **Last Updated**: 2026-08-24 (0.7.0)
+> **Last Updated**: 2026-08-24 (0.7.1)
 >
 > Sequencing — what ships, in what order, against what gates. Volatile state
 > (current version, sizes, assertion counts, in-flight work) lives in
-> [`state.md`](state.md), not here. **chitra is pre-v1** (current: 0.7.0) and
+> [`state.md`](state.md), not here. **chitra is pre-v1** (current: 0.7.1) and
 > all four decode paths are **feature-complete for their scope** — every spec-legal
 > PNG depth × color-type × interlace combination, and JFIF **baseline** JPEG
 > (grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0, restart markers), decode to
@@ -341,7 +341,7 @@ Two things the plan did not anticipate, both recorded because they generalise:
   chain ends early. A test built on naive truncation would have passed against
   the unrepaired code.
 
-### 0.7.1 — PNG spec conformance: chunks that are forbidden, not merely odd
+### ~~0.7.1 — PNG spec conformance: chunks that are forbidden, not merely odd~~ — SHIPPED
 
 Three § 5.6 / § 11.3.2 rules chitra does not enforce, all found by reading the
 code rather than by any marker in it:
@@ -362,6 +362,21 @@ truncation, and the depth-16 matrix cells assert chitra's own truncation rule
 rather than a reference decode. Cross-check against ImageMagick and either
 confirm the rule or record the divergence — the project's own lesson is that
 this is the only instrument that sees wrong output.
+
+**The cross-check found a divergence, and the rule was wrong.** § 13.13 gives
+the conversion as `floor(input * MAXOUT / MAXIN + 0.5)`; chitra took the high
+byte, which is libpng's `png_set_strip_16` — documented by libpng itself as the
+fast, *inaccurate* option. Samples `0x00FF` and `0x01FF` reduced to 0 and 1
+where ImageMagick gives 1 and 2. All four colour types shared that path, so
+**decoded pixel values changed for every depth-16 image**, and all seven
+depth-16 fixtures are now diffed against ImageMagick byte-for-byte instead of
+against chitra's own arithmetic.
+
+Worth carrying forward: the ct2 tRNS key compare derived its full-width samples
+from the *reduced* ones. That was correct only while the reduction was a
+truncation. A change to how samples are reduced is never local to the
+reduction — anything that reconstructs the original from the output is coupled
+to it.
 
 ### 0.7.2 — BMP and GIF loose ends
 

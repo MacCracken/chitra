@@ -5,6 +5,119 @@ All notable changes to chitra are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.1] - 2026-08-24
+
+**PNG conformance: chunks the spec forbids, and a reduction that was wrong by
+one.** Four gaps, all found by reading the code rather than by any marker in
+it. Three left chitra's posture inverted — it has rejected tRNS-before-PLTE
+since 0.5.3, an ordering ImageMagick tolerates, while accepting chunks the spec
+forbids outright.
+
+**2,833 test assertions** across 10 suites, 0 failures.
+
+### Fixed
+
+- **Depth-16 samples were TRUNCATED to the high byte, not rescaled.** PNG
+  § 13.13 gives the conversion between sample depths as
+  `floor(input * MAXOUT / MAXIN + 0.5)`; chitra took the top byte, which is
+  libpng's `png_set_strip_16` — a function libpng itself documents as the fast,
+  *inaccurate* option beside `png_set_scale_16`. It is wrong by up to 1 per
+  channel, and wrong precisely where 16-bit precision was the point of the
+  file. Measured: samples `0x00FF` and `0x01FF` reduced to **0 and 1** where
+  ImageMagick gives **1 and 2**.
+
+  **This changes decoded pixel values for every depth-16 image.** All four
+  colour types went through the same path (0, 2, 4, 6), so all four move.
+
+  The tree's own doc called the reduction "unchanged rendered output" — a claim
+  about a reference nobody had checked it against. **The depth-16 row of the
+  decode matrix was self-certified**: its cells asserted chitra's own
+  truncation rule. All seven depth-16 fixtures have now been extracted to real
+  `.png` files and diffed against ImageMagick **byte-for-byte, zero
+  differences**, and the expectations carry that provenance.
+
+  One subtlety the change surfaced: the ct2 tRNS key compare derived its
+  full-width samples from the reduced ones. That was safe only while those were
+  untouched high bytes; with rescaling it would have keyed on the wrong number,
+  so it now reads the raw samples.
+- **PLTE was accepted on greyscale images.** § 11.2.3 makes PLTE required for
+  colour type 3, optional for 2 and 6 (a suggested palette), and **forbidden
+  for 0 and 4** — a greyscale image has no palette to suggest. chitra captured
+  it and ignored it. The asymmetry was visible inside one function: the tRNS
+  branch consulted `color_type` eleven lines below a PLTE branch that did not.
+- **tRNS was accepted on colour types 4 and 6.** § 11.3.2 forbids it — those
+  types already carry a full alpha channel, so a tRNS is a second,
+  contradictory statement about the same pixels. Accepted and silently ignored.
+- **Chunks between IDATs were ignored.** § 5.6: *"there shall not be any other
+  chunks between the IDAT chunks"*. chitra fused every IDAT it met regardless
+  of what sat between them, so a stream of IDAT / tEXt / IDAT decoded as though
+  the two payloads were adjacent — a different image than the file describes,
+  with no error. The ordering family this belongs to was enforced for PLTE
+  (0.3.3) and tRNS (0.5.3); the IDAT half of the same sentence never was, while
+  CLAUDE.md's hardening checklist claimed chunk ordering as a PNG guard.
+
+  The guard is a `idat_closed` flag, not a count: **multiple IDAT chunks are
+  not merely legal, they are the normal shape of any PNG over 8 KB**. A control
+  cell pins that consecutive IDATs still decode, and it passes both before and
+  after the repair.
+
+### Behaviour changes
+
+- **Depth-16 pixel values change**, as above. A consumer comparing decoded
+  bytes against stored expectations from 0.7.0 or earlier will see differences
+  of at most 1 per channel — in the direction of every reference decoder.
+- **Three input classes now reject with `CHITRA_ERR_BAD_CHUNK`** that
+  previously decoded: PLTE on ct0/ct4, tRNS on ct4/ct6, and any chunk between
+  IDATs. **ImageMagick accepts all three.** chitra rejects them, which is the
+  same call it already made for chunk ordering: a stream whose structure
+  contradicts its own header is not something to render a guess from.
+
+### Performance
+
+- **`png_rgba16_256` +10.6%** (8.28 ms → 9.16 ms). That is the rescale itself —
+  a multiply, add and divide per sample where there was a byte load — and it is
+  the honest price of the correctness fix on the depth-16 path.
+- **The depth-8 paths are unchanged** (−0.6% to −0.8%, host noise), and keeping
+  them that way took a second pass. The first implementation routed every
+  sample through a helper that returned `load8` at depth 8 — correct, and
+  **+13.0% on `png_rgba8_256`**, because a per-sample call replaced an inline
+  load on the most common decode path in the library. Hoisting the rescale
+  behind one branch per pixel put it back. A depth-16 fix has no business
+  costing anything on 8-bit images.
+
+### Notes
+
+- Fixture recipe for the three rejection cases:
+
+  ```
+  python3 - <<'EOF'
+  import zlib, struct
+  def chunk(t, d):
+      return struct.pack('>I', len(d)) + t + d + struct.pack('>I', zlib.crc32(t+d) & 0xffffffff)
+  SIG = b'\x89PNG\r\n\x1a\n'
+  # PLTE on greyscale
+  open('bad_plte_on_gray.png','wb').write(SIG
+      + chunk(b'IHDR', struct.pack('>IIBBBBB', 2, 1, 8, 0, 0, 0, 0))
+      + chunk(b'PLTE', bytes([1,2,3, 4,5,6]))
+      + chunk(b'IDAT', zlib.compress(b'\x00' + bytes([10, 200])))
+      + chunk(b'IEND', b''))
+  # tRNS on RGBA
+  open('bad_trns_on_rgba.png','wb').write(SIG
+      + chunk(b'IHDR', struct.pack('>IIBBBBB', 1, 1, 8, 6, 0, 0, 0))
+      + chunk(b'tRNS', bytes([0,5, 0,6, 0,7]))
+      + chunk(b'IDAT', zlib.compress(b'\x00' + bytes([10,20,30,255])))
+      + chunk(b'IEND', b''))
+  # a chunk between IDATs (and the legal control)
+  c = zlib.compress(b'\x00' + bytes([10, 200])); h = len(c)//2
+  ihdr = chunk(b'IHDR', struct.pack('>IIBBBBB', 2, 1, 8, 0, 0, 0, 0))
+  open('bad_idat_split.png','wb').write(SIG + ihdr + chunk(b'IDAT', c[:h])
+      + chunk(b'tEXt', b'Comment\x00spliced') + chunk(b'IDAT', c[h:]) + chunk(b'IEND', b''))
+  open('ok_idat_split.png','wb').write(SIG + ihdr + chunk(b'IDAT', c[:h])
+      + chunk(b'IDAT', c[h:]) + chunk(b'IEND', b''))
+  EOF
+  ```
+- No public function, struct offset or error code changed.
+
 ## [0.7.0] - 2026-08-24
 
 **Stream-end honesty.** `chitra_image_seen_iend` exists to answer one question —

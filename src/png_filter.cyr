@@ -392,6 +392,7 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
     # so "idat_total > 0" let a PLTE (or tRNS) slip in after IDAT simply by
     # prefixing an empty IDAT chunk.
     var seen_idat = 0;
+    var idat_closed = 0;   # § 5.6: set once a non-IDAT chunk follows the IDAT run
     var seen_trns = 0;
     var walking = 1;
     while (walking == 1) {
@@ -440,6 +441,19 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
                 }
 
                 if (is_idat == 1) {
+                    # Spec § 5.6: "there shall not be any other chunks between
+                    # the IDAT chunks". chitra fused every IDAT it met through
+                    # 0.7.0 regardless of what sat between them, so a stream
+                    # with IDAT / tEXt / IDAT decoded as though the two payloads
+                    # were adjacent — a different image than the file describes,
+                    # with no error. The ordering family this belongs to
+                    # (PLTE 0.3.3, tRNS 0.5.3) was enforced; the IDAT half of
+                    # the same sentence never was, while CLAUDE.md's hardening
+                    # checklist claimed chunk ordering as a PNG guard.
+                    if (idat_closed == 1) {
+                        store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
+                        return 0;
+                    }
                     seen_idat = 1;
                     idat_total = idat_total + chunk_len;
                     if (idat_total > CHITRA_MAX_RAW_BYTES) {
@@ -455,6 +469,19 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
                     if (seen_idat == 1)      { store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK)); return 0; }
                     if (chunk_len > 768)     { store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK)); return 0; }
                     if (chunk_len % 3 != 0)  { store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK)); return 0; }
+                    # § 11.2.3: PLTE is REQUIRED for colour type 3, OPTIONAL
+                    # for 2 and 6 (a suggested palette), and FORBIDDEN for 0
+                    # and 4 — a greyscale image has no palette to suggest.
+                    # chitra accepted it on every type through 0.7.0, which is
+                    # the same leniency it refuses one branch below for tRNS.
+                    if (load64(raw + RAW_COLOR_TYPE_OFFSET) == 0) {
+                        store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
+                        return 0;
+                    }
+                    if (load64(raw + RAW_COLOR_TYPE_OFFSET) == 4) {
+                        store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
+                        return 0;
+                    }
                     store64(raw + RAW_PLTE_OFF_OFFSET, data_off);
                     store64(raw + RAW_PLTE_LEN_OFFSET, chunk_len);
                     seen_plte = 1;
@@ -481,10 +508,33 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
                             return 0;
                         }
                     }
+                    # § 11.3.2: tRNS is FORBIDDEN for colour types 4 and 6 —
+                    # they already carry a full alpha channel, so a tRNS would
+                    # be a second, contradictory statement about the same
+                    # pixels. chitra accepted it and silently ignored it, which
+                    # left its posture inverted: it REJECTS tRNS-before-PLTE, an
+                    # ordering ImageMagick tolerates, while ACCEPTING a chunk
+                    # the spec forbids outright.
+                    if (load64(raw + RAW_COLOR_TYPE_OFFSET) == 4) {
+                        store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
+                        return 0;
+                    }
+                    if (load64(raw + RAW_COLOR_TYPE_OFFSET) == 6) {
+                        store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
+                        return 0;
+                    }
                     store64(raw + RAW_TRNS_OFF_OFFSET, data_off);
                     store64(raw + RAW_TRNS_LEN_OFFSET, chunk_len);
                     seen_trns = 1;
                 }
+                # The IDAT run ends at the first chunk that is not one. Note
+                # this is set for ANY other chunk, ancillary or critical — the
+                # spec's sentence has no exceptions, and an ancillary chunk is
+                # exactly what a naive writer interleaves.
+                if (is_idat == 0) {
+                    if (seen_idat == 1) { idat_closed = 1; }
+                }
+
                 # Spec § 5.4: bit 5 of the first type byte is the ancillary
                 # bit — clear (uppercase) means CRITICAL. A decoder that does
                 # not recognise a critical chunk MUST abort, because that chunk

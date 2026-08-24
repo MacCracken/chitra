@@ -1,38 +1,38 @@
 # chitra — Current State
 
-> **Last refresh**: 2026-08-24 (0.7.0) | **Refresh cadence**: every release.
+> **Last refresh**: 2026-08-24 (0.7.1) | **Refresh cadence**: every release.
 > [`CLAUDE.md`](../../CLAUDE.md) is preferences / process / architecture
 > (durable); this file is **state** (volatile) — it is the home for the
 > version, sizes, and counts `CLAUDE.md` must not inline.
 
 ## Version
 
-**0.7.0** — cut 2026-08-24. **Stream-end honesty.**
-`chitra_image_seen_iend` exists to answer one question — did the encoded stream
-end the way its format says it should? PNG has answered it honestly since
-0.2.0; **JPEG, BMP and GIF hardcoded `1`**, so on three formats of four the one
-accessor a consumer could use to detect an incomplete stream was a constant.
+**0.7.1** — cut 2026-08-24. **PNG conformance: chunks the spec forbids, and a
+reduction that was wrong by one.**
 
-It matters because chitra deliberately **decodes** incomplete streams rather
-than rejecting them, as libjpeg does. A JPEG truncated inside its entropy data
-returns fabricated zero-padded MCUs; a GIF whose LZW stops early returns a tail
-of palette entry 0 at full alpha. Both are defensible decodes, and both were
-indistinguishable from a complete one. Measured on a 689-byte JPEG before the
-repair: chopping 8 / 20 / 60 bytes gave byte sums of 215,484 / 229,896 /
-143,178 against a correct 223,824, every one reporting a clean close.
+The depth-16 row of the decode matrix was **self-certified** — its cells
+asserted chitra's own truncation rule rather than a reference decode. The
+cross-check the roadmap asked for found a real divergence: PNG § 13.13 gives
+the sample-depth conversion as `floor(input * MAXOUT / MAXIN + 0.5)`, and
+chitra took the high byte instead (libpng's `png_set_strip_16`, which libpng
+documents as the fast, *inaccurate* option). Samples `0x00FF` and `0x01FF`
+reduced to 0 and 1 where ImageMagick gives 1 and 2. **Decoded pixel values
+changed for every depth-16 image**, across all four colour types, and all seven
+depth-16 fixtures are now diffed against ImageMagick byte-for-byte.
 
-JPEG needs **two** conditions — a real EOI *and* an entropy decoder that never
-fabricated bits (the new `BR_EOD` flag). Neither alone is sufficient: the
-marker misses a spliced-in early EOI, and the flag misses an EOI-stripped file
-whose pixels are complete. GIF asks about the **frame**, not the trailer, since
-chitra decodes the first frame only. BMP stays `1`, now deliberately: it has no
-terminator, and its pixel span is fully validated before anything is read.
+Three chunk rules went unenforced, each leaving chitra's posture inverted — it
+has rejected tRNS-before-PLTE since 0.5.3, an ordering ImageMagick tolerates,
+while accepting chunks the spec forbids: **PLTE on colour types 0/4**
+(§ 11.2.3), **tRNS on colour types 4/6** (§ 11.3.2), and **any chunk between
+IDATs** (§ 5.6, which made a spliced stream decode as though the payloads were
+adjacent). All three now reject with `CHITRA_ERR_BAD_CHUNK`; ImageMagick
+accepts all three.
 
-`chitra_version()` → **700**. **2,820 test assertions** across **10 suites**,
+`chitra_version()` → **701**. **2,833 test assertions** across **10 suites**,
 **8,072,804 fuzz assertions**, 17 benchmarks — 0 failures throughout.
 
 Released tags: 0.1.0, 0.2.0, 0.2.1, 0.3.0, 0.3.1, 0.3.2, 0.3.3, 0.4.0, 0.5.0,
-0.5.1, 0.5.2, 0.5.3, 0.6.0, 0.6.1 (SemVer;
+0.5.1, 0.5.2, 0.5.3, 0.6.0, 0.6.1, 0.7.0 (SemVer;
 pre-1.0, the public surface is still moving — no API freeze until v1.0).
 
 ## Toolchain
@@ -120,7 +120,7 @@ Shared:
 - `ChitraImage` accessors: `chitra_image_{width,height,pixels,channels,
   seen_iend,source_color_type}`; `chitra_image_free` (a documented no-op
   under the bump allocator).
-- `chitra_version()` → **`700`** (`major*10000 + minor*100 + patch`).
+- `chitra_version()` → **`701`** (`major*10000 + minor*100 + patch`).
 - Error API: `chitra_err_new` / `chitra_err` / `chitra_err_code` /
   `chitra_err_detail` / `chitra_err_name` / `chitra_err_print_name` + enum
   `ChitraErrCode`.
@@ -164,7 +164,7 @@ color types across every spec-legal bit depth, both scan orders:
 rejected.) **Adam7 interlace** is supported for every cell — the 7 reduced
 passes are filtered independently and deinterlaced into the same dense,
 byte-padded buffer the non-interlaced path produces, so the color pass is
-interlace-agnostic. 16-bit samples truncate to the high byte; sub-byte
+interlace-agnostic. 16-bit samples **rescale** per § 13.13 (`(v*255 + 32767) / 65535`), matching ImageMagick byte-for-byte — they truncated to the high byte through 0.7.0; sub-byte
 grayscale scales ×255/85/17; palette indexes PLTE; tRNS synthesizes alpha.
 
 ### JPEG decode scope (0.3.0)
@@ -367,7 +367,7 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
 ## Tests + bench
 
 - `make test` (globs `tests/tcyr/*.tcyr`; each is a standalone `main()`) →
-  **2,820 assertions, all pass** across 10 suites:
+  **2,833 assertions, all pass** across 10 suites:
   - `gif.tcyr` — **638** (signature, plain / interlaced 4×4 and 8×8 /
     transparent / animated-first-frame fixtures with **every pixel asserted**,
     the no-image and bad-min-code-size rejections, a truncation sweep, the
@@ -399,7 +399,7 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
     wrong returns the right *set* of pixels in the wrong places, and only
     position-sensitive expectations catch that.
   - `error.tcyr` — **20** (error codes, `chitra_err_*` accessors, name
-    round-trips, `chitra_version` → 700).
+    round-trips, `chitra_version` → 701).
   - `interlace.tcyr` — **35** (Adam7 cross-checked against the trusted
     non-interlaced decode for 7 color/depth/odd-dimension cases).
   - `jpeg.tcyr` — **284** (marker scan + non-baseline rejection, SOF0
@@ -500,7 +500,7 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
 | `jpeg_ycbcr420_256` | 91 | 5.95 ms |
 | `png_rgb8_256` | 99 | 6.52 ms |
 | `jpeg_ycbcr422_256` | 108 | 7.09 ms |
-| `png_rgba16_256` | 126 | 8.24 ms |
+| `png_rgba16_256` | 139 | 9.16 ms |
 | `png_rgba8_adam7_256` | 128 | 8.38 ms |
 | `jpeg_ycbcr444_256` | 145 | 9.49 ms |
 | `png_gray8_256` | 153 | 10.03 ms |
@@ -517,12 +517,12 @@ path in the library (no chroma planes, no upsample, no color convert).
 
 ## Quality gates
 
-All green at 0.7.0 on cyrius 6.5.35:
+All green at 0.7.1 on cyrius 6.5.35:
 
 | gate | command | result |
 |---|---|---|
 | link check | `make build` | OK, 588,976 bytes, no warnings |
-| tests | `make test` | 2,820/2,820, 0 failures |
+| tests | `make test` | 2,833/2,833, 0 failures |
 | fuzz | `make fuzz` | 8,072,804/8,072,804, 0 failures (~2.3 M cases) |
 | bench | `make bench` | 17 benchmarks, fixtures self-verified, ~2 s |
 | lint | `make lint` | 0 warnings (incl. `fuzz/*.fcyr` + `tests/bcyr/*.bcyr`) |

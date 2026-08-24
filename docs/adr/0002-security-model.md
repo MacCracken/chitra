@@ -118,11 +118,11 @@ the audit ([`../audit/2026-06-26-audit.md`](../audit/2026-06-26-audit.md)).
 | Decompression-bomb ratio cap (1100:1) | `src/png_filter.cyr:562`-`565` | `CHITRA_ERR_DIMENSIONS` |
 | Inflate failure + exact-size second line | `src/png_filter.cyr:597` | `CHITRA_ERR_INFLATE` |
 | Per-row filter-byte allow-list `{0..4}` | `_chitra_unfilter_row` (`src/png_filter.cyr:39`) → `:615` / deinterlace `:312` | `CHITRA_ERR_FILTER` |
-| Color-pass re-assert of dimension caps | `src/png_color.cyr:80`-`88` | `CHITRA_ERR_DIMENSIONS` |
-| Scanline-buffer sufficiency check | `src/png_color.cyr:89`-`92` | `CHITRA_ERR_DIMENSIONS` |
-| tRNS span re-validated within `(src, len)` | `src/png_color.cyr:103`-`106` | `CHITRA_ERR_BAD_CHUNK` |
-| tRNS length per color-type (gray 2 / RGB 6 / palette ≤ entries) | `src/png_color.cyr:128` / `:200` / `:234` / `:163`,`:284` | `CHITRA_ERR_BAD_CHUNK` |
-| Palette index OOB hard-reject | `src/png_color.cyr:173`, `:292` | `CHITRA_ERR_BAD_CHUNK` |
+| Color-pass re-assert of dimension caps | `src/png_color.cyr:95`-`101` | `CHITRA_ERR_DIMENSIONS` |
+| Scanline-buffer sufficiency check | `src/png_color.cyr:108`-`112` | `CHITRA_ERR_DIMENSIONS` |
+| tRNS span re-validated within `(src, len)` | `src/png_color.cyr:125`-`128` | `CHITRA_ERR_BAD_CHUNK` |
+| tRNS length per color-type (gray 2 / RGB 6 / palette ≤ entries) | `src/png_color.cyr:143`,`:228` (gray) / `:265` (RGB) / `:186`,`:326` (palette) | `CHITRA_ERR_BAD_CHUNK` |
+| Palette index OOB hard-reject | `src/png_color.cyr:198`, `:328` | `CHITRA_ERR_BAD_CHUNK` |
 | Palette images require non-empty, in-bounds PLTE | `src/png_color.cyr:157`,`:272`-`280` | `CHITRA_ERR_BAD_CHUNK` |
 | Allocation-failure check on every alloc | throughout `src/png_filter.cyr`, `src/png_color.cyr`, `src/png.cyr` | `CHITRA_ERR_OOM` |
 
@@ -276,7 +276,7 @@ tracked gaps in this ADR's original text; both are now closed.
 - **Reject palette PNGs (color_type 3) outright.** Considered as a way
   to delete the OOB-palette-read CVE class wholesale; rejected because
   every palette index access is hard bounds-checked against the PLTE
-  entry count (`src/png_color.cyr:173`, `:292`) and palette images
+  entry count (`src/png_color.cyr:198`, `:328`) and palette images
   require a non-empty, in-bounds PLTE span — so the class is closed
   without dropping a spec-mandatory feature.
 - **Relative IDAT cap (e.g. `1.5 × inflated_size`).** Rejected for the

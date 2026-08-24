@@ -118,14 +118,14 @@ decode. Each maps to a `ChitraErrCode`
 - ✅ **Palette-index bounds checks** — every palette pixel index, on both the
   sub-byte and the depth-8 path, is rejected if it points past the PLTE entry
   count, and per-entry tRNS reads are bounded by the tRNS array length
-  ([`src/png_color.cyr:173`](src/png_color.cyr),
-  [`src/png_color.cyr:292`](src/png_color.cyr)). Palette images with a
+  ([`src/png_color.cyr:198`](src/png_color.cyr),
+  [`src/png_color.cyr:328`](src/png_color.cyr)). Palette images with a
   missing/short PLTE are rejected. Failure → `CHITRA_ERR_BAD_CHUNK`.
 - ✅ **PLTE / tRNS structural guards** — PLTE is rejected if duplicated, if it
   appears after IDAT, if its length exceeds 768 bytes, or if it is not a
   multiple of 3; tRNS spans are re-validated within `(src, len)` in the color
   pass and must have the correct length for the color type
-  ([`src/png_color.cyr:103`](src/png_color.cyr)). Failure →
+  ([`src/png_color.cyr:125`](src/png_color.cyr)). Failure →
   `CHITRA_ERR_BAD_CHUNK`.
 - ✅ **Structural completeness checks** — IEND must be zero-length; a
   structurally valid PNG with zero IDAT is rejected before any divide on the
