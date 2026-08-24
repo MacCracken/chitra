@@ -232,13 +232,16 @@ walk itself cannot loop forever: every iteration advances ≥ 2 bytes or termina
 on the `can_read(2)` gate ([`../../src/jpeg_markers.cyr`](../../src/jpeg_markers.cyr)
 lines 398–443).
 
-**Known gap (real).** The JPEG decoder's hardening lineage is the kii/PNG fork's,
-but the JPEG byte-buffer / entropy surface has **not been fuzzed in-tree**: there
-is no in-tree fuzz harness and no benchmark harness yet. Both are v1.0 gates. The
-byte-identical ImageMagick cross-check is correctness evidence, not fuzz
-coverage. The 203 assertions in `jpeg.tcyr` (of 728 total across the 5 suites,
-`make test`) exercise the marker walk, table builds, entropy decode, IDCT, and
-color, but are hand-authored, not generated.
+**Gap closed in 0.3.3.** The JPEG decoder's hardening lineage is the kii/PNG
+fork's, and its byte-buffer / entropy surface was for a long time the one piece
+of new attack surface never fuzzed in-tree. `fuzz/fuzz_jpeg.fcyr` now covers it
+directly, including **entropy-segment-only mutation** — the header is left valid
+so hostile bits reach the bit-reader and `DECODE` rather than being turned away
+at the signature gate. `tests/bcyr/chitra.bcyr` measures the path's cost.
+The 226 assertions in `jpeg.tcyr` (of 784 across the 5 suites, `make test`)
+remain hand-authored known-answer tests — the byte-identical ImageMagick
+cross-check is correctness evidence, and the fuzz harness is now the generated
+coverage that complements it.
 
 ## See also
 

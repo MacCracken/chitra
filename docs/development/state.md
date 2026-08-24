@@ -20,7 +20,8 @@ ZRL overrun rejection, non-segment marker rejection, and the PNG § 5.4 /
 § 5.6 chunk-ordering guards. Every repair carries a regression test verified
 to fail against the pre-repair code. `chitra_version()` → **303**.
 **784 assertions** across 5 suites plus **3,464,838 fuzz assertions** over
-~10⁶ decode cases, 0 failures. See [`CHANGELOG.md`](../../CHANGELOG.md) and
+~10⁶ decode cases, 0 failures. Adds the **benchmark harness** as well, so
+**both** remaining v1.0 hardening gates close in this cut. See [`CHANGELOG.md`](../../CHANGELOG.md) and
 [`docs/audit/2026-08-23-audit.md`](../audit/2026-08-23-audit.md).
 
 Released tags: 0.1.0, 0.2.0, 0.2.1, 0.3.0, 0.3.1, 0.3.2 (SemVer; pre-1.0, the
@@ -322,9 +323,46 @@ across 9 files, plus `lib.cyr`.
     self-check asserting its fixtures decode and its entropy span is wide
     enough to mutate — the first draft silently exercised a 4-byte span, and
     a harness that no-ops is worse than none.
-- **The fuzz v1.0 gate (10⁶ iterations clean) is CLOSED as of 0.3.3.** The
-  **benchmark harness remains open**: decode latency/throughput are still not measured in-repo
-  (no `.bcyr` ships), though `cyrius bench` is available.
+- `make bench` (= `cyrius bench tests/bcyr/chitra.bcyr`) → **12 benchmarks**,
+  ~2 s, new in 0.3.3. The harness **generates its fixtures at realistic sizes**
+  (256×256) rather than timing the 2×2..16×16 test fixtures, which would
+  measure fixed overhead rather than throughput: PNG scanlines go through
+  sankoch's `zlib_compress` so the real inflate + unfilter path runs, Adam7
+  fixtures are interleaved with chitra's own pass-geometry helpers, and JPEG
+  scans are bit-written over the Annex K DC table plus a compact AC table
+  with real DC **and** AC coefficients per block. **Every fixture is
+  decode-verified before it is timed**, and a failed verification aborts the
+  run rather than reporting the cost of the error path.
+  `scripts/bench-csv.sh` (= `make bench-record`) stamps results with
+  timestamp/commit/branch into [`bench-history.csv`](../../bench-history.csv).
+  Deliberately **not** in `make test-all` — benchmark numbers are host- and
+  load-dependent, so gating CI on them would be a flake source.
+- **Both v1.0 hardening gates are CLOSED as of 0.3.3** — the fuzz harness at
+  10⁶ iterations clean, and the benchmark harness with committed CSV history.
+
+### Decode baseline (this host, 256×256 = 65,536 px, minimum of 20 rounds)
+
+| benchmark | ns/px | total |
+|---|---|---|
+| `jpeg_gray_256` | 43 | 2.93 ms |
+| `png_rgba8_256` | 83 | 5.41 ms |
+| `jpeg_ycbcr420_256` | 91 | 5.95 ms |
+| `png_rgb8_256` | 99 | 6.52 ms |
+| `jpeg_ycbcr422_256` | 108 | 7.09 ms |
+| `png_rgba16_256` | 126 | 8.24 ms |
+| `png_rgba8_adam7_256` | 128 | 8.38 ms |
+| `jpeg_ycbcr444_256` | 145 | 9.49 ms |
+| `png_gray8_256` | 153 | 10.03 ms |
+| `png_palette8_256` | 154 | 10.10 ms |
+
+Fixed cost at 16×16 (throughput-irrelevant — the icon case):
+`png_rgba8` **60 µs**, `jpeg_gray` **16 µs**.
+
+These are **host- and load-dependent**, and the per-pixel figure includes
+inflate, whose cost depends on how the generated fixture compresses — compare
+rows from the same host, not across hosts. Adam7 costs ~54 % over the
+equivalent non-interlaced rgba8 decode, and JPEG grayscale is the cheapest
+path in the library (no chroma planes, no upsample, no color convert).
 
 ## Quality gates
 
@@ -335,6 +373,7 @@ All green at 0.3.3 on cyrius 6.5.35:
 | link check | `make build` | OK, 559,656 bytes, no warnings |
 | tests | `make test` | 784/784, 0 failures |
 | fuzz | `make fuzz` | 3,464,838/3,464,838, 0 failures (~10⁶ cases, ~10 s) |
+| bench | `make bench` | 12 benchmarks, fixtures self-verified, ~2 s |
 | lint | `make lint` | 0 warnings, 0 untracked deferrals (now incl. `fuzz/*.fcyr`) |
 | fmt | `make fmt-check` | clean |
 | vet | `make vet` | 1 dep, 0 untrusted, 0 missing |
@@ -380,8 +419,10 @@ Per [`docs/development/roadmap.md`](roadmap.md):
   [2026-06-26 (PNG)](../audit/2026-06-26-audit.md),
   [2026-06-27 (JPEG)](../audit/2026-06-27-audit.md) and
   [2026-08-23 (P-1 sweep, both paths)](../audit/2026-08-23-audit.md).
-- **Benchmark harness** — the one remaining **v1.0 gate** (measure decode
-  latency/throughput; no `.bcyr` ships yet). The fuzz gate closed in 0.3.3.
+- **Both v1.0 hardening gates closed in 0.3.3** — the fuzz harness at 10⁶
+  iterations clean, and the benchmark harness with committed CSV history.
+  What stands between chitra and a v1.0 freeze is now the **API/ABI freeze
+  itself** and the next format, not hardening infrastructure.
 - **Non-interleaved JPEG scans** — 0.3.3 *rejects* single-component scans
   with non-unit sampling factors rather than mis-rendering them
   (`CHITRA_ERR_UNSUPPORTED`). Implementing the T.81 § A.2 layout so they
@@ -394,3 +435,4 @@ Per [`docs/development/roadmap.md`](roadmap.md):
   name strings (both described under *Surface* above).
 - ~~Stale `src/error.cyr` enum comments~~ — **resolved in 0.3.2.**
 - ~~Fuzz harness~~ — **resolved in 0.3.3.**
+- ~~Benchmark harness~~ — **resolved in 0.3.3.**

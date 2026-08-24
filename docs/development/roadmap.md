@@ -9,7 +9,7 @@
 > PNG depth × color-type × interlace combination, and JFIF **baseline** JPEG
 > (grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0, restart markers), decode to
 > canonical RGBA8. What remains before a v1.0 freeze is hardening
-> infrastructure (the bench harness; fuzz landed in 0.3.3), an API/ABI freeze, and the next
+> infrastructure (both harnesses landed in 0.3.3), an API/ABI freeze, and the next
 > formats.
 
 The roadmap is **smallest-first** per AGNOS bite-discipline: each release is a
@@ -64,10 +64,17 @@ surface freeze.
   than re-exercised. The harnesses assert the documented `(0, *err_out set)`
   contract as well as survival. See
   [`docs/audit/2026-08-23-audit.md`](../audit/2026-08-23-audit.md) § 5.
-- [ ] **Benchmark harness + CSV history** — **NOT done.** No benchmark file
-  in-tree yet; decode latency is **not yet measured** for either format. AGNOS
-  shared crates require benches, so a `bench`-backed harness over a fixture
-  size matrix (with committed CSV history) is a v1.0 gate.
+- [x] **Benchmark harness + CSV history** — **DONE in 0.3.3.**
+  `tests/bcyr/chitra.bcyr` (`make bench`) measures decode latency for both
+  formats across 12 benchmarks, and `scripts/bench-csv.sh`
+  (`make bench-record`) appends stamped results to
+  [`bench-history.csv`](../../bench-history.csv). The harness **generates its
+  own fixtures at 256×256** — the in-tree test fixtures are 2×2..16×16 and
+  would measure fixed overhead, not throughput — and decode-verifies each one
+  before timing it. First baseline: PNG rgba8 83 ns/px, Adam7 128 ns/px;
+  JPEG grayscale 43 ns/px, 4:2:0 91 ns/px. Numbers are host- and
+  load-dependent, so the CSV is a within-host series, not a cross-host
+  comparison.
 - [ ] **Public API + ABI freeze** — freeze the PNG surface
   (`chitra_png_decode` / `chitra_png_decode_rgba8`), the JPEG surface
   (`chitra_jpeg_decode` / `chitra_jpeg_decode_rgba8` /
@@ -99,10 +106,9 @@ infrastructure that gates v1.0.
   `[deps.chitra]` re-pin. GIF raises animation / multi-frame questions to
   settle in scope (see Out of scope) before committing; BMP is the simpler
   of the two and likely lands first.
-- **Benchmark harness** (the remaining v1.0 blocker) — a `bench`-backed
-  decode-latency harness with committed CSV history. Decode latency and
-  throughput are still not measured in-repo for either format. The fuzz
-  half of this pair closed in 0.3.3.
+- ~~Fuzz + benchmark harnesses~~ — **both closed in 0.3.3.** The remaining
+  work before a v1.0 freeze is the **API/ABI freeze itself** and the next
+  format, not hardening infrastructure.
 - **Possible streaming / byte-budget API** — a chunked-input or
   bounded-allocation decode entry point for consumers that cannot hand the
   whole encoded buffer at once, or that need a hard memory ceiling. Speculative

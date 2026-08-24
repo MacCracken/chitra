@@ -1,0 +1,637 @@
+# tests/bcyr/chitra.bcyr — chitra decode benchmarks.
+#
+# Usage: cyrius bench tests/bcyr/chitra.bcyr   (= `make bench`)
+#
+# WHAT THIS MEASURES, AND WHY IT BUILDS ITS OWN FIXTURES
+#
+# chitra's in-tree TEST fixtures are 2x2 to 16x16 — deliberately tiny, because
+# a test wants a known-answer, not a workload. Benchmarking those would report
+# almost pure fixed overhead (allocation, header parse, table setup) and tell
+# you nothing about decode THROUGHPUT, which is what a consumer loading a
+# texture actually cares about.
+#
+# So this harness GENERATES its fixtures at run time, at realistic sizes:
+#   - PNG  — real scanlines run through sankoch's `zlib_compress`, so the
+#            decode side exercises the genuine inflate + unfilter path, not a
+#            stored-block shortcut. Adam7 fixtures are interleaved using
+#            chitra's OWN pass-geometry helpers (`_adam7_xs` / `_ys` /
+#            `_xstep` / `_ystep`), so encoder and decoder cannot disagree
+#            about the layout.
+#   - JPEG — assembled with an in-harness MSB-first bit writer (0xFF stuffing
+#            included) over the Annex K DC luminance table plus a compact AC
+#            table, emitting real DC + AC coefficients per block.
+#
+# Every generated fixture is DECODE-VERIFIED before it is timed (see
+# `_verify`). A benchmark that silently measures a rejected input is worse
+# than no benchmark: it reports the cost of the error path and calls it
+# throughput.
+#
+# Reported per benchmark: total/avg/min/max via `bench_report`, plus a
+# `CSV:<name>,<min_ns>` line for bench-history.csv, and a ns/pixel figure so
+# results stay comparable across image sizes.
+
+include "src/lib.cyr"
+
+# ================================================================
+# CSV row for bench-history.csv (schema: timestamp,commit,branch,
+# benchmark,estimate_ns — this emits the last two; scripts/bench-csv.sh
+# prepends the rest).
+# ================================================================
+fn _csv_row(b): i64 {
+    var name = bench_name(b);
+    syscall(1, 1, "CSV:", 4);
+    syscall(1, 1, name, strlen(name));
+    syscall(1, 1, ",", 1);
+    fmt_int(bench_min_ns(b));
+    syscall(1, 1, "\n", 1);
+    return 0;
+}
+
+# Throughput line: ns per pixel at the observed minimum.
+fn _per_pixel(b, npix): i64 {
+    syscall(1, 1, "    ", 4);
+    fmt_int(bench_min_ns(b) / npix);
+    syscall(1, 1, " ns/px over ", 12);
+    fmt_int(npix);
+    syscall(1, 1, " px\n", 4);
+    return 0;
+}
+
+# ================================================================
+# PNG generation — real scanlines, real DEFLATE.
+# ================================================================
+var PNG_SIG_0 = 137;
+
+fn _put_u32be(p, v): i64 {
+    store8(p + 0, (v / 16777216) & 255);
+    store8(p + 1, (v / 65536) & 255);
+    store8(p + 2, (v / 256) & 255);
+    store8(p + 3, v & 255);
+    return 0;
+}
+
+# Append a chunk (len + type + data + CRC32) at `p`; returns the new cursor.
+fn _put_chunk(p, t0, t1, t2, t3, data, dlen): i64 {
+    _put_u32be(p, dlen);
+    store8(p + 4, t0);
+    store8(p + 5, t1);
+    store8(p + 6, t2);
+    store8(p + 7, t3);
+    var i = 0;
+    while (i < dlen) { store8(p + 8 + i, load8(data + i)); i = i + 1; }
+    var c = crc32(p + 4, 4 + dlen);
+    _put_u32be(p + 8 + dlen, c & 4294967295);
+    return p + 12 + dlen;
+}
+
+# Deterministic sample value — a diagonal gradient plus a low-amplitude ripple.
+# Compressible (like real imagery) but not degenerate: a constant image would
+# make DEFLATE trivial and the unfilter path unrealistically cache-friendly.
+fn _sample(x, y, c): i64 {
+    return (x + y * 3 + c * 40 + ((x * y) / 16)) & 255;
+}
+
+# Build a PNG. `ct` is the PNG color type (0/2/3/6), `depth` 8 or 16,
+# `interlace` 0 or 1. Returns the buffer; sets *len_out.
+#
+# Palette (ct 3) emits a 256-entry PLTE and uses the sample value directly as
+# the index, so the color pass does a real per-pixel palette lookup.
+fn _mk_png(w, h, ct, depth, interlace, len_out): i64 {
+    var chans = 1;
+    if (ct == 2) { chans = 3; }
+    if (ct == 6) { chans = 4; }
+    var bypp = chans * (depth / 8);
+    if (ct == 3) { bypp = 1; }
+    var row_bytes = w * bypp;
+
+    # ---- raw (filtered) scanlines: filter byte 0 + row data --------------
+    # Interlaced streams are the 7 Adam7 passes concatenated, each with its
+    # own filter byte per row. Pass geometry comes from chitra's own helpers.
+    var raw_cap = (h + 8) * (row_bytes + 1) + 4096;
+    var raw = alloc(raw_cap);
+    var off = 0;
+    var x = 0;
+    var y = 0;
+    var c = 0;
+    var s = 0;
+    if (interlace == 0) {
+        y = 0;
+        while (y < h) {
+            store8(raw + off, 0);
+            off = off + 1;
+            x = 0;
+            while (x < w) {
+                c = 0;
+                while (c < chans) {
+                    s = _sample(x, y, c);
+                    if (depth == 16) {
+                        store8(raw + off, s);
+                        store8(raw + off + 1, (s * 7) & 255);
+                        off = off + 2;
+                    } else {
+                        store8(raw + off, s);
+                        off = off + 1;
+                    }
+                    c = c + 1;
+                }
+                x = x + 1;
+            }
+            y = y + 1;
+        }
+    } else {
+        var p = 0;
+        while (p < 7) {
+            var xs = _adam7_xs(p);
+            var ys = _adam7_ys(p);
+            var xstep = _adam7_xstep(p);
+            var ystep = _adam7_ystep(p);
+            var pw = _adam7_count(w, xs, xstep);
+            var ph = _adam7_count(h, ys, ystep);
+            if (pw > 0 && ph > 0) {
+                var py = 0;
+                while (py < ph) {
+                    store8(raw + off, 0);
+                    off = off + 1;
+                    var px = 0;
+                    while (px < pw) {
+                        c = 0;
+                        while (c < chans) {
+                            s = _sample(xs + px * xstep, ys + py * ystep, c);
+                            if (depth == 16) {
+                                store8(raw + off, s);
+                                store8(raw + off + 1, (s * 7) & 255);
+                                off = off + 2;
+                            } else {
+                                store8(raw + off, s);
+                                off = off + 1;
+                            }
+                            c = c + 1;
+                        }
+                        px = px + 1;
+                    }
+                    py = py + 1;
+                }
+            }
+            p = p + 1;
+        }
+    }
+
+    # ---- real DEFLATE -----------------------------------------------------
+    var zcap = off + (off / 2) + 4096;
+    var z = alloc(zcap);
+    var zlen = zlib_compress(raw, off, z, zcap);
+
+    # ---- assemble ---------------------------------------------------------
+    var out = alloc(zlen + 4096);
+    store8(out + 0, 137); store8(out + 1, 80);  store8(out + 2, 78);  store8(out + 3, 71);
+    store8(out + 4, 13);  store8(out + 5, 10);  store8(out + 6, 26);  store8(out + 7, 10);
+    var cur = out + 8;
+
+    var ihdr[13];
+    _put_u32be(&ihdr + 0, w);
+    _put_u32be(&ihdr + 4, h);
+    store8(&ihdr + 8, depth);
+    store8(&ihdr + 9, ct);
+    store8(&ihdr + 10, 0);
+    store8(&ihdr + 11, 0);
+    store8(&ihdr + 12, interlace);
+    cur = _put_chunk(cur, 0x49, 0x48, 0x44, 0x52, &ihdr, 13);
+
+    if (ct == 3) {
+        var plte = alloc(768);
+        var e = 0;
+        while (e < 256) {
+            store8(plte + e * 3 + 0, e);
+            store8(plte + e * 3 + 1, (e * 3) & 255);
+            store8(plte + e * 3 + 2, (e * 7) & 255);
+            e = e + 1;
+        }
+        cur = _put_chunk(cur, 0x50, 0x4C, 0x54, 0x45, plte, 768);
+    }
+
+    cur = _put_chunk(cur, 0x49, 0x44, 0x41, 0x54, z, zlen);
+    cur = _put_chunk(cur, 0x49, 0x45, 0x4E, 0x44, out, 0);
+    store64(len_out, cur - out);
+    return out;
+}
+
+# ================================================================
+# Fixture verification. A benchmark that times a REJECTED input is
+# measuring the error path and calling it throughput, so every generated
+# fixture is decoded and spot-checked against the generator before it is
+# timed. Any mismatch aborts the run loudly rather than reporting a number.
+# ================================================================
+var _verify_fail = 0;
+
+fn _fail(label): i64 {
+    _verify_fail = 1;
+    syscall(1, 2, "  VERIFY FAIL: ", 15);
+    syscall(1, 2, label, strlen(label));
+    syscall(1, 2, "\n", 1);
+    return 0;
+}
+
+fn _verify_png(bytes, len, w, h, ct, label): i64 {
+    var err = 0;
+    var img = chitra_png_decode(bytes, len, &err);
+    if (img == 0) { _fail(label); return 0; }
+    if (chitra_image_width(img) != w) { _fail(label); return 0; }
+    if (chitra_image_height(img) != h) { _fail(label); return 0; }
+    var px = chitra_image_pixels(img);
+    # spot-check three interior pixels against the generator
+    var probes[24];        # 3 x i64 — BYTES, not entries
+    store64(&probes + 0, 0);
+    store64(&probes + 8, (h / 2) * w + (w / 2));
+    store64(&probes + 16, w * h - 1);
+    var pi = 0;
+    while (pi < 3) {
+        var idx = load64(&probes + pi * 8);
+        var x = idx % w;
+        var y = idx / w;
+        var o = px + idx * 4;
+        var s0 = _sample(x, y, 0);
+        if (ct == 0) {
+            if (load8(o + 0) != s0) { _fail(label); return 0; }
+            if (load8(o + 3) != 255) { _fail(label); return 0; }
+        }
+        if (ct == 2) {
+            if (load8(o + 0) != s0) { _fail(label); return 0; }
+            if (load8(o + 1) != _sample(x, y, 1)) { _fail(label); return 0; }
+            if (load8(o + 2) != _sample(x, y, 2)) { _fail(label); return 0; }
+        }
+        if (ct == 6) {
+            if (load8(o + 0) != s0) { _fail(label); return 0; }
+            if (load8(o + 3) != _sample(x, y, 3)) { _fail(label); return 0; }
+        }
+        if (ct == 3) {
+            if (load8(o + 0) != s0) { _fail(label); return 0; }
+            if (load8(o + 1) != ((s0 * 3) & 255)) { _fail(label); return 0; }
+            if (load8(o + 2) != ((s0 * 7) & 255)) { _fail(label); return 0; }
+        }
+        pi = pi + 1;
+    }
+    return 1;
+}
+
+# ================================================================
+# JPEG generation — a real entropy-coded baseline scan.
+#
+# There is no JPEG encoder in the dependency set, so this harness writes the
+# scan itself: an MSB-first bit writer (with the mandatory 0xFF byte
+# stuffing), the Annex K.3.1 DC luminance table, and a compact 2-symbol AC
+# table. Each 8x8 block emits a DC coefficient plus three 4-bit AC
+# coefficients and an EOB, so the decode side runs the genuine
+# DECODE / RECEIVE / EXTEND path per block rather than skipping straight to
+# EOB on an all-zero scan.
+# ================================================================
+
+# Bit-writer state (32 bytes): +0 buf, +8 pos, +16 accumulator, +24 bit count.
+fn _bw_init(st, buf): i64 {
+    store64(st + 0, buf);
+    store64(st + 8, 0);
+    store64(st + 16, 0);
+    store64(st + 24, 0);
+    return 0;
+}
+
+fn _bw_put(st, value, nbits): i64 {
+    var i = nbits - 1;
+    var bit = 0;
+    var acc = 0;
+    var n = 0;
+    var buf = 0;
+    var pos = 0;
+    while (i >= 0) {
+        bit = (value / (1 << i)) & 1;
+        acc = load64(st + 16) * 2 + bit;
+        n = load64(st + 24) + 1;
+        store64(st + 16, acc);
+        store64(st + 24, n);
+        if (n == 8) {
+            buf = load64(st + 0);
+            pos = load64(st + 8);
+            store8(buf + pos, acc & 255);
+            pos = pos + 1;
+            # T.81 § B.1.1.5: a 0xFF data byte must be followed by 0x00 so it
+            # is not mistaken for a marker.
+            if ((acc & 255) == 255) {
+                store8(buf + pos, 0);
+                pos = pos + 1;
+            }
+            store64(st + 8, pos);
+            store64(st + 16, 0);
+            store64(st + 24, 0);
+        }
+        i = i - 1;
+    }
+    return 0;
+}
+
+# Pad to a byte boundary with 1-bits (T.81 § F.1.2.3); returns bytes written.
+fn _bw_flush(st): i64 {
+    var n = load64(st + 24);
+    if (n > 0) { _bw_put(st, (1 << (8 - n)) - 1, 8 - n); }
+    return load64(st + 8);
+}
+
+# One block: DC category 0 (code "00"), three AC coefficients via the
+# 2-symbol AC table (symbol 0x04 = run 0, size 4 -> code "01" + 4 magnitude
+# bits), then EOB (code "00").
+fn _emit_block(st, seed): i64 {
+    _bw_put(st, 0, 2);                          # DC: category 0, no extra bits
+    var k = 0;
+    while (k < 3) {
+        _bw_put(st, 1, 2);                      # AC symbol 0x04
+        _bw_put(st, (seed + k * 5) & 15, 4);    # 4-bit magnitude
+        k = k + 1;
+    }
+    _bw_put(st, 0, 2);                          # EOB
+    return 0;
+}
+
+# Build a baseline JPEG. ncomp is 1 (grayscale) or 3 (YCbCr); hs/vs are the
+# luma sampling factors (1,1 = 4:4:4; 2,2 = 4:2:0; 2,1 = 4:2:2). Chroma is
+# always 1,1. Returns the buffer; sets *len_out.
+fn _mk_jpeg(w, h, ncomp, hs, vs, len_out): i64 {
+    var cap = (w * h) + 65536;
+    var b = alloc(cap);
+    var o = 0;
+    var i = 0;
+
+    store8(b + 0, 255); store8(b + 1, 216);     # SOI
+    o = 2;
+
+    # DQT — table 0, 8-bit precision, all entries 2 (a real dequant multiply,
+    # without the quantiser dominating the arithmetic).
+    store8(b + o, 255); store8(b + o + 1, 219);
+    store8(b + o + 2, 0); store8(b + o + 3, 67);
+    store8(b + o + 4, 0);
+    o = o + 5;
+    i = 0;
+    while (i < 64) { store8(b + o + i, 2); i = i + 1; }
+    o = o + 64;
+
+    # SOF0
+    store8(b + o, 255); store8(b + o + 1, 192);
+    var lf = 8 + 3 * ncomp;
+    store8(b + o + 2, (lf / 256) & 255); store8(b + o + 3, lf & 255);
+    store8(b + o + 4, 8);
+    store8(b + o + 5, (h / 256) & 255); store8(b + o + 6, h & 255);
+    store8(b + o + 7, (w / 256) & 255); store8(b + o + 8, w & 255);
+    store8(b + o + 9, ncomp);
+    o = o + 10;
+    store8(b + o + 0, 1); store8(b + o + 1, hs * 16 + vs); store8(b + o + 2, 0);
+    o = o + 3;
+    if (ncomp == 3) {
+        store8(b + o + 0, 2); store8(b + o + 1, 17); store8(b + o + 2, 0);
+        store8(b + o + 3, 3); store8(b + o + 4, 17); store8(b + o + 5, 0);
+        o = o + 6;
+    }
+
+    # DHT — DC table 0 (Annex K.3.1 luminance: BITS 0,1,5,1,1,1,1,1,1,0..,
+    # HUFFVAL 0..11).
+    store8(b + o, 255); store8(b + o + 1, 196);
+    store8(b + o + 2, 0); store8(b + o + 3, 31);
+    store8(b + o + 4, 0);
+    o = o + 5;
+    store8(b + o + 0, 0); store8(b + o + 1, 1); store8(b + o + 2, 5);
+    store8(b + o + 3, 1); store8(b + o + 4, 1); store8(b + o + 5, 1);
+    store8(b + o + 6, 1); store8(b + o + 7, 1); store8(b + o + 8, 1);
+    i = 9;
+    while (i < 16) { store8(b + o + i, 0); i = i + 1; }
+    o = o + 16;
+    i = 0;
+    while (i < 12) { store8(b + o + i, i); i = i + 1; }
+    o = o + 12;
+
+    # DHT — AC table 0: two 2-bit codes, HUFFVAL 0x00 (EOB) and 0x04 (r0/s4).
+    store8(b + o, 255); store8(b + o + 1, 196);
+    store8(b + o + 2, 0); store8(b + o + 3, 21);
+    store8(b + o + 4, 16);
+    o = o + 5;
+    store8(b + o + 0, 0); store8(b + o + 1, 2);
+    i = 2;
+    while (i < 16) { store8(b + o + i, 0); i = i + 1; }
+    o = o + 16;
+    store8(b + o + 0, 0); store8(b + o + 1, 4);
+    o = o + 2;
+
+    # SOS
+    store8(b + o, 255); store8(b + o + 1, 218);
+    var ls = 6 + 2 * ncomp;
+    store8(b + o + 2, (ls / 256) & 255); store8(b + o + 3, ls & 255);
+    store8(b + o + 4, ncomp);
+    o = o + 5;
+    store8(b + o + 0, 1); store8(b + o + 1, 0);
+    o = o + 2;
+    if (ncomp == 3) {
+        store8(b + o + 0, 2); store8(b + o + 1, 0);
+        store8(b + o + 2, 3); store8(b + o + 3, 0);
+        o = o + 4;
+    }
+    store8(b + o + 0, 0); store8(b + o + 1, 63); store8(b + o + 2, 0);
+    o = o + 3;
+
+    # ---- entropy-coded scan ----------------------------------------------
+    var bw[32];
+    _bw_init(&bw, b + o);
+    var mcu_cols = (w + 8 * hs - 1) / (8 * hs);
+    var mcu_rows = (h + 8 * vs - 1) / (8 * vs);
+    var mi = 0;
+    var total = mcu_cols * mcu_rows;
+    var by = 0;
+    var bx = 0;
+    while (mi < total) {
+        by = 0;
+        while (by < vs) {
+            bx = 0;
+            while (bx < hs) {
+                _emit_block(&bw, mi + by * 3 + bx);
+                bx = bx + 1;
+            }
+            by = by + 1;
+        }
+        if (ncomp == 3) {
+            _emit_block(&bw, mi + 1);
+            _emit_block(&bw, mi + 2);
+        }
+        mi = mi + 1;
+    }
+    o = o + _bw_flush(&bw);
+
+    store8(b + o, 255); store8(b + o + 1, 217);   # EOI
+    o = o + 2;
+    store64(len_out, o);
+    return b;
+}
+
+fn _verify_jpeg(bytes, len, w, h, label): i64 {
+    var err = 0;
+    var img = chitra_jpeg_decode(bytes, len, &err);
+    if (img == 0) { _fail(label); return 0; }
+    if (chitra_image_width(img) != w) { _fail(label); return 0; }
+    if (chitra_image_height(img) != h) { _fail(label); return 0; }
+    if (chitra_image_pixels(img) == 0) { _fail(label); return 0; }
+    if (chitra_image_channels(img) != 4) { _fail(label); return 0; }
+    return 1;
+}
+
+# Generate one fixture and prove it round-trips before anything is timed.
+fn _ok(label): i64 {
+    syscall(1, 1, "  ", 2);
+    syscall(1, 1, label, strlen(label));
+    syscall(1, 1, " ok\n", 4);
+    return 0;
+}
+
+fn _check_png(w, h, ct, depth, il, label): i64 {
+    var lo = 0;
+    var b = _mk_png(w, h, ct, depth, il, &lo);
+    if (_verify_png(b, lo, w, h, ct, label) == 1) { _ok(label); }
+    return 0;
+}
+
+fn _check_jpeg(w, h, ncomp, hs, vs, label): i64 {
+    var lo = 0;
+    var b = _mk_jpeg(w, h, ncomp, hs, vs, &lo);
+    if (_verify_jpeg(b, lo, w, h, label) == 1) { _ok(label); }
+    return 0;
+}
+
+# ================================================================
+# Benchmarks
+#
+# NOTE ON MEMORY: chitra's allocator is a bump allocator and
+# `chitra_image_free` is a documented no-op, so every round of every
+# benchmark permanently retains its output buffer. That is a property of the
+# library, not of this harness — but it means ROUNDS and BENCH_DIM trade
+# directly against resident memory, and that a very long run will eventually
+# pay for fresh chunk mmaps inside a timed window. Both are kept modest for
+# that reason.
+# ================================================================
+var BENCH_DIM = 256;      # 256x256 = 65,536 px — a realistic small texture
+var ROUNDS = 20;
+
+fn _bench_png(name, ct, depth, interlace): i64 {
+    var lo = 0;
+    var bytes = _mk_png(BENCH_DIM, BENCH_DIM, ct, depth, interlace, &lo);
+    if (_verify_png(bytes, lo, BENCH_DIM, BENCH_DIM, ct, name) == 0) { return 0; }
+    var b = bench_new(name);
+    var err = 0;
+    var r = 0;
+    while (r < ROUNDS) {
+        bench_start(b);
+        chitra_png_decode(bytes, lo, &err);
+        bench_stop(b);
+        r = r + 1;
+    }
+    bench_report(b);
+    _csv_row(b);
+    _per_pixel(b, BENCH_DIM * BENCH_DIM);
+    return 0;
+}
+
+fn _bench_jpeg(name, ncomp, hs, vs): i64 {
+    var lo = 0;
+    var bytes = _mk_jpeg(BENCH_DIM, BENCH_DIM, ncomp, hs, vs, &lo);
+    if (_verify_jpeg(bytes, lo, BENCH_DIM, BENCH_DIM, name) == 0) { return 0; }
+    var b = bench_new(name);
+    var err = 0;
+    var r = 0;
+    while (r < ROUNDS) {
+        bench_start(b);
+        chitra_jpeg_decode(bytes, lo, &err);
+        bench_stop(b);
+        r = r + 1;
+    }
+    bench_report(b);
+    _csv_row(b);
+    _per_pixel(b, BENCH_DIM * BENCH_DIM);
+    return 0;
+}
+
+# The icon case: a 16x16 decode is dominated by fixed cost (allocation,
+# header parse, Huffman/quant table build), not throughput. Reported
+# separately so the per-pixel figures above are not read as applying to it.
+fn _bench_small(): i64 {
+    var lo = 0;
+    var bytes = _mk_png(16, 16, 6, 8, 0, &lo);
+    var b = bench_new("png_rgba8_16x16_fixed_cost");
+    var err = 0;
+    var r = 0;
+    while (r < 200) {
+        bench_start(b);
+        chitra_png_decode(bytes, lo, &err);
+        bench_stop(b);
+        r = r + 1;
+    }
+    bench_report(b);
+    _csv_row(b);
+
+    var jlo = 0;
+    var jb = _mk_jpeg(16, 16, 1, 1, 1, &jlo);
+    var b2 = bench_new("jpeg_gray_16x16_fixed_cost");
+    r = 0;
+    while (r < 200) {
+        bench_start(b2);
+        chitra_jpeg_decode(jb, jlo, &err);
+        bench_stop(b2);
+        r = r + 1;
+    }
+    bench_report(b2);
+    _csv_row(b2);
+    return 0;
+}
+
+fn main(): i64 {
+    alloc_init();
+    # sankoch's crc32 does NOT lazily build its table — chitra calls
+    # crc32_init_table() explicitly in chitra_png_parse_raw (png_filter.cyr).
+    # This harness synthesises PNG chunks, so it must do the same before it
+    # can CRC one.
+    crc32_init_table();
+
+    println("=== chitra decode benchmarks ===");
+    bench_report_clock();
+    println("");
+    println("-- fixture self-check (generated fixtures must decode correctly) --");
+    _check_png(64, 64, 0, 8, 0, "gray8");
+    _check_png(64, 64, 2, 8, 0, "rgb8");
+    _check_png(64, 64, 6, 8, 0, "rgba8");
+    _check_png(64, 64, 3, 8, 0, "palette8");
+    _check_png(64, 64, 6, 16, 0, "rgba16");
+    _check_png(63, 61, 6, 8, 1, "rgba8 adam7 odd-dims");
+    _check_jpeg(64, 64, 1, 1, 1, "jpeg grayscale");
+    _check_jpeg(64, 64, 3, 1, 1, "jpeg ycbcr 4:4:4");
+    _check_jpeg(64, 64, 3, 2, 1, "jpeg ycbcr 4:2:2");
+    _check_jpeg(64, 64, 3, 2, 2, "jpeg ycbcr 4:2:0");
+
+    println("");
+    println("-- PNG decode, 256x256 --");
+    _bench_png("png_gray8_256", 0, 8, 0);
+    _bench_png("png_rgb8_256", 2, 8, 0);
+    _bench_png("png_rgba8_256", 6, 8, 0);
+    _bench_png("png_palette8_256", 3, 8, 0);
+    _bench_png("png_rgba16_256", 6, 16, 0);
+    _bench_png("png_rgba8_adam7_256", 6, 8, 1);
+
+    println("");
+    println("-- JPEG decode, 256x256 --");
+    _bench_jpeg("jpeg_gray_256", 1, 1, 1);
+    _bench_jpeg("jpeg_ycbcr444_256", 3, 1, 1);
+    _bench_jpeg("jpeg_ycbcr422_256", 3, 2, 1);
+    _bench_jpeg("jpeg_ycbcr420_256", 3, 2, 2);
+
+    println("");
+    println("-- fixed cost (16x16, throughput-irrelevant) --");
+    _bench_small();
+
+    if (_verify_fail != 0) {
+        println("");
+        println("BENCH ABORTED: a generated fixture failed to decode — the");
+        println("numbers above cannot be trusted.");
+    }
+    return _verify_fail;
+}
+var exit_code = main();
+syscall(60, exit_code);

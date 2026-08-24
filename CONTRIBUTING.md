@@ -99,17 +99,25 @@ Place each in the matching `tests/tcyr/` suite — `error.tcyr` (error paths),
 `interlace.tcyr` (Adam7), `jpeg.tcyr` (baseline JPEG decode + reject paths),
 `png.tcyr` (the core PNG decode matrix), or `subbyte.tcyr` (1/2/4-bit
 grayscale/palette). The suites are globbed by `make test`; each is a standalone
-`main()`. The current baseline is **728 assertions across 5 suites** — PRs that
+`main()`. The current baseline is **784 assertions across 5 suites** — PRs that
 lower coverage will be asked to add it.
 Confirm the count with `make count-assertions`.
 
-> **Wanted contribution:** there is no fuzz harness and no benchmark harness
-> in-tree yet (both are v1.0 gates). The PNG decoder is "fuzz-corpus-tested" by
-> lineage (its kii origin); the JPEG entropy decoder is from-scratch chitra code
-> and has never been fuzzed in-tree. A `.fcyr` fuzz harness over the byte-buffer
-> entry points (`chitra_image_decode` / the PNG + JPEG decoders) and a `.bcyr`
-> bench over the decode hot paths are both welcome — open an issue first to agree
-> on shape.
+Beyond the suites, two harnesses landed in 0.3.3 and are worth running before
+you send a decode change:
+
+- `make fuzz` — `fuzz/*.fcyr`, ~1,000,237 adversarial decode cases. Asserts
+  **both** survival and the documented `(0, *err_out set)` failure contract.
+  A new decode path should gain a case here.
+- `make bench` — `tests/bcyr/chitra.bcyr`, 12 decode benchmarks. It generates
+  its fixtures at 256×256 and decode-verifies each before timing it, so if you
+  change the generator, keep the verification honest. Record with
+  `make bench-record`; numbers are host-dependent, so compare within a host.
+
+> **Wanted contribution:** the remaining v1.0 work is the **public API + ABI
+> freeze** and the next formats (**GIF / BMP**) — see
+> [`docs/development/roadmap.md`](docs/development/roadmap.md). Open an issue
+> first to agree on shape.
 
 ## Modules and the dist bundle
 

@@ -9,9 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 **P-1 audit, hardening and repair cut.** A ten-lens adversarial sweep of both
 decode paths — each finding put to two independent skeptics before it was
-accepted — plus the repair of everything confirmed and chitra's **first
-in-tree fuzz harnesses**, which closes one of the two v1.0 hardening gates.
-Full report: [`docs/audit/2026-08-23-audit.md`](docs/audit/2026-08-23-audit.md).
+accepted — plus the repair of everything confirmed, chitra's **first in-tree
+fuzz harnesses**, and its **first benchmark harness**. Between them the cut
+closes **both** remaining v1.0 hardening gates. Full report: [`docs/audit/2026-08-23-audit.md`](docs/audit/2026-08-23-audit.md).
 
 **No memory-safety defect was found.** No OOB read, OOB write, or integer
 overflow into an allocation. The entropy bounds, Adam7 geometry, plane-write
@@ -22,7 +22,10 @@ correctness, conformance, resource or defence-in-depth repair.
 Every repair carries a regression test that was **verified to fail against the
 pre-repair code**. **784 test assertions** (up from 728), and **3,464,838 fuzz
 assertions over ~1,000,000 decode cases** in ~10 s, 0 failures — clearing the
-roadmap's *10⁶ iterations clean* v1.0 criterion outright.
+roadmap's *10⁶ iterations clean* v1.0 criterion outright. First recorded
+decode baseline (this host, 256×256): PNG rgba8 **83 ns/px**, gray8 and
+palette8 **154 ns/px**, Adam7 rgba8 **128 ns/px**; JPEG grayscale
+**43 ns/px**, 4:2:0 **91 ns/px**, 4:4:4 **145 ns/px**.
 
 ### Behaviour changes (no API change)
 
@@ -60,8 +63,31 @@ regression — listed here so consumers are not surprised:
   decode and its entropy span is actually wide enough to mutate: the first
   draft silently exercised a 4-byte span, and a fuzz harness that no-ops is
   worse than none.
-- `make fuzz` target; `make lint` and `make fmt-check` now also cover
-  `fuzz/*.fcyr`.
+- **`tests/bcyr/chitra.bcyr`** — the first benchmark harness, run by
+  `make bench`, closing the second v1.0 gate. It **generates its own fixtures
+  at realistic sizes** rather than timing the in-tree test fixtures: those are
+  2×2 to 16×16 by design, so benchmarking them would report fixed overhead
+  (allocation, header parse, table build) and call it throughput. PNG fixtures
+  are real scanlines run through sankoch's `zlib_compress`, so decode
+  exercises the genuine inflate + unfilter path; Adam7 fixtures are
+  interleaved with chitra's **own** pass-geometry helpers, so encoder and
+  decoder cannot disagree about the layout. JPEG fixtures are assembled by an
+  in-harness MSB-first bit writer (0xFF stuffing included) over the Annex K
+  DC luminance table plus a compact AC table, emitting real DC **and** AC
+  coefficients per block so `DECODE`/`RECEIVE`/`EXTEND` actually run.
+  **Every generated fixture is decode-verified against the generator before
+  it is timed** — a benchmark that silently measures a rejected input is
+  reporting the cost of the error path. Sabotaging the generator was checked
+  to abort the run and make `bench-csv.sh` refuse to record.
+  Covers PNG gray8 / rgb8 / rgba8 / palette8 / rgba16 / Adam7 and JPEG
+  grayscale / 4:4:4 / 4:2:2 / 4:2:0 at 256×256, plus a 16×16 fixed-cost pair.
+- `scripts/bench-csv.sh` + `bench-history.csv` — stamps each result with
+  timestamp / commit / branch and appends it, so the committed series is
+  reproducible rather than hand-typed. `make bench-record` wraps it.
+  Deliberately **not** part of `make test-all`: benchmark numbers are host-
+  and load-dependent, and gating CI on them would be a flake source.
+- `make fuzz` and `make bench` targets; `make lint` and `make fmt-check` now
+  also cover `fuzz/*.fcyr` and `tests/bcyr/*.bcyr`.
 - `CHITRA_MAX_JPEG_RATIO` (4096:1) — the JPEG analogue of the PNG path's
   `CHITRA_MAX_INFLATE_RATIO`. See *Security* below.
 

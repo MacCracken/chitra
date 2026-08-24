@@ -58,10 +58,13 @@ and GIF / BMP can join later without a rename.
   T.81 fill-byte handling, and the PNG § 5.4 / § 5.6 chunk-ordering guards.
   Adds chitra's **first in-tree fuzz harnesses** (`make fuzz`): ~1,000,237
   adversarial decode cases, 0 failures, clearing the 10⁶-iteration v1.0 gate.
+  Adds the **first benchmark harness** (`make bench`) with committed CSV
+  history, closing the second gate — PNG rgba8 decodes at **83 ns/px**,
+  JPEG grayscale at **43 ns/px** (256×256, this host).
   See [`docs/audit/2026-08-23-audit.md`](docs/audit/2026-08-23-audit.md).
-- **Staged (tracked, not silently dropped):** **GIF / BMP** → after JPEG;
-  an in-tree **benchmark** harness (the remaining v1.0 gate — the fuzz half
-  landed in v0.3.3). PNG and baseline JPEG are feature-complete.
+- **Staged (tracked, not silently dropped):** **GIF / BMP** → after JPEG.
+  Both v1.0 hardening gates — the fuzz harness and the benchmark harness —
+  landed in v0.3.3. PNG and baseline JPEG are feature-complete.
 
 ## Relationships
 

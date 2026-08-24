@@ -50,6 +50,8 @@ structure** — use the tools. If the tools are missing something, fix the tools
 cyrius deps                                          # resolve stdlib + sankoch into lib/
 make build                                           # link-check the lib (programs/smoke.cyr → build/chitra_smoke)
 make test                                            # run every tests/tcyr/*.tcyr CPU suite
+make fuzz                                            # adversarial-input harnesses (fuzz/*.fcyr)
+make bench                                           # decode benchmarks (tests/bcyr/chitra.bcyr)
 make dist                                            # regenerate dist/chitra.cyr via `cyrius distlib`
 make lint fmt-check vet                              # quality gates
 make version-check                                   # VERSION / cyrius.cyml / CHANGELOG / README agree

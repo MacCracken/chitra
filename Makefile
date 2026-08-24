@@ -7,6 +7,8 @@
 # Quick reference:
 #   make test           — CPU-only tests (globs tests/tcyr/*.tcyr domain suites)
 #   make fuzz           — adversarial-input harnesses (globs fuzz/*.fcyr)
+#   make bench          — decode benchmarks (tests/bcyr/chitra.bcyr)
+#   make bench-record   — bench + append to bench-history.csv
 #   make build          — link-check the library (programs/smoke.cyr)
 #   make dist           — regenerate dist/chitra.cyr via `cyrius distlib`
 #   make lint / fmt-check / vet  — quality gates
@@ -50,7 +52,7 @@ test: check-lib-wiring
 .PHONY: lint
 lint:
 	@fail=0; \
-	for f in src/*.cyr programs/*.cyr tests/tcyr/*.tcyr fuzz/*.fcyr; do \
+	for f in src/*.cyr programs/*.cyr tests/tcyr/*.tcyr tests/bcyr/*.bcyr fuzz/*.fcyr; do \
 		out=$$($(CYRIUS) lint $$f 2>&1); echo "$$out"; \
 		echo "$$out" | grep -qE '^\s*warn ' && fail=1; \
 	done; \
@@ -62,7 +64,7 @@ fmt-check:
 	@# CODE only (0 = clean, non-zero = needs fmt). The file goes BEFORE the
 	@# --check flag.
 	@fail=0; \
-	for f in src/*.cyr programs/*.cyr tests/tcyr/*.tcyr fuzz/*.fcyr; do \
+	for f in src/*.cyr programs/*.cyr tests/tcyr/*.tcyr tests/bcyr/*.bcyr fuzz/*.fcyr; do \
 		if ! $(CYRIUS) fmt $$f --check > /dev/null 2>&1; then \
 			echo "needs fmt: $$f"; fail=1; \
 		fi; \
@@ -84,6 +86,20 @@ dist:
 # survival invariant and the documented (0 + *err_out set) contract.
 fuzz: check-lib-wiring
 	$(CYRIUS) fuzz
+
+.PHONY: bench
+# Decode benchmarks (tests/bcyr/chitra.bcyr). The harness GENERATES its
+# fixtures at realistic sizes — the in-tree test fixtures are 2x2..16x16 and
+# would measure fixed overhead, not throughput — and decode-verifies each one
+# before timing it. NOT part of `test-all`: benchmark numbers are host- and
+# load-dependent, so gating CI on them would be a flake source.
+bench: check-lib-wiring
+	$(CYRIUS) bench tests/bcyr/chitra.bcyr
+
+.PHONY: bench-record
+# Run the benchmarks and append the results to bench-history.csv.
+bench-record: check-lib-wiring
+	@./scripts/bench-csv.sh
 
 .PHONY: version-check
 version-check:
