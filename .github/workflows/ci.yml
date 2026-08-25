@@ -49,7 +49,11 @@ jobs:
         # Hard gate: any `warn` line (warning or untracked-deferral) fails CI.
         run: |
           fail=0
-          for f in src/*.cyr programs/*.cyr tests/tcyr/*.tcyr; do
+          # Globs MUST match the Makefile's. They did not until 0.7.3:
+          # fuzz/*.fcyr and tests/bcyr/*.bcyr were covered locally by
+          # `make lint` and skipped here, so a harness could pass CI and fail
+          # the developer's own gate.
+          for f in src/*.cyr programs/*.cyr tests/tcyr/*.tcyr fuzz/*.fcyr tests/bcyr/*.bcyr; do
             [ -e "$f" ] || continue
             out=$(cyrius lint "$f" 2>&1 || true)
             echo "$out"
@@ -65,7 +69,7 @@ jobs:
         # formatted file to stdout. The file goes BEFORE the --check flag.
         run: |
           fail=0
-          for f in src/*.cyr programs/*.cyr tests/tcyr/*.tcyr; do
+          for f in src/*.cyr programs/*.cyr tests/tcyr/*.tcyr fuzz/*.fcyr tests/bcyr/*.bcyr; do
             [ -e "$f" ] || continue
             if ! cyrius fmt "$f" --check > /dev/null 2>&1; then
               echo "needs fmt: $f"
@@ -101,6 +105,18 @@ jobs:
           # Functionality-grouped domain suites under tests/tcyr/ — globbed
           # so new domain files are picked up automatically.
           for f in tests/tcyr/*.tcyr; do cyrius test "$f" || exit 1; done
+
+      - name: Fuzz (adversarial input harnesses)
+        # CLAUDE.md names `make test-all` (version-check + dist + test + fuzz)
+        # as the pre-release gate, but through 0.7.2 no workflow ran `make
+        # fuzz` — so the gate existed only on a developer's machine, and the
+        # ~2.3 M-case harnesses could rot without CI noticing. ~20 s here.
+        #
+        # Benchmarks stay OUT deliberately: their numbers are host- and
+        # load-dependent, so gating correctness on them manufactures flakes.
+        # That exclusion is a decision; this one was an oversight.
+        run: |
+          for f in fuzz/*.fcyr; do cyrius fuzz "$f" || exit 1; done
 
       - name: Version check
         run: ./scripts/version-check.sh

@@ -1,6 +1,6 @@
 # chitra
 
-Version: 0.7.2
+Version: 0.7.3
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder, a sibling AGNOS package in the mould of `sakshi` /
@@ -80,8 +80,8 @@ Untrusted bytes are the whole input surface, so the guards are the product:
   ~64 MB. PNG's remaining amplification case is documented as **accepted
   risk** rather than capped, because there the bomb and a legitimate solid
   image are the same file shape.
-- **`make fuzz`** — one harness per format, **~2.3 M adversarial decode cases,
-  8,072,804 assertions, 0 failures**. They assert *both* that the decoder
+- **`make fuzz`** — one harness per format, **~2.5 M adversarial decode cases,
+  9,975,418 assertions, 0 failures**, run in CI. They assert *both* that the decoder
   survives and that it honours the documented `(0, *err_out set)` contract —
   the invariant a crash-only fuzzer misses.
 - **`make bench`** — 17 decode benchmarks with committed

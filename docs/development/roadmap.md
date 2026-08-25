@@ -1,10 +1,10 @@
 # chitra — Roadmap
 
-> **Last Updated**: 2026-08-24 (0.7.2)
+> **Last Updated**: 2026-08-24 (0.7.3)
 >
 > Sequencing — what ships, in what order, against what gates. Volatile state
 > (current version, sizes, assertion counts, in-flight work) lives in
-> [`state.md`](state.md), not here. **chitra is pre-v1** (current: 0.7.2) and
+> [`state.md`](state.md), not here. **chitra is pre-v1** (current: 0.7.3) and
 > all four decode paths are **feature-complete for their scope** — every spec-legal
 > PNG depth × color-type × interlace combination, and JFIF **baseline** JPEG
 > (grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0, restart markers), decode to
@@ -417,7 +417,7 @@ The general lesson for the remaining arc: **a sweep finding is a hypothesis.**
 Two of five here did not survive contact with a reference decoder, and the
 cheapest time to learn that is before writing the fix, not after.
 
-### 0.7.3 — Harness and CI gaps
+### ~~0.7.3 — Harness and CI gaps~~ — SHIPPED
 
 The sweep's least glamorous findings and the ones most likely to hide the next
 defect:
@@ -436,6 +436,21 @@ defect:
   named pre-release gate — is never enforced by automation. CI's lint and fmt
   loops also omit `fuzz/*.fcyr` and `tests/bcyr/*.bcyr`, which the Makefile
   covers, so those files can pass CI and fail `make lint`.
+
+All four landed, and the PNG one needed two modes rather than one. Repairing
+the chunk CRC after mutating IDAT gets hostile bytes past the gate, but they
+are hostile *compressed* bytes: measured, ~99% fail inflate and only 0.6% reach
+the predictors this item exists to cover. Mutating the **scanlines before
+compressing** puts 69% of cases into the unfilter path with an attacker-chosen
+filter byte per row. Both are kept — one drives sankoch, the other drives
+chitra.
+
+Worth carrying forward: **every new fuzz mode needs its own no-op proof.** The
+first cut of the scanline mode was measured by error-code distribution before
+being believed, and the self-check added here asserts that repairing an
+*unmutated* CRC still decodes — because if that helper were wrong, all 150,000
+cases would reject at the CRC gate while the harness reported them as
+survived.
 
 ### 0.8.0 — JPEG multi-scan resumption
 

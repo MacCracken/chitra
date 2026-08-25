@@ -5,6 +5,68 @@ All notable changes to chitra are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.3] - 2026-08-24
+
+**Harness and CI gaps — the sweep's least glamorous findings, and the ones most
+likely to hide the next defect.**
+
+**9,975,418 fuzz assertions**, up from 8,072,804 (+1,902,614), and `make fuzz`
+now runs in CI for the first time.
+
+### Added
+
+- **PNG scanline-mutation fuzz mode.** The one that matters. PNG's per-chunk
+  CRC-32 meant a random byte flip inside IDAT rejected with `CHITRA_ERR_CRC`
+  *before* inflate — so the five § 9 unfilter predictors, the Adam7
+  deinterlace and the tRNS/palette colour pass were **effectively unfuzzed**.
+  JPEG got this treatment in 0.3.3, which is why its entropy path is well
+  covered and this one was not.
+
+  This mode builds raw scanlines with an attacker-chosen filter byte per row —
+  1-in-8 deliberately outside `{0..4}`, so the § 9 allow-list is exercised too
+  — compresses them with sankoch, and assembles a structurally valid PNG.
+  Measured over 20,000 cases: **13,770 decode fully** (every predictor and the
+  colour pass run on hostile data), **6,230 are caught by the filter
+  allow-list**, and **zero** are wasted at inflate or CRC.
+- **PNG IDAT-stream mutation mode**, which mutates the compressed payload and
+  then **repairs the chunk CRC** so the bytes reach sankoch. Measured over
+  20,000 cases: **0 rejected at CRC** (the repair is correct, so no mutation is
+  wasted), 19,874 reach inflate, 126 decode through to the colour pass. Before
+  this, every one of them died at the CRC gate.
+
+  Both modes are kept: this one drives sankoch's inflate with hostile
+  *compressed* input, the scanline mode drives chitra's own predictors.
+- **A self-check for `fuzz_png.fcyr`**, which was alone among the four
+  harnesses in having none. It asserts the fixture decodes, that the IDAT
+  locator finds one, and — the load-bearing part — that repairing the CRC of an
+  *unmutated* chunk leaves the file decodable. If `_repair_crc` were wrong,
+  every case in the new mode would silently reject at the CRC gate and the mode
+  would test nothing.
+- **`_rgba8` wrapper coverage on all four formats.** The four public wrappers
+  had none, and they are about to be frozen. The contract pinned is an ordering
+  one: they zero the caller-owned `w_out`/`h_out` slots *before* attempting the
+  decode, so a failure leaves 0/0 rather than a stale size the caller might act
+  on.
+
+### Fixed
+
+- **`make fuzz` now runs in CI.** CLAUDE.md names `make test-all`
+  (version-check + dist + test + fuzz) as the pre-release gate, but no workflow
+  ran the fuzz half — so that gate existed only on a developer's machine, and
+  the harnesses could rot without CI noticing. ~20 s.
+
+  Benchmarks stay out deliberately: their numbers are host- and load-dependent,
+  so gating correctness on them manufactures flakes. **That exclusion is a
+  decision; this one was an oversight**, and the difference is worth naming.
+- **CI's lint and fmt loops now cover `fuzz/*.fcyr` and `tests/bcyr/*.bcyr`**,
+  matching the Makefile's globs. They did not, so a harness could pass CI and
+  fail the developer's own `make lint`.
+
+### Notes
+
+- No public function, struct offset or error code changed; no decode behaviour
+  changed. This release is entirely about the instruments.
+
 ## [0.7.2] - 2026-08-24
 
 **BMP and GIF loose ends.** Five items from the 0.6.1 deferment sweep, each

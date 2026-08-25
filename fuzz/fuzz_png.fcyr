@@ -170,6 +170,58 @@ fn _router_contract(buf, n, label): i64 {
     return 0;
 }
 
+# The four public _rgba8 wrappers were entirely unfuzzed through 0.7.2 — they
+# are public, about to be frozen, and they write through CALLER-OWNED slots
+# before the decode runs. That ordering is the contract worth pinning: on any
+# failure both slots must be left 0 rather than holding a stale or partial
+# value the caller might act on.
+fn _rgba8_contract(buf, n, label): i64 {
+    var w = 0 - 1;
+    var h = 0 - 1;
+    var px = chitra_png_decode_rgba8(buf, n, &w, &h);
+    if (px == 0) {
+        assert(w == 0, label);
+        assert(h == 0, label);
+    }
+    if (px != 0) {
+        assert(w > 0, label);
+        assert(h > 0, label);
+    }
+    return 0;
+}
+
+# ---- Harness self-check ----------------------------------------------
+# A fuzz harness that silently no-ops is worse than none. fuzz_png was the only
+# one of the four without this gate: if fx_rgba8_2x2 ever stopped decoding,
+# every mode below would still report hundreds of thousands of cases
+# "survived" while exercising nothing past the signature check.
+fn fuzz_png_selfcheck(): i64 {
+    var lo = 0;
+    var b = fx_rgba8_2x2(&lo);
+    var err = 0;
+    var img = chitra_png_decode(b, lo, &err);
+    assert(img != 0, "selfcheck: png fixture decodes clean");
+    assert(err == 0, "selfcheck: png fixture sets no error");
+    if (img != 0) {
+        assert(chitra_image_width(img) == 2, "selfcheck: png fixture is 2 wide");
+        assert(chitra_image_height(img) == 2, "selfcheck: png fixture is 2 tall");
+        assert(chitra_image_channels(img) == 4, "selfcheck: png fixture is RGBA8");
+    }
+    # ...and the IDAT locator must actually find one, or the mutation mode
+    # below would silently degrade into "return 0" on every case.
+    var type_off = 0;
+    var clen = 0;
+    assert(_find_idat(b, lo, &type_off, &clen) == 1, "selfcheck: IDAT located");
+    assert(clen > 0, "selfcheck: IDAT payload is non-empty");
+    # Repairing the CRC of an UNMUTATED chunk must leave the file decodable —
+    # if _repair_crc were wrong, every mutated case would reject at the CRC
+    # gate and this whole mode would test nothing.
+    _repair_crc(b, type_off, clen);
+    var err2 = 0;
+    assert(chitra_png_decode(b, lo, &err2) != 0, "selfcheck: CRC repair is correct");
+    return 0;
+}
+
 # ---- 1. Pure random bytes -------------------------------------------
 # Mostly rejected at the signature gate; proves no read happens first.
 fn fuzz_png_random(seed, n): i64 {
@@ -222,6 +274,7 @@ fn fuzz_png_mutate(seed, nmut): i64 {
         m = m + 1;
     }
     _png_contract(b, lo, "png mutated fixture");
+    _rgba8_contract(b, lo, "png mutated fixture (_rgba8 wrapper)");
     return 0;
 }
 
@@ -236,6 +289,192 @@ fn fuzz_png_truncate(): i64 {
         _png_contract(b, cut, "png truncated prefix");
         cut = cut + 1;
     }
+    return 0;
+}
+
+# ---- IDAT-stream mutation (0.7.3, the priority target) ---------------
+# PNG's per-chunk CRC-32 is why this mode has to exist. A random byte flip
+# inside IDAT makes the chunk CRC disagree, so `chitra_png_parse_raw` rejects
+# with CHITRA_ERR_CRC before sankoch's inflate — and therefore before the five
+# § 9 unfilter predictors, the Adam7 deinterlace and the tRNS/palette colour
+# pass — ever runs. Every one of those was effectively unfuzzed: modes 1-3
+# below drive the chunk walk and the signature gate, and stop at the CRC.
+#
+# So this mode mutates the IDAT payload and then REPAIRS THE CRC, producing a
+# structurally valid PNG carrying hostile compressed data. That is the direct
+# analogue of fuzz_jpeg's entropy-segment mutation (0.3.3), which is why the
+# JPEG entropy path is well covered and this one was not.
+
+# Locate the first IDAT chunk. Writes the offset of its 4-byte TYPE field
+# (which is what the CRC is computed over, together with the data) and its
+# data length. Returns 1 on success, 0 if there is no IDAT.
+fn _find_idat(b, n, type_off_out, len_out): i64 {
+    store64(type_off_out, 0);
+    store64(len_out, 0);
+    var pos = 8;                       # past the signature
+    var clen = 0;
+    var found = 0;
+    var scanning = 1;
+    while (scanning == 1) {
+        if (pos + 8 > n) { scanning = 0; }
+        if (scanning == 1) {
+            clen = load8(b + pos) * 16777216 + load8(b + pos + 1) * 65536
+            + load8(b + pos + 2) * 256 + load8(b + pos + 3);
+            if (clen < 0) { scanning = 0; }
+        }
+        if (scanning == 1) {
+            if (pos + 12 + clen > n) { scanning = 0; }
+        }
+        if (scanning == 1) {
+            if (load8(b + pos + 4) == 73) {
+                if (load8(b + pos + 5) == 68) {
+                    if (load8(b + pos + 6) == 65) {
+                        if (load8(b + pos + 7) == 84) {
+                            store64(type_off_out, pos + 4);
+                            store64(len_out, clen);
+                            found = 1;
+                            scanning = 0;
+                        }
+                    }
+                }
+            }
+        }
+        if (scanning == 1) { pos = pos + 12 + clen; }
+    }
+    return found;
+}
+
+fn _put_be32(p, v): i64 {
+    store8(p + 0, (v >> 24) & 255);
+    store8(p + 1, (v >> 16) & 255);
+    store8(p + 2, (v >> 8) & 255);
+    store8(p + 3, v & 255);
+    return 0;
+}
+
+# Recompute a chunk's trailing CRC-32 over (type + data), so a mutated payload
+# still presents as a well-formed chunk. Without this the decoder never gets
+# past the CRC gate and the mutation is wasted.
+fn _repair_crc(b, type_off, clen): i64 {
+    var c = crc32(b + type_off, 4 + clen);
+    var crc_at = type_off + 4 + clen;
+    store8(b + crc_at + 0, (c >> 24) & 255);
+    store8(b + crc_at + 1, (c >> 16) & 255);
+    store8(b + crc_at + 2, (c >> 8) & 255);
+    store8(b + crc_at + 3, c & 255);
+    return 0;
+}
+
+# ---- Scanline-level mutation (0.7.3) --------------------------------
+# The IDAT-stream mode above repairs the CRC, so hostile bytes reach sankoch —
+# but they are hostile COMPRESSED bytes, and ~99% of them fail inflate. Only
+# ~0.6% survive to the part this release is actually about: the five § 9
+# unfilter predictors, the Adam7 deinterlace and the colour pass.
+#
+# So this mode mutates the raw scanlines BEFORE compressing them. Every case
+# therefore inflates cleanly and lands squarely in `_chitra_unfilter_row`, with
+# an attacker-chosen filter byte per row — including values outside {0..4},
+# which is the one thing the predictors must reject rather than index on.
+fn fuzz_png_scanlines(seed, w, h): i64 {
+    _fuzz_seed(seed);
+    var row_bytes = w * 4;                   # RGBA8, colour type 6
+    var raw_len = h * (row_bytes + 1);
+    var raw = alloc(raw_len);
+    if (raw == 0) { return 0; }
+    var y = 0;
+    var x = 0;
+    var off = 0;
+    while (y < h) {
+        # The filter byte. Mostly legal so the predictors actually run, but
+        # 1-in-8 out of range so the § 9 allow-list is exercised too.
+        if ((_fuzz_next() & 7) == 0) {
+            store8(raw + off, _fuzz_next() & 255);
+        } else {
+            store8(raw + off, _fuzz_next() % 5);
+        }
+        off = off + 1;
+        x = 0;
+        while (x < row_bytes) {
+            store8(raw + off, _fuzz_next() & 255);
+            off = off + 1;
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    var zcap = raw_len * 2 + 128;
+    var z = alloc(zcap);
+    if (z == 0) { return 0; }
+    var zlen = zlib_compress(raw, raw_len, z, zcap);
+    if (zlen <= 0) { return 0; }
+
+    # Assemble: signature + IHDR + IDAT(z) + IEND, every CRC correct.
+    var total = 8 + 25 + (12 + zlen) + 12;
+    var b = alloc(total);
+    if (b == 0) { return 0; }
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    _put_be32(b + 8, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    _put_be32(b + 16, w);
+    _put_be32(b + 20, h);
+    store8(b + 24, 8);                       # bit depth
+    store8(b + 25, 6);                       # colour type 6 (RGBA)
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);                       # interlace: none
+    _repair_crc(b, 12, 13);
+    var idat = 8 + 25;
+    _put_be32(b + idat, zlen);
+    store8(b + idat + 4, 73);
+    store8(b + idat + 5, 68);
+    store8(b + idat + 6, 65);
+    store8(b + idat + 7, 84);
+    var i = 0;
+    while (i < zlen) {
+        store8(b + idat + 8 + i, load8(z + i));
+        i = i + 1;
+    }
+    _repair_crc(b, idat + 4, zlen);
+    var iend = idat + 12 + zlen;
+    _put_be32(b + iend, 0);
+    store8(b + iend + 4, 73);
+    store8(b + iend + 5, 69);
+    store8(b + iend + 6, 78);
+    store8(b + iend + 7, 68);
+    _repair_crc(b, iend + 4, 0);
+
+    _png_contract(b, total, "png scanline mutation");
+    _rgba8_contract(b, total, "png scanline mutation (_rgba8 wrapper)");
+    return 0;
+}
+
+fn fuzz_png_idat(seed, nmut): i64 {
+    var lo = 0;
+    var b = fx_rgba8_2x2(&lo);
+    var type_off = 0;
+    var clen = 0;
+    if (_find_idat(b, lo, &type_off, &clen) == 0) { return 0; }
+    if (clen <= 0) { return 0; }
+    _fuzz_seed(seed);
+    var data_off = type_off + 4;
+    var i = 0;
+    var off = 0;
+    while (i < nmut) {
+        off = data_off + (_fuzz_next() % clen);
+        store8(b + off, _fuzz_next() & 255);
+        i = i + 1;
+    }
+    _repair_crc(b, type_off, clen);
+    _png_contract(b, lo, "png IDAT-stream mutation");
     return 0;
 }
 
@@ -254,6 +493,14 @@ fn fuzz_png_degenerate(): i64 {
 
 fn main(): i64 {
     var seed = 1;
+
+    # crc32() has no lazy init — the table must be built before _repair_crc
+    # calls it. chitra does this itself inside the decode path, but this
+    # harness calls crc32 directly.
+    crc32_init_table();
+
+    fuzz_png_selfcheck();
+    println("fuzz_png: harness self-check passed (fixture valid, IDAT reachable, CRC repair correct)");
 
     # 1. random bytes across a spread of lengths
     seed = 1;
@@ -284,6 +531,24 @@ fn main(): i64 {
     println("fuzz_png: truncation sweep survived");
 
     # 5. degenerate lengths
+    # 6. hostile bytes BEHIND a repaired CRC — inflate, the five unfilter
+    #    predictors, Adam7 and the colour pass
+    seed = 1;
+    while (seed <= 150000) {
+        fuzz_png_idat(seed * 2246822519, (seed % 5) + 1);
+        seed = seed + 1;
+    }
+    println("fuzz_png: 150000 IDAT-stream mutation cases survived");
+
+    # 7. hostile SCANLINES behind a valid deflate stream — the five § 9
+    #    predictors, with an attacker-chosen filter byte per row
+    seed = 1;
+    while (seed <= 60000) {
+        fuzz_png_scanlines(seed * 1103515245, (seed % 7) + 1, (seed % 5) + 1);
+        seed = seed + 1;
+    }
+    println("fuzz_png: 60000 scanline-mutation cases survived");
+
     fuzz_png_degenerate();
     println("fuzz_png: degenerate-length cases survived");
 

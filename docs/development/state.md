@@ -1,44 +1,47 @@
 # chitra — Current State
 
-> **Last refresh**: 2026-08-24 (0.7.2) | **Refresh cadence**: every release.
+> **Last refresh**: 2026-08-24 (0.7.3) | **Refresh cadence**: every release.
 > [`CLAUDE.md`](../../CLAUDE.md) is preferences / process / architecture
 > (durable); this file is **state** (volatile) — it is the home for the
 > version, sizes, and counts `CLAUDE.md` must not inline.
 
 ## Version
 
-**0.7.2** — cut 2026-08-24. **BMP and GIF loose ends** — five items from the
-0.6.1 deferment sweep. Four landed; the fifth was investigated and
-**deliberately declined**, which is the more useful result.
+**0.7.3** — cut 2026-08-24. **Harness and CI gaps** — the sweep's least
+glamorous findings, and the ones most likely to hide the next defect. No decode
+behaviour changed; this release is entirely about the instruments.
 
-- **OS/2 2.x `BITMAPCOREHEADER2` (64 bytes) decodes** — its first 40 bytes are
-  laid out exactly like `BITMAPINFOHEADER`, so it needed only admitting to the
-  allow-list. Verified against ImageMagick byte-for-byte. Sizes 16..63 stay
-  rejected: below 40 the compression and `clrused` fields are absent and would
-  need defaults nothing can check, and ImageMagick refuses them too.
-- **`BI_ALPHABITFIELDS` on a 52-byte V2 header** decoded **silently opaque** —
-  it names four masks in a header with room for three, and chitra's in-header
-  alpha read is gated on V3-or-later, so every declared per-pixel alpha was
-  discarded with no error. Now rejects rather than inventing a location for the
-  fourth mask.
-- **The GIF transparent index is range-checked** against the table in force.
-- **BMP RLE end-of-line** now checks its landing point at the same threshold
-  the delta escape uses. Stated plainly: no write was ever at risk and
-  ImageMagick accepts such files — a consistency guard, not a repair.
+**PNG's decode core was effectively unfuzzed.** The per-chunk CRC-32 meant a
+random byte flip inside IDAT rejected with `CHITRA_ERR_CRC` before inflate ran,
+so the five § 9 unfilter predictors, the Adam7 deinterlace and the tRNS/palette
+colour pass never saw a hostile byte. JPEG got this treatment in 0.3.3, which
+is why its entropy path is well covered and this one was not. Two new modes:
 
-**Declined:** a GIF Plain Text Extension does *not* consume a pending Graphic
-Control Extension. The spec reading says it should (§ 23 scopes a GCE to the
-first graphic-rendering block; § 25 makes Plain Text one), but **ImageMagick
-carries the GCE forward to the image too**, measured on a hand-built file.
-chitra follows the reference where a conformance argument cannot be confirmed
-against any real file — it diverges only where the spec is prohibitive and the
-result is a wrong image, as in PNG § 5.6 (0.7.1).
+- **Scanline mutation** — build raw scanlines with an attacker-chosen filter
+  byte per row (1-in-8 deliberately outside `{0..4}`), compress with sankoch,
+  assemble a valid PNG. Measured over 20,000 cases: **13,770 decode fully**,
+  **6,230 are caught by the § 9 allow-list**, and **zero** are wasted.
+- **IDAT-stream mutation** — mutate the compressed payload and **repair the
+  chunk CRC**. Measured: **0 rejected at CRC**, 19,874 reach inflate, 126
+  decode through. One mode drives sankoch, the other drives chitra's own
+  predictors; both are kept.
 
-`chitra_version()` → **702**. **2,858 test assertions** across **10 suites**,
-**8,072,804 fuzz assertions**, 17 benchmarks — 0 failures throughout.
+`fuzz_png.fcyr` also gained the self-check it was alone in lacking, and all
+four public `_rgba8` wrappers gained fuzz coverage — they had none, and they
+are about to be frozen.
+
+**`make fuzz` now runs in CI.** CLAUDE.md names `make test-all` as the
+pre-release gate, but no workflow ran the fuzz half, so it existed only on a
+developer's machine. Benchmarks stay out deliberately (host-dependent numbers
+manufacture flakes) — that exclusion is a decision; this one was an oversight.
+CI's lint and fmt globs now match the Makefile's, so a harness can no longer
+pass CI and fail `make lint`.
+
+`chitra_version()` → **703**. **2,858 test assertions** across 10 suites,
+**9,975,418 fuzz assertions** (up from 8,072,804), 17 benchmarks — 0 failures.
 
 Released tags: 0.1.0, 0.2.0, 0.2.1, 0.3.0, 0.3.1, 0.3.2, 0.3.3, 0.4.0, 0.5.0,
-0.5.1, 0.5.2, 0.5.3, 0.6.0, 0.6.1, 0.7.0, 0.7.1 (SemVer;
+0.5.1, 0.5.2, 0.5.3, 0.6.0, 0.6.1, 0.7.0, 0.7.1, 0.7.2 (SemVer;
 pre-1.0, the public surface is still moving — no API freeze until v1.0).
 
 ## Toolchain
@@ -126,7 +129,7 @@ Shared:
 - `ChitraImage` accessors: `chitra_image_{width,height,pixels,channels,
   seen_iend,source_color_type}`; `chitra_image_free` (a documented no-op
   under the bump allocator).
-- `chitra_version()` → **`702`** (`major*10000 + minor*100 + patch`).
+- `chitra_version()` → **`703`** (`major*10000 + minor*100 + patch`).
 - Error API: `chitra_err_new` / `chitra_err` / `chitra_err_code` /
   `chitra_err_detail` / `chitra_err_name` / `chitra_err_print_name` + enum
   `ChitraErrCode`.
@@ -405,7 +408,7 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
     wrong returns the right *set* of pixels in the wrong places, and only
     position-sensitive expectations catch that.
   - `error.tcyr` — **20** (error codes, `chitra_err_*` accessors, name
-    round-trips, `chitra_version` → 702).
+    round-trips, `chitra_version` → 703).
   - `interlace.tcyr` — **35** (Adam7 cross-checked against the trusted
     non-interlaced decode for 7 color/depth/odd-dimension cases).
   - `jpeg.tcyr` — **284** (marker scan + non-baseline rejection, SOF0
@@ -523,13 +526,13 @@ path in the library (no chroma planes, no upsample, no color convert).
 
 ## Quality gates
 
-All green at 0.7.2 on cyrius 6.5.35:
+All green at 0.7.3 on cyrius 6.5.35:
 
 | gate | command | result |
 |---|---|---|
 | link check | `make build` | OK, 588,976 bytes, no warnings |
 | tests | `make test` | 2,858/2,858, 0 failures |
-| fuzz | `make fuzz` | 8,072,804/8,072,804, 0 failures (~2.3 M cases) |
+| fuzz | `make fuzz` | 9,975,418/9,975,418, 0 failures (~2.5 M cases) |
 | bench | `make bench` | 17 benchmarks, fixtures self-verified, ~2 s |
 | lint | `make lint` | 0 warnings (incl. `fuzz/*.fcyr` + `tests/bcyr/*.bcyr`) |
 | fmt | `make fmt-check` | clean |

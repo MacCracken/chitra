@@ -721,6 +721,26 @@ fn _jpeg_contract(buf, n, label): i64 {
     return 0;
 }
 
+# The public _rgba8 wrapper. Unfuzzed through 0.7.2 on every format, and it is
+# about to be frozen. Its contract is an ordering one: it zeroes the
+# CALLER-OWNED w_out/h_out slots BEFORE attempting the decode, so a failure
+# leaves the caller with 0/0 rather than a stale or half-written size it might
+# act on. That is the property worth pinning adversarially.
+fn _jpeg_rgba8_contract(buf, n, label): i64 {
+    var w = 0 - 1;
+    var h = 0 - 1;
+    var px = chitra_jpeg_decode_rgba8(buf, n, &w, &h);
+    if (px == 0) {
+        assert(w == 0, label);
+        assert(h == 0, label);
+    }
+    if (px != 0) {
+        assert(w > 0, label);
+        assert(h > 0, label);
+    }
+    return 0;
+}
+
 fn _jrouter_contract(buf, n, label): i64 {
     var err = 0;
     var img = chitra_image_decode(buf, n, &err);
@@ -796,6 +816,7 @@ fn fuzz_jpeg_mutate(seed, nmut): i64 {
         m = m + 1;
     }
     _jpeg_contract(b, lo, "jpeg mutated fixture");
+    _jpeg_rgba8_contract(b, lo, "jpeg mutated fixture (_rgba8 wrapper)");
     return 0;
 }
 

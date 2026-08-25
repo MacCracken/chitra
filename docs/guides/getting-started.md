@@ -2,7 +2,7 @@
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder. It turns encoded image bytes into canonical
-RGBA8 pixels — no GPU, no C shim, no external binaries. As of v0.7.2 it
+RGBA8 pixels — no GPU, no C shim, no external binaries. As of v0.7.3 it
 decodes **PNG** (every spec-legal bit depth 1/2/4/8/16 across color types
 0/2/3/4/6, Adam7 interlace, PLTE/tRNS), **baseline JPEG** (JFIF SOF0,
 grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0 chroma subsampling, restart
@@ -75,7 +75,7 @@ released tag and pulling that one module:
 ```toml
 [deps.chitra]
 git     = "https://github.com/MacCracken/chitra"
-tag     = "0.7.2"
+tag     = "0.7.3"
 modules = ["dist/chitra.cyr"]
 ```
 
@@ -171,7 +171,7 @@ no-op: the stdlib `alloc` is a bump allocator with no per-block free —
 see [architecture note 003](../architecture/003-bump-allocator-no-free.md).
 
 You can probe the linked version at runtime with `chitra_version()`,
-which returns `702` for 0.7.2 (`major*10000 + minor*100 + patch`).
+which returns `703` for 0.7.3 (`major*10000 + minor*100 + patch`).
 `make version-check` gates that literal against `VERSION`, so it cannot
 drift silently again.
 
