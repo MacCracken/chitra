@@ -26,8 +26,9 @@
 #   +32: seen_iend   (i64 — 1 if the stream ended the way its format says it
 #                    should; 0 if chitra decoded it anyway. See the accessor.)
 #   +40: src_ctype   (i64 — pre-normalization PNG color_type: 0/2/3/4/6)
+#   +48: src_depth   (i64 — bits per sample in the SOURCE, before RGBA8)
 #
-# The +32/+40 fields are ADDITIVE — width/height/pixels/channels keep
+# The +32/+40/+48 fields are ADDITIVE — width/height/pixels/channels keep
 # their 0.1.x offsets, so mabda's accessors are unaffected by the widen.
 # ================================================================
 var IMAGE_WIDTH_OFFSET       = 0;
@@ -36,7 +37,8 @@ var IMAGE_PIXELS_OFFSET      = 16;
 var IMAGE_CHANNELS_OFFSET    = 24;
 var IMAGE_SEEN_IEND_OFFSET   = 32;
 var IMAGE_SRC_CTYPE_OFFSET   = 40;
-var CHITRA_IMAGE_SIZE        = 48;
+var IMAGE_SRC_DEPTH_OFFSET   = 48;
+var CHITRA_IMAGE_SIZE        = 56;
 
 # ---- ChitraImage accessors --------------------------------------
 fn chitra_image_width(img): i64    { return load64(img + IMAGE_WIDTH_OFFSET); }
@@ -71,6 +73,21 @@ fn chitra_image_seen_iend(img): i64 { return load64(img + IMAGE_SEEN_IEND_OFFSET
 # sentinel `0x100 | num_components` (0x101 grayscale, 0x103 YCbCr) so a consumer
 # switching on PNG's 0/2/3/4/6 never aliases a JPEG value (see ADR 0003).
 fn chitra_image_source_color_type(img): i64 { return load64(img + IMAGE_SRC_CTYPE_OFFSET); }
+# Bits per sample in the SOURCE, before normalization to RGBA8 (0.9.0).
+#
+# The output is always 8 bits per channel, so a caller had no way to learn that
+# precision was discarded — a depth-16 PNG and a depth-8 one were
+# indistinguishable in the result, and § 13.13 rescaling is lossy by
+# construction. That gap was worth closing before the surface froze: adding a
+# field afterwards is an ABI event, and a consumer that wants to warn about
+# precision loss, or to choose a higher-precision path, has nothing else to key
+# on.
+#   PNG  — the IHDR bit depth: 1, 2, 4, 8 or 16.
+#   JPEG — 8. Baseline is 8-bit precision by definition; 12-bit rejects.
+#   BMP  — bits per CHANNEL as stored: 8 for 24/32 bpp and for palette entries,
+#          5 or 6 for the packed 16-bpp layouts (the widest channel's width).
+#   GIF  — 8. Palette entries are bytes.
+fn chitra_image_source_depth(img): i64 { return load64(img + IMAGE_SRC_DEPTH_OFFSET); }
 
 # ================================================================
 # chitra_png_decode — the top-level public decode. Parse (src, len) PNG
@@ -101,6 +118,7 @@ fn chitra_png_decode(src, len, err_out): i64 {
     store64(img + IMAGE_CHANNELS_OFFSET, 4);
     store64(img + IMAGE_SEEN_IEND_OFFSET, chitra_raw_seen_iend(raw));
     store64(img + IMAGE_SRC_CTYPE_OFFSET, chitra_raw_color_type(raw));
+    store64(img + IMAGE_SRC_DEPTH_OFFSET, chitra_raw_bit_depth(raw));
     return img;
 }
 
@@ -140,5 +158,5 @@ fn chitra_image_free(img): i64 {
 # ================================================================
 # @public
 fn chitra_version(): i64 {
-    return 800;
+    return 10000;
 }

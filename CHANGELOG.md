@@ -5,6 +5,179 @@ All notable changes to chitra are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.0] - 2026-08-24
+
+**The public API and ABI are frozen.**
+
+The **29 names** in [`docs/development/public-surface.md`](docs/development/public-surface.md),
+plus the `ChitraImage` and `ChitraErr` record layouts, are now covered by a
+compatibility promise: changing a signature, removing a name, or changing
+documented behaviour there requires a **major bump and an ADR**. The other **45**
+`chitra_*` names `dist/chitra.cyr` exports are named in that same file as
+internal and are explicitly **not** covered — they are visible because
+`cyrius distlib` strip-concatenates, not because they are an API.
+`scripts/check-surface.sh` gates the split on every `make lint`.
+
+**No code changed in this release except the version literal.** That is the
+point. 0.9.0 spent every prerequisite the roadmap had listed — the `@public`
+markers, the two misleading error strings, `chitra_image_source_depth`, the
+`CHITRA_ERR_UNSUPPORTED` decision, `seen_iend`'s name, the machine-checked
+manifest — so the release that promises stability does not itself churn the
+thing it is promising about. The diff is `VERSION`, `chitra_version()` →
+**10000**, two test assertions, and documentation.
+
+### What is frozen
+
+- **Ten decode entry points** — `chitra_{png,jpeg,bmp,gif}_decode` and their
+  `_rgba8` wrappers, the format-sniffing router `chitra_image_decode`, and the
+  budgeted `chitra_image_decode_budget`.
+- **Four signature predicates**, one per format.
+- **Eight `ChitraImage` accessors**, over a **56-byte** record whose fields are
+  append-only: `width`@0, `height`@8, `pixels`@16, `channels`@24,
+  `seen_iend`@32, `src_ctype`@40, `src_depth`@48.
+- **Six error-API functions** and the `ChitraErrCode` **numeric values**, over a
+  **16-byte** `ChitraErr` (`+0` code, `+8` detail) that stays layout-compatible
+  with mabda's `GpuErr` ([ADR 0003](docs/adr/0003-mabda-abi-compatibility.md)).
+  That record cannot be widened at all.
+- **`chitra_version()`**, packed `major*10000 + minor*100 + patch`.
+
+### What is NOT frozen
+
+Stated explicitly, because a promise with unstated edges is not a promise:
+
+- **The 45 internal names.** They may change or disappear in any release.
+- **Bit-exact output across releases.** The contract is *correct* RGBA8, held
+  to external oracles — `djpeg -nosmooth` for JPEG, ImageMagick for PNG, BMP
+  and GIF. A repair that moves bytes **toward** the oracle is a bug fix, not a
+  break. The 0.7.x § 13.13 depth-16 rescaling change is the precedent: it
+  changed output for every 16-bit PNG, and it was a fix.
+- **Error *strings*.** Codes are frozen; `chitra_err_name`'s human-readable
+  text is not. 0.9.0 changed two of those strings precisely so the freeze would
+  not codify text that told consumers the wrong story about their own files.
+  Match on `chitra_err_code`.
+- **Memory behaviour.** The bump allocator never frees and `chitra_image_free`
+  is a documented no-op — a current fact about the stdlib
+  ([architecture/003](docs/architecture/003-bump-allocator-no-free.md)), not a
+  guarantee.
+- **Decoding more than it does today.** Multi-frame GIF
+  ([ADR 0005](docs/adr/0005-gif-first-frame-only.md)) and progressive JPEG stay
+  out of scope; **encoding** is out of scope permanently, in both directions of
+  that sentence. So is `BI_JPEG` / `BI_PNG` inside a BMP, which would have a
+  decoder re-enter itself through attacker-controlled data.
+
+### Coverage at the freeze
+
+| Format | Scope |
+|---|---|
+| **PNG** | Every spec-legal bit depth × colour type (§ 11.2.2 Table 11.1), Adam7 interlace on every cell, PLTE, tRNS keyed and per-entry, § 13.13 rescaling. |
+| **JPEG** | JFIF baseline (SOF0, 8-bit): grayscale + YCbCr + Adobe-APP14 RGB, 4:4:4 / 4:2:2 / 4:2:0 and general `Hi,Vi`, DRI/RSTn, and the **full T.81 § A.2 scan model** — interleaved, non-interleaved, partially interleaved, single- and multi-scan. Byte-identical to `djpeg -nosmooth` across the sampling matrix. |
+| **BMP** | `BI_RGB` 1/4/8/16/24/32 bpp, `BI_RLE8` / `BI_RLE4`, `BI_BITFIELDS`, CORE through V5 headers, bottom-up and top-down. **Deferral list empty.** |
+| **GIF** | GIF87a/89a, LZW, global + local tables, 4-pass interlace, GCE transparency. First frame only. |
+
+Four security audits; every format has had a line-by-line guard review.
+**3,014 test assertions** across **12 suites**, **10,732,113 fuzz assertions**,
+17 benchmarks — 0 failures throughout.
+
+### Changed
+
+- `chitra_version()` → **`10000`**.
+
+## [0.9.0] - 2026-08-24
+
+**Freeze prep.** Everything the roadmap listed as "must be settled before the
+API/ABI freeze, because each one changes the public surface". v1.0 follows with
+no code churn, which is the property a version promising stability should have.
+
+Two measured facts shaped every call: **mabda uses two names**
+(`chitra_png_decode_rgba8`, `chitra_jpeg_decode_rgba8`) and **kii uses ten**,
+including `chitra_image_seen_iend` and both signature predicates. A rename is
+cheap in the abstract and expensive against that list. See
+[ADR 0010](docs/adr/0010-the-v1-surface.md).
+
+**3,014 test assertions** across **12 suites**.
+
+### Added
+
+- **`chitra_image_source_depth`** — bits per channel in the SOURCE. The output
+  is always 8 bits per channel, so a consumer could not tell that precision had
+  been discarded: a depth-16 PNG and a depth-8 one were indistinguishable in
+  the result, and § 13.13 rescaling is lossy by construction. **Added now
+  because adding it after the freeze is an ABI event.**
+
+  Append-only at +48 — every existing offset is unmoved — so `ChitraImage`
+  grows 48 → 56 bytes and mabda's accessors are unaffected. Reports the IHDR
+  depth for PNG (1/2/4/8/16), 8 for baseline JPEG and GIF palette entries, and
+  for BMP the **widest declared channel** (8 at 24/32 bpp, 5 or 6 for the
+  packed 16-bpp layouts) — the number the RGBA8 output was bit-replicated *up
+  from*.
+- **`docs/development/public-surface.md` + `scripts/check-surface.sh`**, wired
+  into `make lint`. `dist/chitra.cyr` is a strip-concatenated bundle, so all
+  **74** exported `chitra_*` names are callable whether or not they were meant
+  to be — and **45 of them are internal**. Until now nothing distinguished them
+  from the **29** that are not, which made "the surface is frozen" an assertion
+  with nothing behind it.
+
+  The gate fails in **both** directions: a name the bundle exports that the
+  manifest does not classify (at v1.0, a compatibility promise made by
+  accident), and a name the manifest lists that the bundle no longer has (a
+  removal that slipped through). Both were proven to fire before shipping.
+- `tests/tcyr/surface.tcyr` — a 12th suite (76 assertions) covering the surface
+  itself: every `ChitraImage` offset pinned individually, `ChitraErr`'s
+  GpuErr-compatible layout, the error-name strings, the signature predicates
+  accepting their own format and rejecting the others, and `source_depth`
+  across all four formats.
+- `@public` markers on `chitra_png_check_signature` and
+  `chitra_jpeg_check_signature`. Both are called directly by kii; both lived in
+  modules carrying neither the file-level banner nor a per-function marker, so
+  the marker set and the documented surface disagreed. A freeze should not
+  codify that disagreement.
+
+### Behaviour changes
+
+- **Two `chitra_err_name` strings changed.** `CHITRA_ERR_INTERLACE` was
+  "interlace unsupported" and is now **"illegal interlace method"**;
+  `CHITRA_ERR_BIT_DEPTH` was "bit depth unsupported" and is now **"illegal bit
+  depth for color type"**. Both codes fire *only* on genuinely illegal values —
+  chitra decodes Adam7 and every spec-legal depth — so the old strings told a
+  consumer the wrong story about its own file. Anything matching on those
+  strings must update.
+
+### Changed
+
+- **`CHITRA_ERR_UNSUPPORTED`'s enum comment now enumerates every case it
+  covers** rather than describing one of them as though it were all. Splitting
+  the code was rejected: minting error codes immediately before a freeze is the
+  opposite of settling the surface, and the shared meaning is real and precise
+  — *the file is valid; chitra declines it*. The set also shrank on its own:
+  0.6.0 added a multi-scan meaning and **0.8.0 removed it** when multi-scan
+  started decoding.
+- **`chitra_image_seen_iend` keeps its name**, deliberately. It is a PNG
+  concept on four formats and 0.7.0 generalised its meaning; the name is now
+  odd. Renaming it buys a better name and costs kii a real edit at the exact
+  moment the project promises stability — and shipping both names would leave a
+  frozen surface with two names for one field, explaining itself forever.
+- The **45 internal names are not renamed** to `_chitra_*`. That is ~45 renames
+  across `src/` plus 75 test call sites, immediately before a freeze, for zero
+  runtime benefit and a real risk a typo silently disables a test. Saying which
+  names are which is the deliverable that mattered, and the rename stays
+  available later as a non-breaking change.
+
+### Notes
+
+- **Waiting on a toolchain pin bump**: sankoch **2.7.10** fixes the
+  `alloc_reset()` hazard in
+  [architecture/005](docs/architecture/005-alloc-reset-sankoch-hazard.md).
+  chitra cannot pick it up on its own — `lib/` is vendored by `cyrius deps`
+  from the toolchain — so it arrives with the next cyrius release and a bump of
+  `[package].cyrius` (currently `6.5.35`). On that bump, architecture/005,
+  architecture/003's ⚠ block and state.md's known-issue entry all become stale
+  together, and the roadmap says to re-run the reproduction before deleting any
+  of them. Not a v1.0 blocker: chitra's own decode path never calls
+  `alloc_reset()`. **A consumer is exercising the hazard today**: kii's fuzz
+  harness calls `kii_decode_png` then `alloc_reset()` on every one of 10⁶
+  iterations, and its contract is satisfied by a corrupted decode returning
+  `CHITRA_ERR_CRC` — so it passes whether or not the hazard fires.
+
 ## [0.8.0] - 2026-08-24
 
 **T.81 § A.2 multi-scan and partially-interleaved JPEG.** The last deferred

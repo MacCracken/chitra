@@ -50,7 +50,7 @@ test: check-lib-wiring
 	@for f in tests/tcyr/*.tcyr; do $(CYRIUS) test "$$f" || exit 1; done
 
 .PHONY: lint
-lint:
+lint: check-surface
 	@fail=0; \
 	for f in src/*.cyr programs/*.cyr tests/tcyr/*.tcyr tests/bcyr/*.bcyr fuzz/*.fcyr; do \
 		out=$$($(CYRIUS) lint $$f 2>&1); echo "$$out"; \
@@ -70,6 +70,13 @@ fmt-check:
 		fi; \
 	done; \
 	[ $$fail -eq 0 ] || { echo "fmt: drift detected"; exit 1; }
+
+.PHONY: check-surface
+# The public surface is a list, and this checks dist/chitra.cyr against it.
+# Wired into `lint` so a new chitra_* export cannot appear unclassified — at
+# v1.0 that would be a compatibility promise made by accident.
+check-surface:
+	@./scripts/check-surface.sh
 
 .PHONY: vet
 vet:

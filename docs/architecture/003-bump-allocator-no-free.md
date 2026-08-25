@@ -22,7 +22,7 @@ domain modules** as of 0.6.0:
   Huffman-table side allocations.
 - `src/jpeg.cyr` — the per-component MCU planes, the zig-zag/IDCT scratch, and the
   RGBA8 output buffer.
-- `src/png.cyr` — the 48-byte `ChitraImage` record (shared by both decoders).
+- `src/png.cyr` — the 56-byte `ChitraImage` record (shared by all four decoders).
 - `src/error.cyr` — the 16-byte `ChitraErr` record.
 - `src/bmp.cyr` — the palette span copy, the RLE index plane, and the RGBA8
   output buffer (0.4.0 / 0.5.1).

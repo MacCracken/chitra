@@ -1,6 +1,6 @@
 # chitra
 
-Version: 0.8.0
+Version: 1.0.0
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder, a sibling AGNOS package in the mould of `sakshi` /
@@ -54,13 +54,14 @@ progressive / arithmetic / 12-bit / hierarchical / CMYK JPEG; an unrecognised
 BMP DIB header size; and any illegal PNG depth × color-type pair. BMP's
 deferral list is now empty — everything it once postponed decodes.
 
-One refusal is worth naming because the file is **valid**: a baseline JPEG whose
-scans do not each carry every frame component (what `cjpeg -scans` emits) is
-deferred, not malformed, and says so with `CHITRA_ERR_UNSUPPORTED`. 0.6.0
-implements the one-component half of that layout and schedules the rest —
-[ADR 0006](docs/adr/0006-defer-jpeg-multiscan-resumption.md) records what a
-correct implementation owes, and why relaxing the check without it would make
-those files decode to a *wrong image with no error raised*.
+That list used to include a **valid** file: a baseline JPEG whose scans do not
+each carry every frame component (what `cjpeg -scans` emits). It was deferred
+rather than malformed, and said so with `CHITRA_ERR_UNSUPPORTED`. **0.8.0
+decodes it** — held to the exact bytes of the same image encoded interleaved,
+all nine sampling combinations byte-identical under `djpeg -nosmooth`. The
+deferral is over; [ADR 0006](docs/adr/0006-defer-jpeg-multiscan-resumption.md)
+is amended with what the implementation actually cost, including a claim in its
+original text that turned out to be false.
 
 Two refusals are permanent rather than deferred: **encoding** (chitra is
 decode-only, in both directions of that sentence) and **`BI_JPEG` / `BI_PNG`
@@ -103,10 +104,27 @@ Untrusted bytes are the whole input surface, so the guards are the product:
   with ImageMagick.
 
 Per-release detail — including the four input classes 0.3.3 began rejecting
-deliberately — is in [`CHANGELOG.md`](CHANGELOG.md). Sequencing is in
-[`docs/development/roadmap.md`](docs/development/roadmap.md): **0.6.0**
-deferred JPEG geometry plus a streaming API, then the v1.0 API/ABI freeze.
-All four formats are now feature-complete for their scope.
+deliberately — is in [`CHANGELOG.md`](CHANGELOG.md).
+
+## Stability
+
+**The public API and ABI are frozen as of 1.0.0.** The
+[29 names](docs/development/public-surface.md) — ten decode entry points, four
+signature predicates, eight `ChitraImage` accessors, six error-API functions
+and `chitra_version` — plus the 56-byte `ChitraImage` and 16-byte `ChitraErr`
+layouts and the `ChitraErrCode` numeric values, cannot change without a major
+bump and an ADR. `dist/chitra.cyr` is a strip-concatenated bundle, so it also
+exports **45 internal names**; the same file lists them, and
+`scripts/check-surface.sh` fails the build if the bundle and that list ever
+disagree in either direction.
+
+Three things are deliberately outside the promise: the internal names, the
+human-readable `chitra_err_name` strings (the *codes* are frozen — match on
+those), and bit-exact output across releases. The output contract is *correct*
+RGBA8 held to external oracles, so a repair that moves bytes toward the oracle
+is a bug fix — the § 13.13 depth-16 rescaling change in 0.7.x changed every
+16-bit PNG's output and was one. Full edges in
+[ADR 0010](docs/adr/0010-the-v1-surface.md).
 
 ## Relationships
 
@@ -139,7 +157,7 @@ All deps are pinned in `cyrius.cyml`; the toolchain pin is
 ```bash
 cyrius deps          # resolve stdlib + sankoch + thread into lib/
 make build           # link-check the include chain (→ build/chitra_smoke)
-make test            # 2938 assertions across tests/tcyr/
+make test            # 3014 assertions across tests/tcyr/
 make fuzz            # ~2.2 M adversarial decode cases (fuzz/*.fcyr)
 make bench           # 17 decode benchmarks (tests/bcyr/chitra.bcyr)
 make dist            # regenerate dist/chitra.cyr — the artifact consumers link

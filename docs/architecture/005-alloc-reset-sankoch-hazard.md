@@ -84,6 +84,41 @@ This is one of two reasons the byte-budget entry point in
 matters: with the arena boundary unsafe for PNG, a caller has no way at all to
 bound decode memory today.
 
+## Who is exercising this today
+
+Not hypothetical. **kii's fuzz harness** (`tests/kii.fcyr`, `fuzz_png_iter`)
+calls `kii_decode_png(...)` and then `alloc_reset()` on every iteration, at
+10⁶ iterations per run — precisely the pattern above, and for exactly the
+reason 003 gives: without the rewind, the never-free arena grows unbounded.
+kii is right to do it. There is no other way to bound the heap over a million
+decodes.
+
+**And the harness cannot see the hazard.** Its stated contract is that
+`kii_decode_png` "never crashes; returns `PNG_OK` or any `PNG_ERR_*`
+cleanly" — which a *corrupted* decode returning `CHITRA_ERR_CRC` satisfies
+perfectly. The inputs are random bytes expected to fail anyway, so the failure
+this note documents is indistinguishable, from inside that harness, from the
+harness working. It is the house rule in its purest form: **fuzzing does not
+find wrong output.**
+
+That is what makes the sankoch 2.7.10 pin bump a fix rather than housekeeping.
+
+## Status
+
+**Fixed upstream in sankoch 2.7.10; not yet vendored here.** The fix is an
+arena canary — the reset zeroes the span it rewinds, so a magic-stamped
+arena-allocated word reads back zero afterwards, which makes the detection
+exact rather than heuristic. It is checked in `_sankoch_lock()` *before*
+`_sankoch_mtx` is touched (the mutex pointer is itself a candidate for being
+dangling) and again in `crc32_init_table()`, which consumers reach without the
+lock — as chitra does, per PNG decode.
+
+chitra cannot pick it up on its own: `lib/` is vendored by `cyrius deps` from
+the toolchain snapshot, so it arrives with the next cyrius release and a bump
+of `[package].cyrius` (`6.5.35` as of 1.0.0). **Re-run the reproduction above
+against the new `lib/sankoch.cyr` before retiring this note** — a pin bump is
+not by itself evidence that the bundled copy moved.
+
 ## See also
 
 - [`003-bump-allocator-no-free.md`](003-bump-allocator-no-free.md) — the

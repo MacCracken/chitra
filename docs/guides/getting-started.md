@@ -2,7 +2,7 @@
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder. It turns encoded image bytes into canonical
-RGBA8 pixels — no GPU, no C shim, no external binaries. As of v0.8.0 it
+RGBA8 pixels — no GPU, no C shim, no external binaries. As of v1.0.0 it
 decodes **PNG** (every spec-legal bit depth 1/2/4/8/16 across color types
 0/2/3/4/6, Adam7 interlace, PLTE/tRNS), **baseline JPEG** (JFIF SOF0,
 grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0 chroma subsampling, restart
@@ -29,7 +29,7 @@ isn't on your PATH yet, see the agnosticos bootstrap.
 ```bash
 cyrius deps        # resolve stdlib + sankoch + thread into lib/
 make build         # link-check: builds build/chitra_smoke from programs/smoke.cyr
-make test          # 2938 assertions across tests/tcyr/
+make test          # 3014 assertions across tests/tcyr/
 make fuzz          # ~10⁶ adversarial decode cases across fuzz/*.fcyr
 make bench         # 17 decode benchmarks (tests/bcyr/chitra.bcyr)
 make dist          # = cyrius distlib → dist/chitra.cyr
@@ -75,7 +75,7 @@ released tag and pulling that one module:
 ```toml
 [deps.chitra]
 git     = "https://github.com/MacCracken/chitra"
-tag     = "0.8.0"
+tag     = "1.0.0"
 modules = ["dist/chitra.cyr"]
 ```
 
@@ -122,14 +122,26 @@ directly:
 - `chitra_image_pixels(img)` — pointer to the owned RGBA8 buffer
   (`width * height * 4` bytes)
 - `chitra_image_channels(img)` — always `4`
-- `chitra_image_seen_iend(img)` — `1` if an IEND chunk closed the
-  stream, `0` if it ended cleanly without one (tolerated)
+- `chitra_image_seen_iend(img)` — `1` if the stream ended the way its
+  format says it should, `0` if it ended cleanly but without the closing
+  marker (tolerated). The name is PNG's (did an IEND chunk close it?);
+  0.7.0 generalised the meaning to all four formats, and v1.0 keeps the
+  name because renaming a frozen accessor charges consumers for a
+  cosmetic gain ([ADR 0010](../adr/0010-the-v1-surface.md))
 - `chitra_image_source_color_type(img)` — the pre-normalization source
   type, so you can report the original format even though the pixels are
   canonical RGBA8. For PNG it is the PNG color_type (0/2/3/4/6); for JPEG
   it is `0x100 | num_components` (`0x101` grayscale, `0x103` YCbCr); for BMP
   it is `0x200 | bpp` (`0x208` palette-8, `0x218` 24 bpp, `0x220` 32 bpp); for
   GIF it is `0x300 | min_code_size`
+- `chitra_image_source_depth(img)` — **bits per channel in the source**
+  (0.9.0). The output is always 8 bits per channel, so without this a
+  depth-16 PNG and a depth-8 one are indistinguishable in the result even
+  though § 13.13 rescaling discarded precision. It is the IHDR depth for
+  PNG (1/2/4/8/16), `8` for baseline JPEG and for GIF palette entries, and
+  for BMP the widest declared channel (`8` at 24/32 bpp, `5` or `6` for the
+  packed 16-bpp layouts) — the number the RGBA8 output was bit-replicated
+  *up from*
 
 A minimal usage sketch (you supply `bytes`/`n` from however you read
 the file or socket):
@@ -171,7 +183,7 @@ no-op: the stdlib `alloc` is a bump allocator with no per-block free —
 see [architecture note 003](../architecture/003-bump-allocator-no-free.md).
 
 You can probe the linked version at runtime with `chitra_version()`,
-which returns `800` for 0.8.0 (`major*10000 + minor*100 + patch`).
+which returns `10000` for 1.0.0 (`major*10000 + minor*100 + patch`).
 `make version-check` gates that literal against `VERSION`, so it cannot
 drift silently again.
 

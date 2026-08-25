@@ -729,6 +729,8 @@ fn _jpeg_build_image(frame, planes, comppw, closed, err_out): i64 {
     var sentinel = 256 + ncomp;
     if (is_rgb == 1) { sentinel = sentinel + 16; }
     store64(img + IMAGE_SRC_CTYPE_OFFSET, sentinel);
+    # Baseline is 8-bit by definition; 12-bit precision rejects at the SOF0 parse.
+    store64(img + IMAGE_SRC_DEPTH_OFFSET, 8);
     return img;
 }
 

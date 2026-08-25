@@ -19,7 +19,21 @@ enum ChitraErrCode {
     CHITRA_ERR_SIGNATURE  = 1;   # missing/corrupt PNG 8-byte signature
     CHITRA_ERR_TRUNCATED  = 2;   # input ends before a chunk/field completes
     CHITRA_ERR_BAD_CHUNK  = 3;   # malformed chunk (length/CRC/type/order)
-    CHITRA_ERR_UNSUPPORTED = 4;  # valid PNG but a feature chitra can't decode
+    # "The file is valid; chitra declines it." Deliberately one code covering
+    # several situations, enumerated here because the freeze codifies it and a
+    # one-line comment describing one of them is how it drifted:
+    #   PNG  — an unrecognised CRITICAL chunk (§ 5.4's ancillary bit: such a
+    #          chunk changes how the image is to be interpreted, so rendering
+    #          anyway means rendering a stream we do not understand);
+    #        — a compression or filter method other than 0 (§ 11.2.2);
+    #        — an unrecognised colour type.
+    #   JPEG — an Adobe APP14 colour transform chitra does not implement (2 is
+    #          YCCK) or does not recognise (> 2). Guessing YCbCr for it is the
+    #          defect ADR 0009 exists to prevent.
+    # It does NOT cover the non-baseline JPEG modes — progressive, arithmetic,
+    # 12-bit, hierarchical and CMYK each carry their own code (19..23) — and as
+    # of 0.8.0 it no longer covers any JPEG scan geometry, which now decodes.
+    CHITRA_ERR_UNSUPPORTED = 4;
     CHITRA_ERR_INFLATE    = 5;   # sankoch zlib_decompress reported failure
     CHITRA_ERR_OOM        = 6;   # allocation failed / decompression-bomb cap hit
     CHITRA_ERR_CRC        = 7;   # chunk CRC-32 mismatch (corruption / tamper)
@@ -115,8 +129,8 @@ fn chitra_err_name(code): i64 {
     if (code == CHITRA_ERR_INFLATE)    { return "inflate failed"; }
     if (code == CHITRA_ERR_OOM)        { return "out of memory"; }
     if (code == CHITRA_ERR_CRC)        { return "chunk CRC mismatch"; }
-    if (code == CHITRA_ERR_INTERLACE)  { return "interlace unsupported"; }
-    if (code == CHITRA_ERR_BIT_DEPTH)  { return "bit depth unsupported"; }
+    if (code == CHITRA_ERR_INTERLACE)  { return "illegal interlace method"; }
+    if (code == CHITRA_ERR_BIT_DEPTH)  { return "illegal bit depth for color type"; }
     if (code == CHITRA_ERR_DIMENSIONS) { return "bad dimensions"; }
     if (code == CHITRA_ERR_FILTER)     { return "bad filter byte"; }
     if (code == CHITRA_ERR_NO_IDAT)    { return "no IDAT chunks"; }

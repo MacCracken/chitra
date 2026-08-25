@@ -99,7 +99,7 @@ Place each in the matching `tests/tcyr/` suite — `error.tcyr` (error paths),
 `interlace.tcyr` (Adam7), `jpeg.tcyr` (baseline JPEG decode + reject paths),
 `png.tcyr` (the core PNG decode matrix), or `subbyte.tcyr` (1/2/4-bit
 grayscale/palette). The suites are globbed by `make test`; each is a standalone
-`main()`. The current baseline is **2,938 assertions across 11 suites** — PRs that
+`main()`. The current baseline is **3,014 assertions across 12 suites** — PRs that
 lower coverage will be asked to add it.
 Confirm the count with `make count-assertions`.
 
@@ -115,15 +115,21 @@ send a decode change:
   change the generator, keep the verification honest. Record with
   `make bench-record`; numbers are host-dependent, so compare within a host.
 
-> **Wanted contribution:** all four common raster formats now decode, the BMP
-> deferrals are paid off (0.5.1/0.5.2), every decode path has been audited
-> (0.5.3), and T.81 § A.2 decodes for a one-component frame (0.6.0). What is
-> left is the **public API + ABI freeze**, the byte-budget surface (0.6.1, and
-> [ADR 0007](docs/adr/0007-byte-budget-surface-deferred.md) says what must
-> happen first), and JPEG multi-scan resumption (0.7.0,
-> [ADR 0006](docs/adr/0006-defer-jpeg-multiscan-resumption.md)) — see
-> [`docs/development/roadmap.md`](docs/development/roadmap.md). Open an issue
-> first to agree on shape.
+> **Wanted contribution:** the roadmap chitra shipped through 0.x is done —
+> four formats, every deferral paid off, every path audited, the full T.81
+> § A.2 scan model, and the **public API + ABI freeze at 1.0.0**. That last one
+> changes what a contribution costs: anything touching the
+> [29 frozen names](docs/development/public-surface.md) or either record layout
+> now needs a **major bump and an ADR**, and `make lint` will tell you if your
+> change moved the surface before you find out the hard way. Everything else is
+> as open as it was.
+>
+> What is left is post-1.0 and mostly needs a major bump or a new name rather
+> than a minor: multi-frame GIF
+> ([ADR 0005](docs/adr/0005-gif-first-frame-only.md)), progressive JPEG, and
+> the downstream pin bumps. **Encoding is out of scope permanently** — chitra
+> decodes. See [`docs/development/roadmap.md`](docs/development/roadmap.md),
+> and open an issue first to agree on shape.
 >
 > **Reference decoders, and which one to trust for JPEG.** The house rule is
 > "validate against ImageMagick", and it holds unqualified for PNG, BMP and

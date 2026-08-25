@@ -193,6 +193,7 @@ fn _cur_skip(cur, n): i64 {
 # ================================================================
 # Signature check — pure in-memory, length-validated.
 # ================================================================
+# @public
 fn chitra_png_check_signature(src, len): i64 {
     if (len < CHITRA_PNG_MAGIC_LEN) { return 0; }
     return memeq(src, CHITRA_PNG_MAGIC, CHITRA_PNG_MAGIC_LEN);

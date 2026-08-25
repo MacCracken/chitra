@@ -509,6 +509,7 @@ fn chitra_gif_decode(src, len, err_out): i64 {
     # src_ctype sentinel: 0x300 | (bits per palette index). Distinct from PNG's
     # raw color_type, JPEG's 0x100 | ncomp, and BMP's 0x200 | bpp.
     store64(img + IMAGE_SRC_CTYPE_OFFSET, 768 + min_code_size);
+    store64(img + IMAGE_SRC_DEPTH_OFFSET, 8);   # palette entries are bytes
     return img;
 }
 

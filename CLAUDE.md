@@ -18,7 +18,7 @@ share it, and further formats can join without a rename.
 - **Type**: Shared library (no CLI binary — consumers link `dist/chitra.cyr`)
 - **License**: GPL-3.0-only
 - **Language**: Cyrius (toolchain pinned in `cyrius.cyml [package].cyrius` — that pin is the source of truth; do not inline the number here)
-- **Version**: `VERSION` at the project root is the source of truth — do not inline the number here. SemVer (pre-1.0: surface still moving).
+- **Version**: `VERSION` at the project root is the source of truth — do not inline the number here. SemVer. **The public surface is frozen as of 1.0.0** — the 29 names in [`docs/development/public-surface.md`](docs/development/public-surface.md) plus both record layouts. Changing a signature, removing a name, or changing documented behaviour there is a **major bump plus an ADR**, not a minor. `scripts/check-surface.sh` gates it on every `make lint`.
 - **Genesis repo**: [agnosticos](https://github.com/MacCracken/agnosticos)
 - **Standards**: [First-Party Standards](https://github.com/MacCracken/agnosticos/blob/main/docs/development/first-party/first-party-standards.md) · [First-Party Documentation](https://github.com/MacCracken/agnosticos/blob/main/docs/development/first-party/first-party-documentation.md)
 
@@ -83,7 +83,7 @@ make count-assertions                                # NUL-safe assertion total 
 - **Stdlib includes live ONLY in `src/lib.cyr`** — domain modules (`src/*.cyr`) are flat (no stdlib includes). This is what lets `cyrius distlib` strip-concatenate into a compile-clean `dist/chitra.cyr`. Adding a stdlib include to a domain module breaks the dist bundle.
 - **`[lib].modules` order in `cyrius.cyml` is dependency order** — `error.cyr` (dep-free) → `png_chunks.cyr` → `png_filter.cyr` → `png_color.cyr` → `png.cyr` → `jpeg_huffman.cyr` → `jpeg_idct.cyr` → `jpeg_markers.cyr` → `jpeg.cyr` → `bmp.cyr` → `gif_lzw.cyr` → `gif.cyr` (the frame-independent JPEG leaves precede the frame-builder — see [architecture/004](docs/architecture/004-jpeg-decode-pipeline.md); `bmp.cyr` needs only `ChitraImage`, the ceilings and the error codes; `gif_lzw.cyr` is likewise a frame-independent leaf and must precede `gif.cyr`, which drives it). Don't reorder without re-running `cyrius distlib` and verifying the bundle still compiles.
 - **`ChitraErr` stays a 16-byte record** (`+0` code, `+8` detail ptr) — layout-compatible with mabda's `GpuErr` so a decode failure maps cleanly onto `GPU_ERR_IMAGE_DECODE`. Don't widen it.
-- **`ChitraImage` field additions are append-only** — `width`/`height`/`pixels`/`channels` keep their 0.1.x offsets (mabda's accessors depend on them). New fields go at the end (`seen_iend` @ +32, `src_ctype` @ +40), and any widen bumps `CHITRA_IMAGE_SIZE`.
+- **`ChitraImage` field additions are append-only** — `width`/`height`/`pixels`/`channels` keep their 0.1.x offsets (mabda's accessors depend on them). New fields go at the end (`seen_iend` @ +32, `src_ctype` @ +40, `src_depth` @ +48), and any widen bumps `CHITRA_IMAGE_SIZE`.
 - Do not add unnecessary dependencies (current set: stdlib + `sankoch` + `thread`).
 - Do not skip tests, fuzz-corpus checks, or reference-image verification before claiming a decode path works.
 - Do not hardcode the toolchain version in CI YAML — the `cyrius = "X.Y.Z"` pin in `cyrius.cyml` is the only source of truth.
@@ -121,10 +121,12 @@ CHANGELOG entry and an ADR:
 - `chitra_image_decode_budget(src, len, max_bytes, err_out)` → decode unless the RGBA8 output would exceed `max_bytes` (0.6.1). A refusal costs 16 bytes (144 for BMP) and sets `CHITRA_ERR_BUDGET`; it is **never a validity opinion** — an unreadable header goes to the router so the real error is reported. See [ADR 0008](docs/adr/0008-byte-budget-as-shipped.md)
 - `chitra_image_decode(src, len, err_out)` → the **format-sniffing router** (PNG magic, then JPEG SOI, then BMP `BM`, then GIF `GIF8?a`, else `CHITRA_ERR_SIGNATURE`); the entry to reach for when the format isn't known up front
 - `chitra_png_check_signature` / `chitra_jpeg_check_signature` / `chitra_bmp_check_signature` / `chitra_gif_check_signature` — signature predicates
-- `chitra_image_{width,height,pixels,channels,seen_iend,source_color_type}` accessors (`source_color_type`: PNG color_type 0/2/3/4/6; `0x100 | ncomp` for JPEG — 0x101 grayscale, 0x103 YCbCr, **0x113 RGB** (0.6.1); `0x200 | bpp` for BMP — 0x208 palette-8, 0x218 24bpp, 0x220 32bpp; `0x300 | min_code_size` for GIF)
+- `chitra_image_{width,height,pixels,channels,seen_iend,source_color_type,source_depth}` accessors (`source_depth`: bits per channel in the SOURCE — PNG IHDR depth, 8 for JPEG/GIF, the widest declared channel for BMP) (`source_color_type`: PNG color_type 0/2/3/4/6; `0x100 | ncomp` for JPEG — 0x101 grayscale, 0x103 YCbCr, **0x113 RGB** (0.6.1); `0x200 | bpp` for BMP — 0x208 palette-8, 0x218 24bpp, 0x220 32bpp; `0x300 | min_code_size` for GIF)
 - `chitra_image_free` (no-op under the bump allocator; kept for symmetry)
 - `chitra_version()` (packed `major*10000 + minor*100 + patch`)
 - error API: `chitra_err_new` / `chitra_err` / `chitra_err_code` / `chitra_err_detail` / `chitra_err_name` / `chitra_err_print_name` + the `ChitraErrCode` enum
+
+**The frozen list is [`docs/development/public-surface.md`](docs/development/public-surface.md)**, checked against `dist/chitra.cyr` by `scripts/check-surface.sh` on every `make lint`. The bundle is a strip-concatenation, so it exports 74 `chitra_*` names and **45 of them are internal** — the manifest is what says which is which, and the gate fails both when the bundle gains an unclassified name and when the manifest names one the bundle lost.
 
 ## Process
 

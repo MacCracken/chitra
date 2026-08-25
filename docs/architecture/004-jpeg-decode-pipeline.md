@@ -248,12 +248,17 @@ These three are pure Cyrius/representation quirks — the IDCT and color math ar
    not know the JPEG error enum starts at 13 will misread this dispatch.
 
 3. **Per-component data lives in parallel byte-offset arrays.** Cyrius has no
-   struct-of-arrays sugar, so `_jpeg_decode_scan` keeps eight stack arrays
-   (`planes`, `preds`, `dctabs`, `actabs`, `quants`, `comph`, `compv`, `comppw`)
-   indexed by `comp * 8` (i64 stride). Likewise `ChitraJpegFrame`'s per-component
-   specs are a flat block of 4 × `JF_COMP_STRIDE` (48-byte) records addressed by
-   `JF_COMP + i*48 + field`. The accessor functions (`chitra_jpeg_frame_comp_*`)
-   exist precisely so the rest of the code never open-codes that arithmetic.
+   struct-of-arrays sugar, so the scan decoder keeps stack arrays (`preds`,
+   `dctabs`, `actabs`, `quants`, `comph`, `compv`) indexed by `comp * 8` (i64
+   stride). Two of them — `planes` and `comppw` — live one level up in
+   `_jpeg_decode_scans` and are indexed by **frame** component rather than scan
+   component, because a plane outlives the scan that fills it (0.8.0: a
+   multi-scan file fills each plane in a different scan). Likewise
+   `ChitraJpegFrame`'s per-component specs are a flat block of
+   4 × `JF_COMP_STRIDE` (32-byte since 0.8.0, when the Huffman selectors moved
+   to the scan) records addressed by `JF_COMP + i*JF_COMP_STRIDE + field`. The
+   accessor functions (`chitra_jpeg_frame_comp_*`) exist precisely so the rest
+   of the code never open-codes that arithmetic.
 
 ## Error codes and security ceilings
 

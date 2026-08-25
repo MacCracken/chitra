@@ -1061,6 +1061,24 @@ fn chitra_bmp_decode(src, len, err_out): i64 {
     # 0x218 for 24 bpp, 0x220 for 32 bpp. Distinct from PNG's raw color_type
     # (0/2/3/4/6) and JPEG's 0x100 | ncomp.
     store64(img + IMAGE_SRC_CTYPE_OFFSET, 512 + bpp);
+    # Bits per CHANNEL as stored, not bits per pixel. 8 for 24/32 bpp and for
+    # palette entries (which are BGRA bytes whatever the index width); for the
+    # packed 16-bpp layouts it is the widest declared channel, so 5-5-5 reports
+    # 5 and 5-6-5 reports 6. That is the number a caller needs to know how much
+    # precision the RGBA8 output was widened FROM — bit replication (0.5.2)
+    # cannot invent detail that was never stored.
+    # Keyed on the mask WIDTHS rather than on `is_bitfields`, which lives in
+    # _bmp_parse_header and is not in scope here. They say the same thing and
+    # the widths say it more directly: a declared mask means packed channels,
+    # and the 16-bpp BI_RGB path already carries the documented X1R5G5B5
+    # defaults, so it reports 5 without a special case.
+    var src_depth = 8;
+    if (wd_r > 0) {
+        src_depth = wd_r;
+        if (wd_g > src_depth) { src_depth = wd_g; }
+        if (wd_b > src_depth) { src_depth = wd_b; }
+    }
+    store64(img + IMAGE_SRC_DEPTH_OFFSET, src_depth);
     return img;
 }
 

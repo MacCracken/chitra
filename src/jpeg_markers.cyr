@@ -161,6 +161,7 @@ fn chitra_jpeg_frame_free(f): i64 { return 0; }
 # ================================================================
 # Signature — every JPEG starts with SOI = 0xFF 0xD8 (T.81 § B.2.1).
 # ================================================================
+# @public
 fn chitra_jpeg_check_signature(src, len): i64 {
     if (len < 2) { return 0; }
     if (load8(src) != 0xFF) { return 0; }
