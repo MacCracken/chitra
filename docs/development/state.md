@@ -1,38 +1,44 @@
 # chitra — Current State
 
-> **Last refresh**: 2026-08-24 (0.7.1) | **Refresh cadence**: every release.
+> **Last refresh**: 2026-08-24 (0.7.2) | **Refresh cadence**: every release.
 > [`CLAUDE.md`](../../CLAUDE.md) is preferences / process / architecture
 > (durable); this file is **state** (volatile) — it is the home for the
 > version, sizes, and counts `CLAUDE.md` must not inline.
 
 ## Version
 
-**0.7.1** — cut 2026-08-24. **PNG conformance: chunks the spec forbids, and a
-reduction that was wrong by one.**
+**0.7.2** — cut 2026-08-24. **BMP and GIF loose ends** — five items from the
+0.6.1 deferment sweep. Four landed; the fifth was investigated and
+**deliberately declined**, which is the more useful result.
 
-The depth-16 row of the decode matrix was **self-certified** — its cells
-asserted chitra's own truncation rule rather than a reference decode. The
-cross-check the roadmap asked for found a real divergence: PNG § 13.13 gives
-the sample-depth conversion as `floor(input * MAXOUT / MAXIN + 0.5)`, and
-chitra took the high byte instead (libpng's `png_set_strip_16`, which libpng
-documents as the fast, *inaccurate* option). Samples `0x00FF` and `0x01FF`
-reduced to 0 and 1 where ImageMagick gives 1 and 2. **Decoded pixel values
-changed for every depth-16 image**, across all four colour types, and all seven
-depth-16 fixtures are now diffed against ImageMagick byte-for-byte.
+- **OS/2 2.x `BITMAPCOREHEADER2` (64 bytes) decodes** — its first 40 bytes are
+  laid out exactly like `BITMAPINFOHEADER`, so it needed only admitting to the
+  allow-list. Verified against ImageMagick byte-for-byte. Sizes 16..63 stay
+  rejected: below 40 the compression and `clrused` fields are absent and would
+  need defaults nothing can check, and ImageMagick refuses them too.
+- **`BI_ALPHABITFIELDS` on a 52-byte V2 header** decoded **silently opaque** —
+  it names four masks in a header with room for three, and chitra's in-header
+  alpha read is gated on V3-or-later, so every declared per-pixel alpha was
+  discarded with no error. Now rejects rather than inventing a location for the
+  fourth mask.
+- **The GIF transparent index is range-checked** against the table in force.
+- **BMP RLE end-of-line** now checks its landing point at the same threshold
+  the delta escape uses. Stated plainly: no write was ever at risk and
+  ImageMagick accepts such files — a consistency guard, not a repair.
 
-Three chunk rules went unenforced, each leaving chitra's posture inverted — it
-has rejected tRNS-before-PLTE since 0.5.3, an ordering ImageMagick tolerates,
-while accepting chunks the spec forbids: **PLTE on colour types 0/4**
-(§ 11.2.3), **tRNS on colour types 4/6** (§ 11.3.2), and **any chunk between
-IDATs** (§ 5.6, which made a spliced stream decode as though the payloads were
-adjacent). All three now reject with `CHITRA_ERR_BAD_CHUNK`; ImageMagick
-accepts all three.
+**Declined:** a GIF Plain Text Extension does *not* consume a pending Graphic
+Control Extension. The spec reading says it should (§ 23 scopes a GCE to the
+first graphic-rendering block; § 25 makes Plain Text one), but **ImageMagick
+carries the GCE forward to the image too**, measured on a hand-built file.
+chitra follows the reference where a conformance argument cannot be confirmed
+against any real file — it diverges only where the spec is prohibitive and the
+result is a wrong image, as in PNG § 5.6 (0.7.1).
 
-`chitra_version()` → **701**. **2,833 test assertions** across **10 suites**,
+`chitra_version()` → **702**. **2,858 test assertions** across **10 suites**,
 **8,072,804 fuzz assertions**, 17 benchmarks — 0 failures throughout.
 
 Released tags: 0.1.0, 0.2.0, 0.2.1, 0.3.0, 0.3.1, 0.3.2, 0.3.3, 0.4.0, 0.5.0,
-0.5.1, 0.5.2, 0.5.3, 0.6.0, 0.6.1, 0.7.0 (SemVer;
+0.5.1, 0.5.2, 0.5.3, 0.6.0, 0.6.1, 0.7.0, 0.7.1 (SemVer;
 pre-1.0, the public surface is still moving — no API freeze until v1.0).
 
 ## Toolchain
@@ -120,7 +126,7 @@ Shared:
 - `ChitraImage` accessors: `chitra_image_{width,height,pixels,channels,
   seen_iend,source_color_type}`; `chitra_image_free` (a documented no-op
   under the bump allocator).
-- `chitra_version()` → **`701`** (`major*10000 + minor*100 + patch`).
+- `chitra_version()` → **`702`** (`major*10000 + minor*100 + patch`).
 - Error API: `chitra_err_new` / `chitra_err` / `chitra_err_code` /
   `chitra_err_detail` / `chitra_err_name` / `chitra_err_print_name` + enum
   `ChitraErrCode`.
@@ -367,7 +373,7 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
 ## Tests + bench
 
 - `make test` (globs `tests/tcyr/*.tcyr`; each is a standalone `main()`) →
-  **2,833 assertions, all pass** across 10 suites:
+  **2,858 assertions, all pass** across 10 suites:
   - `gif.tcyr` — **638** (signature, plain / interlaced 4×4 and 8×8 /
     transparent / animated-first-frame fixtures with **every pixel asserted**,
     the no-image and bad-min-code-size rejections, a truncation sweep, the
@@ -399,7 +405,7 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
     wrong returns the right *set* of pixels in the wrong places, and only
     position-sensitive expectations catch that.
   - `error.tcyr` — **20** (error codes, `chitra_err_*` accessors, name
-    round-trips, `chitra_version` → 701).
+    round-trips, `chitra_version` → 702).
   - `interlace.tcyr` — **35** (Adam7 cross-checked against the trusted
     non-interlaced decode for 7 color/depth/odd-dimension cases).
   - `jpeg.tcyr` — **284** (marker scan + non-baseline rejection, SOF0
@@ -517,12 +523,12 @@ path in the library (no chroma planes, no upsample, no color convert).
 
 ## Quality gates
 
-All green at 0.7.1 on cyrius 6.5.35:
+All green at 0.7.2 on cyrius 6.5.35:
 
 | gate | command | result |
 |---|---|---|
 | link check | `make build` | OK, 588,976 bytes, no warnings |
-| tests | `make test` | 2,833/2,833, 0 failures |
+| tests | `make test` | 2,858/2,858, 0 failures |
 | fuzz | `make fuzz` | 8,072,804/8,072,804, 0 failures (~2.3 M cases) |
 | bench | `make bench` | 17 benchmarks, fixtures self-verified, ~2 s |
 | lint | `make lint` | 0 warnings (incl. `fuzz/*.fcyr` + `tests/bcyr/*.bcyr`) |

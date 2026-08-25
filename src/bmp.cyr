@@ -42,6 +42,20 @@ var BMP_V2_HEADER_SIZE   = 52;    # INFO + RGB masks
 var BMP_V3_HEADER_SIZE   = 56;    # INFO + RGBA masks
 var BMP_V4_HEADER_SIZE   = 108;   # BITMAPV4HEADER  (masks + color space + gamma)
 var BMP_V5_HEADER_SIZE   = 124;   # BITMAPV5HEADER  (V4 + intent + ICC profile)
+# OS/2 2.x BITMAPCOREHEADER2. Its first 40 bytes are laid out EXACTLY like
+# BITMAPINFOHEADER — 32-bit width/height, unlike the 12-byte OS/2 1.x header —
+# and the remaining 24 are OS/2-only fields (units, recording, rendering,
+# halftone sizes, colour encoding, identifier) chitra has no use for. So it
+# parses on the INFO path and only needs admitting to the allow-list.
+#
+# The OS/2 2.x spec permits any size from 16 to 64, the trailing fields being
+# optional. chitra accepts ONLY the canonical 64: below 40 the compression and
+# clrused fields are absent and would have to be defaulted, and there is no
+# reference to check those defaults against — ImageMagick reads a 64-byte
+# header and refuses a 16-byte one ("improper image header"). Inventing
+# behaviour for a size nothing writes and nothing else reads is the guess this
+# decoder is built to avoid.
+var BMP_OS22X_HEADER_SIZE = 64;
 
 # Compression values (BITMAPINFOHEADER +16).
 var BMP_BI_RGB       = 0;
@@ -237,8 +251,15 @@ fn _bmp_parse_header(src, len, err_out): i64 {
     # claiming a transform it does not perform.
     var is_core = 0;
     if (dib_size == BMP_CORE_HEADER_SIZE) { is_core = 1; }
+    # In-header channel masks exist in the V2..V5 headers only. This cannot be
+    # a `>= 52` test: the 64-byte OS/2 header is larger than V2 and has no masks
+    # at all — its +40 is `units`/`recording`/`rendering`, so reading masks
+    # there would decode by a layout built from unrelated OS/2 fields.
     var has_mask_fields = 0;
-    if (dib_size >= BMP_V2_HEADER_SIZE) { has_mask_fields = 1; }
+    if (dib_size == BMP_V2_HEADER_SIZE) { has_mask_fields = 1; }
+    if (dib_size == BMP_V3_HEADER_SIZE) { has_mask_fields = 1; }
+    if (dib_size == BMP_V4_HEADER_SIZE) { has_mask_fields = 1; }
+    if (dib_size == BMP_V5_HEADER_SIZE) { has_mask_fields = 1; }
     if (is_core == 0) {
         var known = 0;
         if (dib_size == BMP_INFO_HEADER_SIZE) { known = 1; }
@@ -246,6 +267,7 @@ fn _bmp_parse_header(src, len, err_out): i64 {
         if (dib_size == BMP_V3_HEADER_SIZE) { known = 1; }
         if (dib_size == BMP_V4_HEADER_SIZE) { known = 1; }
         if (dib_size == BMP_V5_HEADER_SIZE) { known = 1; }
+        if (dib_size == BMP_OS22X_HEADER_SIZE) { known = 1; }
         if (known == 0) {
             store64(err_out, chitra_err(CHITRA_ERR_BMP_HEADER));
             return 0;
@@ -427,6 +449,30 @@ fn _bmp_parse_header(src, len, err_out): i64 {
     # extra: a stale alpha mask over pixels whose fourth byte is padding
     # renders the ENTIRE IMAGE transparent. Under BI_RGB the documented
     # defaults below are the only correct source of layout.
+    # BI_ALPHABITFIELDS names FOUR masks. A 52-byte BITMAPV2INFOHEADER ends at
+    # the blue mask (+40 R, +44 G, +48 B = 52), so it has room for three — the
+    # file declares a channel it provides no location for, and that is a
+    # contradiction rather than an omission.
+    #
+    # chitra REJECTS it instead of reading the fourth mask from just past the
+    # header. That would be inventing a layout the format does not document:
+    # ImageMagick refuses BI_ALPHABITFIELDS outright ("unrecognized
+    # compression"), so there is no reference decoder to agree with, and
+    # "guess where the field probably lives" is the same move as injecting
+    # BI_RGB defaults into a bitfields file — the 0.5.3 defect this whole mask
+    # path was rewritten to stop making.
+    #
+    # Through 0.7.1 such a file DECODED, silently opaque: mask_a stayed 0
+    # because the in-header alpha read is gated on V3-or-later, so every
+    # per-pixel alpha the file declared was discarded with no error.
+    if (compression == BMP_BI_ALPHABITFIELDS) {
+        if (has_mask_fields == 1) {
+            if (dib_size < BMP_V3_HEADER_SIZE) {
+                store64(err_out, chitra_err(CHITRA_ERR_BMP_MASK));
+                return 0;
+            }
+        }
+    }
     if (is_bitfields == 1) {
         if (has_mask_fields == 1) {
             mask_r = _bmp_u32_le(dib + 40);
@@ -663,6 +709,22 @@ fn _bmp_decode_rle(src, len, data_off, w, h, is_rle4, idx, err_out, consumed_out
                 if (b1 == 0) {
                     x = 0;
                     y = y + 1;
+                    # Same threshold and same reasoning as the delta escape
+                    # below: landing outside the bitmap is malformed even if the
+                    # stream then writes nothing. `y == h` is fine — a single
+                    # trailing end-of-line after the last row is ordinary
+                    # encoder output — but past that the stream is describing
+                    # rows the bitmap does not have.
+                    #
+                    # Through 0.7.1 only the DELTA path checked, so the two
+                    # overshoot routes in this one function disagreed. No write
+                    # was ever at risk (every store is bounds-checked
+                    # individually), and ImageMagick accepts such a file: this
+                    # is a consistency guard, not a repair for a known defect.
+                    if (y > h) {
+                        rc = CHITRA_ERR_BMP_RLE;
+                        done = 1;
+                    }
                 }
                 if (b1 == 1) {
                     done = 1;                       # end of bitmap

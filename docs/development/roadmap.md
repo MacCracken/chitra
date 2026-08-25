@@ -1,10 +1,10 @@
 # chitra — Roadmap
 
-> **Last Updated**: 2026-08-24 (0.7.1)
+> **Last Updated**: 2026-08-24 (0.7.2)
 >
 > Sequencing — what ships, in what order, against what gates. Volatile state
 > (current version, sizes, assertion counts, in-flight work) lives in
-> [`state.md`](state.md), not here. **chitra is pre-v1** (current: 0.7.1) and
+> [`state.md`](state.md), not here. **chitra is pre-v1** (current: 0.7.2) and
 > all four decode paths are **feature-complete for their scope** — every spec-legal
 > PNG depth × color-type × interlace combination, and JFIF **baseline** JPEG
 > (grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0, restart markers), decode to
@@ -378,7 +378,7 @@ truncation. A change to how samples are reduced is never local to the
 reduction — anything that reconstructs the original from the output is coupled
 to it.
 
-### 0.7.2 — BMP and GIF loose ends
+### ~~0.7.2 — BMP and GIF loose ends~~ — SHIPPED
 
 Small, independent, each a reachable wrong answer:
 
@@ -395,6 +395,27 @@ Small, independent, each a reachable wrong answer:
   at-the-jump check delta gets, so the two overshoot paths disagree.
 - **OS/2 `BITMAPCOREHEADER2`** (any DIB size 16..64, canonically 64) is
   rejected; the accepted set is an allow-list of six sizes.
+
+Four landed. Two of the five turned out to need a decision rather than a fix,
+and both decisions are worth carrying forward:
+
+- **The `BI_ALPHABITFIELDS` case is a rejection, not a relocation.** The sweep
+  read it as "the mask fields are looked for in the wrong place". They are not
+  anywhere: a 52-byte header has room for three masks and the compression names
+  four. ImageMagick refuses `BI_ALPHABITFIELDS` entirely, so there is no
+  reference to agree with, and guessing where the fourth field lives is the
+  0.5.3 defect in a new costume.
+- **The Plain Text item was declined outright.** On the spec it reads like a
+  defect — § 23 scopes a GCE to the first graphic-rendering block, and § 25
+  makes Plain Text one. But ImageMagick carries the GCE forward to the image
+  too, measured on a hand-built file. chitra follows the reference: it diverges
+  from ImageMagick where the spec is prohibitive and the result is a wrong
+  image (PNG § 5.6, 0.7.1), not where a conformance argument cannot be
+  confirmed against any real file.
+
+The general lesson for the remaining arc: **a sweep finding is a hypothesis.**
+Two of five here did not survive contact with a reference decoder, and the
+cheapest time to learn that is before writing the fix, not after.
 
 ### 0.7.3 — Harness and CI gaps
 

@@ -2513,6 +2513,116 @@ fn test_gif_large_canvas_small_frame_decodes() {
     return 0;
 }
 
+# ================================================================
+# 0.7.2 — GIF transparent-index range check
+# ================================================================# A GCE naming transparent index 200 against a
+# 2-entry global colour table.
+# Out of range it simply never matches a pixel, so this is a validation gap
+# rather than a wrong-output one — ImageMagick accepts the file. It is closed
+# for the same reason the pixel-index check exists: an index that names nothing
+# is a statement the file cannot mean.
+fn fx_gif_trns_idx_oob(len_out): i64 {
+    var b = alloc(53);
+    store64(len_out, 53);
+    var i = 0;
+    while (i < 53) {
+        store8(b + i, 0);
+        i = i + 1;
+    }
+    store8(b + 0, 0x47);
+    store8(b + 1, 0x49);
+    store8(b + 2, 0x46);
+    store8(b + 3, 0x38);
+    store8(b + 4, 0x39);
+    store8(b + 5, 0x61);
+    store8(b + 6, 0x04);
+    store8(b + 8, 0x04);
+    store8(b + 10, 0xF0);
+    store8(b + 13, 0xFF);
+    store8(b + 19, 0x21);
+    store8(b + 20, 0xF9);
+    store8(b + 21, 0x04);
+    store8(b + 27, 0x21);
+    store8(b + 28, 0xF9);
+    store8(b + 29, 0x04);
+    store8(b + 30, 0x01);
+    store8(b + 33, 0xC8);
+    store8(b + 35, 0x2C);
+    store8(b + 40, 0x04);
+    store8(b + 42, 0x04);
+    store8(b + 45, 0x02);
+    store8(b + 46, 0x04);
+    store8(b + 47, 0x84);
+    store8(b + 48, 0x8F);
+    store8(b + 49, 0x09);
+    store8(b + 50, 0x05);
+    store8(b + 52, 0x3B);
+    return b;
+}
+# The control: the same file naming the last valid entry.
+fn fx_gif_trns_idx_ok(len_out): i64 {
+    var b = alloc(53);
+    store64(len_out, 53);
+    var i = 0;
+    while (i < 53) {
+        store8(b + i, 0);
+        i = i + 1;
+    }
+    store8(b + 0, 0x47);
+    store8(b + 1, 0x49);
+    store8(b + 2, 0x46);
+    store8(b + 3, 0x38);
+    store8(b + 4, 0x39);
+    store8(b + 5, 0x61);
+    store8(b + 6, 0x04);
+    store8(b + 8, 0x04);
+    store8(b + 10, 0xF0);
+    store8(b + 13, 0xFF);
+    store8(b + 19, 0x21);
+    store8(b + 20, 0xF9);
+    store8(b + 21, 0x04);
+    store8(b + 27, 0x21);
+    store8(b + 28, 0xF9);
+    store8(b + 29, 0x04);
+    store8(b + 30, 0x01);
+    store8(b + 33, 0x01);
+    store8(b + 35, 0x2C);
+    store8(b + 40, 0x04);
+    store8(b + 42, 0x04);
+    store8(b + 45, 0x02);
+    store8(b + 46, 0x04);
+    store8(b + 47, 0x84);
+    store8(b + 48, 0x8F);
+    store8(b + 49, 0x09);
+    store8(b + 50, 0x05);
+    store8(b + 52, 0x3B);
+    return b;
+}
+
+fn test_gif_transparent_index_out_of_range_rejected() {
+    var lo = 0;
+    var b = fx_gif_trns_idx_oob(&lo);
+    var err = 0;
+    var img = chitra_gif_decode(b, lo, &err);
+    assert(img == 0, "GIF transparent index past the colour table rejected");
+    assert(err != 0, "oob transparent index sets err_out");
+    if (err != 0) {
+        assert_eq(chitra_err_code(err), CHITRA_ERR_GIF_PALETTE,
+          "oob transparent index -> GIF_PALETTE");
+    }
+    return 0;
+}
+
+fn test_gif_transparent_index_in_range_decodes() {
+    var lo = 0;
+    var b = fx_gif_trns_idx_ok(&lo);
+    var err = 0;
+    var img = chitra_gif_decode(b, lo, &err);
+    assert(img != 0, "in-range transparent index still decodes");
+    assert_eq(err, 0, "in-range transparent index: no error");
+    return 0;
+}
+
 fn main() {
     test_gif_signature();
     test_gif_plain();
@@ -2531,6 +2641,8 @@ fn main() {
     test_gif_cap_allows_real_files();
     test_gif_large_canvas_small_frame_decodes();
     test_gif_bomb_resists_padding();
+    test_gif_transparent_index_out_of_range_rejected();
+    test_gif_transparent_index_in_range_decodes();
     return assert_summary();
 }
 var exit_code = main();

@@ -5,6 +5,91 @@ All notable changes to chitra are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.2] - 2026-08-24
+
+**BMP and GIF loose ends.** Five items from the 0.6.1 deferment sweep, each
+small and independent. Four landed; the fifth was investigated and
+**deliberately not acted on**, which is the more useful result.
+
+**2,858 test assertions** across 10 suites, 0 failures.
+
+### Added
+
+- **OS/2 2.x `BITMAPCOREHEADER2` (64 bytes) decodes.** Its first 40 bytes are
+  laid out exactly like `BITMAPINFOHEADER` — 32-bit width and height, unlike
+  the 12-byte OS/2 1.x header — so it needed only admitting to the DIB
+  allow-list. Verified against ImageMagick byte-for-byte.
+
+  The OS/2 spec permits any header size from 16 to 64, and chitra accepts
+  **only the canonical 64**. Below 40 the compression and `clrused` fields are
+  simply absent and would have to be defaulted with no reference to check the
+  defaults against — ImageMagick refuses a 16-byte header too ("improper image
+  header"). Inventing behaviour for a size nothing writes and nothing else
+  reads is the guess this decoder exists to avoid.
+
+### Fixed
+
+- **`BI_ALPHABITFIELDS` on a 52-byte V2 header decoded silently opaque.** That
+  compression names four masks; a `BITMAPV2INFOHEADER` ends at the blue mask
+  (+40 R, +44 G, +48 B = 52), so the file declares a channel it provides no
+  room for. chitra's in-header alpha read is gated on V3-or-later, so `mask_a`
+  stayed 0 and **every per-pixel alpha the file declared was discarded with no
+  error**.
+
+  It now rejects with `CHITRA_ERR_BMP_MASK` rather than reading the fourth mask
+  from just past the header. That would be inventing an undocumented layout:
+  ImageMagick refuses `BI_ALPHABITFIELDS` outright ("unrecognized
+  compression"), so there is no reference to agree with, and guessing where a
+  field probably lives is the same move as injecting `BI_RGB` defaults into a
+  bitfields file — the 0.5.3 defect this mask path was rewritten to stop
+  making.
+- **The GIF transparent index is now range-checked** against the colour table
+  in force for that image (a local table changes what "in range" means). Out of
+  range it simply never matched a pixel, so this was a validation gap rather
+  than a wrong-output one — but chitra's rule for palette indices is to reject
+  rather than tolerate, and an index that names nothing is a statement the file
+  cannot mean.
+
+### Changed
+
+- **BMP RLE end-of-line now checks its landing point**, at the same threshold
+  the delta escape has always used. The delta path's own comment says landing
+  outside the bitmap is malformed "even if the stream then writes nothing"; the
+  end-of-line path said nothing and checked nothing, so **the two overshoot
+  routes in one function disagreed**.
+
+  Stated plainly: no write was ever at risk — every store is bounds-checked
+  individually — and **ImageMagick accepts such a file**. This is a consistency
+  guard, not a repair for a known defect. `y == h` remains legal, because one
+  trailing end-of-line after the last row is ordinary encoder output and a
+  guard at `y >= h` would refuse real files; a control cell pins that.
+
+### Investigated and declined
+
+- **A GIF Plain Text Extension does NOT consume a pending Graphic Control
+  Extension**, and chitra now says so in the code rather than leaving it
+  unexamined.
+
+  The sweep flagged this as a defect, and on the spec alone it reads like one:
+  § 23 gives a GCE's scope as "the first Graphic-Rendering Block to follow",
+  and § 25 makes Plain Text one — so a `GCE / PlainText / Image` sequence means
+  the GCE governs the *text*, and carrying its transparent index forward to the
+  image keys pixels the file never asked for.
+
+  **ImageMagick disagrees, measured.** On a hand-built GIF with exactly that
+  sequence it renders the image transparent, identically to the same file with
+  the Plain Text block removed — so the reference decoder carries the GCE
+  forward too. chitra follows the reference here: Plain Text blocks are
+  essentially unused in the wild, no real file exists to check the claim
+  against, and being the only decoder that renders such a file opaque is a
+  visible divergence bought with a conformance argument nothing can confirm.
+  This project diverges from ImageMagick where the spec is prohibitive and the
+  consequence is a wrong image — PNG § 5.6 in 0.7.1 — and that is not this case.
+
+### Notes
+
+- No public function, struct offset or error code changed.
+
 ## [0.7.1] - 2026-08-24
 
 **PNG conformance: chunks the spec forbids, and a reduction that was wrong by

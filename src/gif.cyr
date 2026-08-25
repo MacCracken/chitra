@@ -52,6 +52,30 @@ var GIF_BLOCK_IMAGE     = 0x2C;   # Image Descriptor
 var GIF_BLOCK_EXTENSION = 0x21;   # Extension Introducer
 var GIF_BLOCK_TRAILER   = 0x3B;   # end of stream
 var GIF_EXT_GRAPHIC_CTL = 0xF9;   # Graphic Control Extension (carries transparency)
+# Spec § 25. Skipped like any other extension — chitra renders no text — but it
+# is a GRAPHIC-RENDERING block, and that distinction is not cosmetic: a Graphic
+# Control Extension governs the graphic-rendering block that FOLLOWS it, so a
+# Plain Text block consumes the pending GCE rather than letting it fall through
+# to the next image descriptor.
+var GIF_EXT_PLAINTEXT   = 0x01;
+#
+# EXAMINED IN 0.7.2 AND DELIBERATELY NOT ACTED ON. By § 23 a GCE's scope is
+# "the first Graphic-Rendering Block to follow", and § 25 makes Plain Text one
+# — so on the reading of the spec alone, a GCE / PlainText / Image sequence
+# means the GCE governs the TEXT, and chitra carrying its transparent index
+# forward to the image keys pixels the file never asked for.
+#
+# ImageMagick disagrees, measured: on a hand-built GIF with exactly that
+# sequence it renders the image transparent, identically to the same file with
+# the Plain Text block removed. So the reference decoder carries the GCE
+# forward too.
+#
+# chitra follows the reference here rather than the spec reading. Plain Text
+# blocks are essentially unused in the wild, no file exists to check the
+# claim against, and being the only decoder that renders such a file opaque is
+# a visible divergence bought with a conformance argument nothing can confirm.
+# This project diverges from ImageMagick where the spec is prohibitive and the
+# consequence is a wrong image (PNG § 5.6 in 0.7.1); that is not this case.
 
 fn _gif_u16_le(p): i64 {
     return load8(p) | (load8(p + 1) << 8);
@@ -308,6 +332,19 @@ fn chitra_gif_decode(src, len, err_out): i64 {
         # Neither table present: the indices name nothing.
         store64(err_out, chitra_err(CHITRA_ERR_GIF_PALETTE));
         return 0;
+    }
+    # The transparent index is a palette index like any other, and chitra's rule
+    # for those is to reject rather than tolerate — it is checked here, against
+    # the table in force for THIS image, because a local table changes what "in
+    # range" means. Out of range it would simply never match a pixel, so this
+    # is a validation gap rather than a wrong-output one; it is closed for the
+    # same reason the pixel-index check exists, and because a field that names
+    # nothing is a statement the file cannot mean.
+    if (transparent >= 0) {
+        if (transparent >= pal_n) {
+            store64(err_out, chitra_err(CHITRA_ERR_GIF_PALETTE));
+            return 0;
+        }
     }
 
     var interlaced = 0;

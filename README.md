@@ -1,6 +1,6 @@
 # chitra
 
-Version: 0.7.1
+Version: 0.7.2
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder, a sibling AGNOS package in the mould of `sakshi` /
@@ -139,7 +139,7 @@ All deps are pinned in `cyrius.cyml`; the toolchain pin is
 ```bash
 cyrius deps          # resolve stdlib + sankoch + thread into lib/
 make build           # link-check the include chain (→ build/chitra_smoke)
-make test            # 2833 assertions across tests/tcyr/
+make test            # 2858 assertions across tests/tcyr/
 make fuzz            # ~2.2 M adversarial decode cases (fuzz/*.fcyr)
 make bench           # 17 decode benchmarks (tests/bcyr/chitra.bcyr)
 make dist            # regenerate dist/chitra.cyr — the artifact consumers link
