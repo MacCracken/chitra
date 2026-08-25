@@ -119,6 +119,62 @@ That is a cut, not a bite. It should start from the verified non-interleaved
 decoder 0.6.0 delivers, since a non-interleaved scan decoder handles `Ns = 1`
 regardless of how many components the frame has.
 
+## Amended 2026-08-24, before 0.8.0 implements this
+
+A code sweep found the *Why multi-scan is deferred* list above to be incomplete
+in five structural ways, and to contain one load-bearing claim that is simply
+false. This ADR is the artifact 0.8.0 is built from, so the corrections go here
+rather than into the release that discovers them the hard way.
+
+**1. "It should start from the verified non-interleaved decoder 0.6.0
+delivers" is FALSE.** That decoder is an *effective-geometry collapse* — it
+forces `H = V = max_h = max_v = 1` — and it is correct only because with
+`Nf = 1` the lone component **is** the maximum, so § A.1.1 gives `x_1 = X`. A
+multi-scan file has `Nf = 3`. A non-interleaved scan there needs genuine
+per-component § A.2.2 geometry: `x_i = ceil(X · H_i / H_max)`,
+`y_i = ceil(Y · V_i / V_max)`, and a block grid of `ceil(x_i/8) × ceil(y_i/8)`
+for that component alone. The 0.6.0 code is a special case that does not
+generalise, and building on it would produce a decoder that is right for
+grayscale and wrong for every subsampled colour file. **This is the biggest
+correction.**
+
+**2. Plane ownership is not addressed.** `planes[32]` is function-local to
+`_jpeg_decode_scan`, and the `alloc(cpw * cph)` that fills it happens inside
+that function. A per-scan driver that simply calls it once per scan would
+re-allocate every plane per scan and discard the previous scan's samples. That
+function currently owns **five** responsibilities that have to be separated —
+geometry, table binding, plane allocation, the MCU loop, and the colour pass
+plus `ChitraImage` build. The ADR's framing of the deferral as "isolated behind
+ONE line" is true of the *rejection*; it is not true of the *implementation*.
+
+**3. DRI between scans is not addressed.** The restart interval is read once
+from the frame, but DRI is a table-specification marker legal in the misc
+segment before **any** scan (§ B.2.4.4), so it can change per scan. The ADR
+covers DHT between scans and stops there.
+
+**4. EOI is rejected.** `_jpeg_marker_action` returns `CHITRA_ERR_JPEG_MARKER`
+for `0xD9` unconditionally, because through 0.7.3 reaching EOI during the
+header walk meant "no scan present". A resumed walk that reuses
+`chitra_jpeg_scan_markers` would therefore reject the file's own end marker.
+
+**5. The scan component list has nowhere to live.** `_jpeg_parse_sos` builds
+its selector list locally and discards it; the frame has no scan-component
+field; and the MCU loop iterates over **frame** components, though for a
+partially-interleaved scan the MCU is composed in **scan** order. The ADR
+declines to grow `CHITRA_JPEG_FRAME_SIZE` on the grounds that only a coverage
+bitmask and a resume position are needed — that is 2 of the 3 free slots,
+leaving one for what is really a four-entry ordered list. **Grow the record.**
+
+**6. Td/Ta are frame-persistent.** `_jpeg_parse_sos` writes them into the frame
+and nothing clears them, so a component not present in scan 2 retains scan 1's
+selectors. Harmless *with* coverage tracking; a silent wrong-table decode
+without it.
+
+**And one thing this ADR gets right that a future implementer might "fix"
+wrongly:** the DC predictors are correctly per-scan-local. § F.2.1.3.1 requires
+them reset at each scan start, so they must **not** be hoisted to frame scope
+alongside the planes.
+
 ## Two claims about this code that are FALSE, recorded so they are not repeated
 
 Both were asserted confidently during design and both were tested.

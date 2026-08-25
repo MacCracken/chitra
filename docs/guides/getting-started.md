@@ -2,7 +2,7 @@
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder. It turns encoded image bytes into canonical
-RGBA8 pixels — no GPU, no C shim, no external binaries. As of v0.7.3 it
+RGBA8 pixels — no GPU, no C shim, no external binaries. As of v0.8.0 it
 decodes **PNG** (every spec-legal bit depth 1/2/4/8/16 across color types
 0/2/3/4/6, Adam7 interlace, PLTE/tRNS), **baseline JPEG** (JFIF SOF0,
 grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0 chroma subsampling, restart
@@ -29,7 +29,7 @@ isn't on your PATH yet, see the agnosticos bootstrap.
 ```bash
 cyrius deps        # resolve stdlib + sankoch + thread into lib/
 make build         # link-check: builds build/chitra_smoke from programs/smoke.cyr
-make test          # 2858 assertions across tests/tcyr/
+make test          # 2938 assertions across tests/tcyr/
 make fuzz          # ~10⁶ adversarial decode cases across fuzz/*.fcyr
 make bench         # 17 decode benchmarks (tests/bcyr/chitra.bcyr)
 make dist          # = cyrius distlib → dist/chitra.cyr
@@ -75,7 +75,7 @@ released tag and pulling that one module:
 ```toml
 [deps.chitra]
 git     = "https://github.com/MacCracken/chitra"
-tag     = "0.7.3"
+tag     = "0.8.0"
 modules = ["dist/chitra.cyr"]
 ```
 
@@ -171,7 +171,7 @@ no-op: the stdlib `alloc` is a bump allocator with no per-block free —
 see [architecture note 003](../architecture/003-bump-allocator-no-free.md).
 
 You can probe the linked version at runtime with `chitra_version()`,
-which returns `703` for 0.7.3 (`major*10000 + minor*100 + patch`).
+which returns `800` for 0.8.0 (`major*10000 + minor*100 + patch`).
 `make version-check` gates that literal against `VERSION`, so it cannot
 drift silently again.
 

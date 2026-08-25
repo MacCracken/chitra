@@ -1,10 +1,10 @@
 # chitra — Roadmap
 
-> **Last Updated**: 2026-08-24 (0.7.3)
+> **Last Updated**: 2026-08-24 (0.8.0)
 >
 > Sequencing — what ships, in what order, against what gates. Volatile state
 > (current version, sizes, assertion counts, in-flight work) lives in
-> [`state.md`](state.md), not here. **chitra is pre-v1** (current: 0.7.3) and
+> [`state.md`](state.md), not here. **chitra is pre-v1** (current: 0.8.0) and
 > all four decode paths are **feature-complete for their scope** — every spec-legal
 > PNG depth × color-type × interlace combination, and JFIF **baseline** JPEG
 > (grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0, restart markers), decode to
@@ -452,7 +452,7 @@ being believed, and the self-check added here asserts that repairing an
 cases would reject at the CRC gate while the harness reported them as
 survived.
 
-### 0.8.0 — JPEG multi-scan resumption
+### ~~0.8.0 — JPEG multi-scan resumption~~ — SHIPPED
 
 As scheduled by [ADR 0006](../adr/0006-defer-jpeg-multiscan-resumption.md) —
 moved out one cut because 0.7.x is repair work that should not wait behind it.
@@ -460,6 +460,22 @@ moved out one cut because 0.7.x is repair work that should not wait behind it.
 **Amend ADR 0006 first.** The sweep found its enumeration of what a correct
 implementation owes to be incomplete; the ADR is the input to this cut, so it
 has to be right before the cut starts.
+
+Done, and the amendment earned its place: the ADR's claim that this cut could
+build on 0.6.0's non-interleaved decoder was **false**, and an implementation
+that believed it would have been right for grayscale and wrong for every
+subsampled colour file. Five further omissions were recorded alongside it.
+
+Two results worth carrying past this cut:
+
+- **A single § A.2 rule covers both layouts.** Not two decoders and not a
+  special case: interleaved walks the frame MCU grid, non-interleaved walks the
+  component's own § A.1.1 grid, and `Nf = 1` falls out of the same formula. The
+  0.6.0 collapse was deleted rather than extended.
+- **Coverage is the loop bound.** A component decodes exactly once, so the
+  driver terminates on the bitmask itself rather than on a scan counter standing
+  in for it — which is why no scan limit and no resume tripwire were added.
+  Guards that could not fire were left out rather than written down.
 
 ## Out of scope (durable scope guards)
 

@@ -3223,23 +3223,33 @@ fn test_ni_interleaved_blocks_over_10_rejected() {
 # ================================================================
 # Deferred, not malformed — see ADR 0006
 # ================================================================
-fn test_ni_multiscan_deferred() {
-    # Three consecutive Ns=1 scans. djpeg decodes this identically to the
-    # interleaved control, so it is a real conformance gap, not a broken file —
-    # which is exactly why the code is UNSUPPORTED ("chitra declines") and no
-    # longer JPEG_SOS ("your file is malformed").
+fn test_ni_multiscan_now_decodes() {
+    # 0.8.0 REVERSES this cell. It pinned the deferral from 0.6.0 to 0.7.3;
+    # multi-scan now decodes, and the conformance weight moved to
+    # tests/tcyr/jpeg_multiscan.tcyr, where every variant is held to its
+    # interleaved twin's exact bytes. What survives here is that the file
+    # decodes at all, at the right size.
     var lo = 0;
     var b = fx_jpeg_ni_multiscan(&lo);
-    _ni_expect_reject(b, lo, CHITRA_ERR_UNSUPPORTED,
-      "non-interleaved multi-scan deferred -> UNSUPPORTED");
+    var err = 0;
+    var img = chitra_jpeg_decode(b, lo, &err);
+    assert(img != 0, "non-interleaved multi-scan now decodes");
+    assert_eq(err, 0, "multi-scan: no error");
+    if (img != 0) {
+        assert_eq(chitra_image_width(img), 24, "multi-scan: width 24");
+        assert_eq(chitra_image_height(img), 16, "multi-scan: height 16");
+    }
     return 0;
 }
 
-fn test_ni_partial_scan_deferred() {
+fn test_ni_partial_scan_now_decodes() {
     var lo = 0;
     var b = fx_jpeg_ni_partial(&lo);
-    _ni_expect_reject(b, lo, CHITRA_ERR_UNSUPPORTED,
-      "partially interleaved scan deferred -> UNSUPPORTED");
+    var err = 0;
+    var img = chitra_jpeg_decode(b, lo, &err);
+    assert(img != 0, "partially interleaved scan now decodes");
+    assert_eq(err, 0, "partial scan: no error");
+    if (img != 0) { assert_eq(chitra_image_width(img), 24, "partial scan: width 24"); }
     return 0;
 }
 
@@ -3283,8 +3293,8 @@ fn main(): i64 {
     test_ni_router_dispatch();
     test_ni_interleaved_control();
     test_ni_interleaved_blocks_over_10_rejected();
-    test_ni_multiscan_deferred();
-    test_ni_partial_scan_deferred();
+    test_ni_multiscan_now_decodes();
+    test_ni_partial_scan_now_decodes();
     test_ni_sos_ns_zero_rejected();
     test_ni_sos_ns_over_nf_rejected();
     return assert_summary();

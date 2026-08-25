@@ -73,22 +73,49 @@ var JF_SOS_OFFSET       = 80;    # byte offset of the SOS length field (set at S
 var JF_HUFF             = 88;    # ptr to 8 HuffTable records (slots 0..3 DC, 4..7 AC)
 var JF_HUFF_PRESENT     = 96;    # bitmask of Huffman tables seen (bit = class*4 + id)
 var JF_COMP             = 104;   # 4 × 48-byte component specs
-var JF_COMP_STRIDE      = 48;
+var JF_COMP_STRIDE      = 32;
 var JF_COMP_ID          = 0;     # SOF fields
 var JF_COMP_H           = 8;
 var JF_COMP_V           = 16;
 var JF_COMP_TQ          = 24;
-var JF_COMP_TD          = 32;    # SOS scan fields: DC Huffman table selector
-var JF_COMP_TA          = 40;    #                  AC Huffman table selector
+# JF_COMP_TD / JF_COMP_TA are GONE as of 0.8.0. Huffman selectors are a
+# property of the SCAN, not of the component: a component absent from scan 2
+# retained scan 1's selectors here, which is a silent wrong-table decode the
+# moment more than one scan exists. They live in JF_SCAN now, and deleting them
+# shrinks the component stride from 48 to 32.
 # +296 adobe_transform — the APP14 Adobe colour-transform code, or -1 when no
 # Adobe marker was seen. Sits after the 4 x 48-byte component specs (104 + 192).
-var JF_ADOBE_TRANSFORM  = 296;
+var JF_ADOBE_TRANSFORM  = 232;
+# ---- per-SCAN state (0.8.0, multi-scan) ------------------------------------
+# A baseline file may carry several scans, each naming a subset of the frame's
+# components in ITS OWN ORDER (T.81 § A.2.3 composes an interleaved MCU in scan
+# order, not frame order). None of that had anywhere to live: _jpeg_parse_sos
+# built a selector list locally and discarded it, and the MCU loop iterated
+# frame components.
+#
+# JF_SCAN is that ordered list — the frame-component index plus the Huffman
+# selectors THIS scan chose for it. Selectors live here rather than on the
+# component because they are a property of the scan: a component absent from
+# scan 2 would otherwise retain scan 1's, which is a silent wrong-table decode.
+var JF_SCAN_NS          = 240;   # component count of the scan currently parsed
+var JF_SCAN             = 248;   # 4 x 24-byte entries
+var JF_SCAN_STRIDE      = 24;
+var JF_SCAN_COMP        = 0;     # frame component index (0..3)
+var JF_SCAN_TD          = 8;     # DC Huffman selector for THIS scan
+var JF_SCAN_TA          = 16;    # AC Huffman selector for THIS scan
+# Bitmask of frame components already decoded. It is the loop bound for the
+# whole multi-scan driver: every successful scan sets at least one new bit and
+# a component may be covered only once, so the driver terminates on the INDEX
+# itself rather than on a scan counter that stands in for it. It is also what
+# makes an omitted component detectable — Y=Cb=Cr=0 is solid green through the
+# BT.601 constants, which decodes cleanly and looks plausible.
+var JF_COVERED          = 344;
 # Grown 320 -> 384 in 0.6.1 for the field above. This record is @internal and
 # heap-allocated per decode, so growing it costs 8 bytes a decode and nothing
 # else — but the 0.7.0 multi-scan work needs a per-component coverage bitmask
 # and a resume position (ADR 0006), so the slack is left deliberately generous
 # rather than shaved to fit.
-var CHITRA_JPEG_FRAME_SIZE = 384;
+var CHITRA_JPEG_FRAME_SIZE = 384;   # 352 used, 32 B spare
 
 fn chitra_jpeg_frame_width(f): i64          { return load64(f + JF_WIDTH); }
 fn chitra_jpeg_frame_height(f): i64         { return load64(f + JF_HEIGHT); }
@@ -106,13 +133,15 @@ fn chitra_jpeg_frame_comp_id(f, i): i64 { return load64(f + JF_COMP + i * JF_COM
 fn chitra_jpeg_frame_comp_h(f, i): i64  { return load64(f + JF_COMP + i * JF_COMP_STRIDE + JF_COMP_H); }
 fn chitra_jpeg_frame_comp_v(f, i): i64  { return load64(f + JF_COMP + i * JF_COMP_STRIDE + JF_COMP_V); }
 fn chitra_jpeg_frame_comp_tq(f, i): i64 { return load64(f + JF_COMP + i * JF_COMP_STRIDE + JF_COMP_TQ); }
-# Scan (SOS) table selectors, filled by _jpeg_parse_sos.
-fn chitra_jpeg_frame_comp_td(f, i): i64 { return load64(f + JF_COMP + i * JF_COMP_STRIDE + JF_COMP_TD); }
-fn chitra_jpeg_frame_comp_ta(f, i): i64 { return load64(f + JF_COMP + i * JF_COMP_STRIDE + JF_COMP_TA); }
 fn chitra_jpeg_frame_sos_offset(f): i64  { return load64(f + JF_SOS_OFFSET); }
 # -1 = no Adobe APP14 segment was present; 0 = RGB (or CMYK at 4 components),
 # 1 = YCbCr, 2 = YCCK.
 fn chitra_jpeg_frame_adobe_transform(f): i64 { return load64(f + JF_ADOBE_TRANSFORM); }
+fn chitra_jpeg_frame_scan_ns(f): i64   { return load64(f + JF_SCAN_NS); }
+fn chitra_jpeg_frame_covered(f): i64   { return load64(f + JF_COVERED); }
+fn chitra_jpeg_scan_comp(f, j): i64 { return load64(f + JF_SCAN + j * JF_SCAN_STRIDE + JF_SCAN_COMP); }
+fn chitra_jpeg_scan_td(f, j): i64   { return load64(f + JF_SCAN + j * JF_SCAN_STRIDE + JF_SCAN_TD); }
+fn chitra_jpeg_scan_ta(f, j): i64   { return load64(f + JF_SCAN + j * JF_SCAN_STRIDE + JF_SCAN_TA); }
 
 # Quant-table entry t (0..3), zig-zag position k (0..63). De-zig-zag happens at
 # dequant time (bite 5); this stores the raw spec order.
@@ -530,25 +559,17 @@ fn _jpeg_parse_sof0(cur, frame): i64 {
         }
     }
     if (rc != 0) { return rc; }
-    # T.81 § B.2.3 conditions this restriction on Ns > 1: "If Ns > 1, the
-    # following restriction shall be placed on the image components contained in
-    # the scan: sum(Hj * Vj) <= 10". It bounds an INTERLEAVED MCU, and a
-    # one-component frame has no interleaved MCU to bound — its scan is
-    # non-interleaved by definition (§ A.2) and its MCU is one data unit
-    # whatever H and V say, so H and V affect neither block count nor plane size
-    # (see the effective-geometry collapse in jpeg.cyr). Applying it frame-wide
-    # rejected `cjpeg -grayscale -sample 4x4`, which libjpeg writes on request
-    # and djpeg reads back. chitra can condition on ncomp here rather than on
-    # Ns because every MULTI-component scan it accepts is interleaved over all
-    # Nf components (the ns == ncomp gate in jpeg.cyr).
-    #
-    # The cap stays HERE, at the SOF0 parse, once per file — before any
-    # geometry is derived from these factors and long before any allocation
-    # depends on them. Moving it to the scan header would put it after the
-    # allocations it exists to bound.
-    if (ncomp > 1) {
-        if (blocks > CHITRA_MAX_BLOCKS_PER_MCU) { return CHITRA_ERR_JPEG_SOF; }
-    }
+    # The SigmaHj*Vj <= 10 restriction is NOT applied here. T.81 § B.2.3 places
+    # it on "the image components contained in the SCAN", conditioned on Ns > 1
+    # — it bounds one interleaved MCU, and a frame does not have one. Applying
+    # it frame-wide rejected files libjpeg writes on request: `cjpeg -sample
+    # 4x4,1x1,1x1 -scans <script>` produces a valid 692-byte baseline JPEG
+    # (SigmaHi*Vi = 18) that djpeg decodes, while cjpeg REFUSES the same factors
+    # interleaved ("Sampling factors too large for interleaved scan"). The two
+    # facts together are the spec's own reading. The check now lives in
+    # _jpeg_parse_sos, over the scan's components, where it can be conditioned
+    # on Ns as § B.2.3 conditions it — and still ahead of every allocation,
+    # because planes are allocated per scan after the header is parsed.
     store64(frame + JF_WIDTH, width);
     store64(frame + JF_HEIGHT, height);
     store64(frame + JF_PRECISION, precision);
@@ -557,6 +578,117 @@ fn _jpeg_parse_sof0(cur, frame): i64 {
     store64(frame + JF_MAX_V, max_v);
     store64(frame + JF_SEEN_SOF, 1);
     return 0;
+}
+
+# ================================================================
+# _jpeg_resume_to_next_scan — continue the marker walk AFTER a scan (0.8.0).
+#
+# `resume` points at the 0xFF that terminated the previous scan's entropy data,
+# which is a BYTE-STRUCTURAL position: the caller computes it as
+# `entropy_start + _jpeg_entropy_span(...)`, never from the bit reader's
+# position. That distinction retires the first blocker ADR 0006 listed — the
+# fear that a resumed walk would be steered by a cursor inside decoded content,
+# which a planted FF DA could freeze. Nothing here consults the reader.
+#
+# This is a SEPARATE function from chitra_jpeg_scan_markers rather than a mode
+# flag on it, because that function re-zeroes the whole frame on entry and stops
+# unconditionally at the first SOS — and it is on the path of every JPEG in the
+# tree. The two share _jpeg_marker_action and the length-skip shape; they share
+# no state handling.
+#
+# It ZEROES NOTHING. Table PRESENCE accumulates across scans and table CONTENT
+# is whatever the file last defined, which is not hygiene but a requirement:
+# real `cjpeg -scans` output puts DHT segments BETWEEN scans, and its last scan
+# often carries none of its own.
+#
+# Returns the offset of the next SOS length field; or 0 with *err_out clear for
+# a clean end (EOI, or the input simply ran out); or 0 with *err_out set.
+# ================================================================
+fn _jpeg_resume_to_next_scan(frame, src, len, resume, err_out): i64 {
+    store64(err_out, 0);
+    var cur[24];
+    _cur_init(&cur, src, len);
+    _cur_skip(&cur, resume);
+    var rc = 0;
+    var done = 0;
+    var found = 0;
+    var b = 0;
+    var m = 0;
+    var act = 0;
+    var seglen = 0;
+    while (done == 0) {
+        if (_cur_can_read(&cur, 2) == 0) { done = 1; }        # clean stop
+        if (done == 0) {
+            b = _cur_u8(&cur);
+            if (b != 0xFF) { rc = CHITRA_ERR_JPEG_MARKER; done = 1; }
+        }
+        if (done == 0) {
+            # Collapse a run of fill bytes (§ B.1.1.2).
+            m = _cur_u8(&cur);
+            while (m == 0xFF) {
+                if (_cur_can_read(&cur, 1) == 0) { m = 0; }
+                if (m == 0xFF) { m = _cur_u8(&cur); }
+            }
+            # EOI is tested BEFORE the classifier. _jpeg_marker_action maps it to
+            # CHITRA_ERR_JPEG_MARKER because in the HEADER walk it means "no scan
+            # present", and that remains true where it lives — here it simply
+            # means the file ended, which is the normal way a multi-scan file
+            # stops. Testing it here rather than changing the shared classifier
+            # is what keeps both meanings correct.
+            if (m == 0xD9) { done = 1; }
+        }
+        if (done == 0) {
+            act = _jpeg_marker_action(m);
+            if (act >= 13) { rc = act; done = 1; }
+            if (act == 1) {
+                # A second SOF0, after geometry has been derived and planes
+                # allocated from the first. Refuse rather than redefine.
+                rc = CHITRA_ERR_JPEG_SOF;
+                done = 1;
+            }
+            if (act == 5) {
+                rc = _jpeg_parse_dqt(&cur, frame);
+                if (rc != 0) { done = 1; }
+            }
+            if (act == 6) {
+                rc = _jpeg_parse_dht(&cur, frame);
+                if (rc != 0) { done = 1; }
+            }
+            if (act == 7) {
+                # DRI is legal between scans (§ B.2.4.4), so a restart interval
+                # can change per scan. Parsing it here is all that is needed —
+                # each scan reads the interval from the frame at entry.
+                rc = _jpeg_parse_dri(&cur, frame);
+                if (rc != 0) { done = 1; }
+            }
+            if (act == 8) {
+                rc = _jpeg_parse_app14(&cur, frame);
+                if (rc != 0) { done = 1; }
+            }
+            if (act == 2) {
+                store64(frame + JF_SOS_OFFSET, _cur_pos(&cur));
+                found = _cur_pos(&cur);
+                done = 1;
+            }
+            if (act == 4) {
+                if (_cur_can_read(&cur, 2) == 0) { rc = CHITRA_ERR_TRUNCATED; done = 1; }
+                if (done == 0) {
+                    seglen = _cur_u16_be(&cur);
+                    if (seglen < 2) { rc = CHITRA_ERR_JPEG_MARKER; done = 1; }
+                }
+                if (done == 0) {
+                    if (_cur_can_read(&cur, seglen - 2) == 0) { rc = CHITRA_ERR_TRUNCATED; done = 1; }
+                }
+                if (done == 0) { _cur_skip(&cur, seglen - 2); }
+            }
+            # act == 3 (standalone): nothing to skip, keep walking.
+        }
+    }
+    if (rc != 0) {
+        store64(err_out, chitra_err(rc));
+        return 0;
+    }
+    return found;
 }
 
 # ================================================================
@@ -588,6 +720,8 @@ fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
     store64(frame + JF_HUFF_PRESENT, 0);
     store64(frame + JF_SOS_OFFSET, 0);
     store64(frame + JF_ADOBE_TRANSFORM, 0 - 1);   # -1 = no Adobe APP14 seen
+    store64(frame + JF_SCAN_NS, 0);
+    store64(frame + JF_COVERED, 0);
     # The quantization and Huffman stores are NOT allocated here — see
     # _jpeg_alloc_quant / _jpeg_alloc_huff. A file that never defines a table
     # never pays for one, which is what makes the refusal path cheap.

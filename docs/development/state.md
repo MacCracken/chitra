@@ -1,47 +1,53 @@
 # chitra — Current State
 
-> **Last refresh**: 2026-08-24 (0.7.3) | **Refresh cadence**: every release.
+> **Last refresh**: 2026-08-24 (0.8.0) | **Refresh cadence**: every release.
 > [`CLAUDE.md`](../../CLAUDE.md) is preferences / process / architecture
 > (durable); this file is **state** (volatile) — it is the home for the
 > version, sizes, and counts `CLAUDE.md` must not inline.
 
 ## Version
 
-**0.7.3** — cut 2026-08-24. **Harness and CI gaps** — the sweep's least
-glamorous findings, and the ones most likely to hide the next defect. No decode
-behaviour changed; this release is entirely about the instruments.
+**0.8.0** — cut 2026-08-24. **T.81 § A.2 multi-scan and partially-interleaved
+JPEG** — the last deferred decode class. A baseline file whose scans carry fewer
+components than the frame (what `cjpeg -scans` emits) was refused from 0.6.0
+through 0.7.3; it now decodes.
 
-**PNG's decode core was effectively unfuzzed.** The per-chunk CRC-32 meant a
-random byte flip inside IDAT rejected with `CHITRA_ERR_CRC` before inflate ran,
-so the five § 9 unfilter predictors, the Adam7 deinterlace and the tRNS/palette
-colour pass never saw a hostile byte. JPEG got this treatment in 0.3.3, which
-is why its entropy path is well covered and this one was not. Two new modes:
+The oracle is external in both directions: at each sampling ratio the same image
+encoded interleaved, as three `Ns=1` scans, and as `Ns=1` then `Ns=2` decodes to
+identical bytes under `djpeg -nosmooth`. chitra already got the interleaved one
+right, so the others are held to its exact bytes — **all nine byte-identical**.
 
-- **Scanline mutation** — build raw scanlines with an attacker-chosen filter
-  byte per row (1-in-8 deliberately outside `{0..4}`), compress with sankoch,
-  assemble a valid PNG. Measured over 20,000 cases: **13,770 decode fully**,
-  **6,230 are caught by the § 9 allow-list**, and **zero** are wasted.
-- **IDAT-stream mutation** — mutate the compressed payload and **repair the
-  chunk CRC**. Measured: **0 rejected at CRC**, 19,874 reach inflate, 126
-  decode through. One mode drives sankoch, the other drives chitra's own
-  predictors; both are kept.
+`_jpeg_decode_scan` owned five responsibilities and became four functions plus a
+resumable inter-scan walk. Two design results are worth keeping in mind:
 
-`fuzz_png.fcyr` also gained the self-check it was alone in lacking, and all
-four public `_rgba8` wrappers gained fuzz coverage — they had none, and they
-are about to be frozen.
+- **One § A.2 rule covers both layouts.** 0.6.0's effective-geometry collapse
+  was deleted, not extended: it was valid only because a lone component IS the
+  maximum, and a multi-scan file has three. `Nf = 1` now falls out of the
+  general formula. **ADR 0006's claim that this cut could build on that collapse
+  was false**, and is amended along with five other omissions.
+- **Coverage is the loop bound.** A component decodes exactly once, so at most
+  `Nf ≤ 3` scans succeed and the driver terminates on the bitmask rather than a
+  counter standing in for it. No scan limit and no resume tripwire were added —
+  neither could fire before coverage does.
 
-**`make fuzz` now runs in CI.** CLAUDE.md names `make test-all` as the
-pre-release gate, but no workflow ran the fuzz half, so it existed only on a
-developer's machine. Benchmarks stay out deliberately (host-dependent numbers
-manufacture flakes) — that exclusion is a decision; this one was an oversight.
-CI's lint and fmt globs now match the Makefile's, so a harness can no longer
-pass CI and fail `make lint`.
+Also fixed: **`seen_iend` was still a lie** for a file truncated mid-entropy
+with a real `FF D9` appended — the reader stopped at that marker and `BR_EOD`
+never fired. Bounding the reader to the scan's own span makes "ran out of scan"
+and "ran out of data" the same event, which matters far more now that the bytes
+after a scan are the next scan's header.
 
-`chitra_version()` → **703**. **2,858 test assertions** across 10 suites,
-**9,975,418 fuzz assertions** (up from 8,072,804), 17 benchmarks — 0 failures.
+`Σ Hj·Vj ≤ 10` moved to the scan header conditioned on `Ns > 1`, where § B.2.3
+puts it; `4x4,1x1,1x1` with a scan script is legal and now decodes. Huffman
+selectors moved from the component to the scan, which **removed**
+`JF_COMP_TD`/`JF_COMP_TA` and shrank the component stride 48 → 32 — so
+`CHITRA_JPEG_FRAME_SIZE` returns to 384 and the whole cut costs zero allocation
+growth.
+
+`chitra_version()` → **800**. **2,938 test assertions** across **11 suites**,
+**10,732,113 fuzz assertions**, 17 benchmarks — 0 failures throughout.
 
 Released tags: 0.1.0, 0.2.0, 0.2.1, 0.3.0, 0.3.1, 0.3.2, 0.3.3, 0.4.0, 0.5.0,
-0.5.1, 0.5.2, 0.5.3, 0.6.0, 0.6.1, 0.7.0, 0.7.1, 0.7.2 (SemVer;
+0.5.1, 0.5.2, 0.5.3, 0.6.0, 0.6.1, 0.7.0, 0.7.1, 0.7.2, 0.7.3 (SemVer;
 pre-1.0, the public surface is still moving — no API freeze until v1.0).
 
 ## Toolchain
@@ -129,7 +135,7 @@ Shared:
 - `ChitraImage` accessors: `chitra_image_{width,height,pixels,channels,
   seen_iend,source_color_type}`; `chitra_image_free` (a documented no-op
   under the bump allocator).
-- `chitra_version()` → **`703`** (`major*10000 + minor*100 + patch`).
+- `chitra_version()` → **`800`** (`major*10000 + minor*100 + patch`).
 - Error API: `chitra_err_new` / `chitra_err` / `chitra_err_code` /
   `chitra_err_detail` / `chitra_err_name` / `chitra_err_print_name` + enum
   `ChitraErrCode`.
@@ -376,7 +382,7 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
 ## Tests + bench
 
 - `make test` (globs `tests/tcyr/*.tcyr`; each is a standalone `main()`) →
-  **2,858 assertions, all pass** across 10 suites:
+  **2,938 assertions, all pass** across 11 suites:
   - `gif.tcyr` — **638** (signature, plain / interlaced 4×4 and 8×8 /
     transparent / animated-first-frame fixtures with **every pixel asserted**,
     the no-image and bad-min-code-size rejections, a truncation sweep, the
@@ -408,7 +414,7 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
     wrong returns the right *set* of pixels in the wrong places, and only
     position-sensitive expectations catch that.
   - `error.tcyr` — **20** (error codes, `chitra_err_*` accessors, name
-    round-trips, `chitra_version` → 703).
+    round-trips, `chitra_version` → 800).
   - `interlace.tcyr` — **35** (Adam7 cross-checked against the trusted
     non-interlaced decode for 7 color/depth/odd-dimension cases).
   - `jpeg.tcyr` — **284** (marker scan + non-baseline rejection, SOF0
@@ -526,13 +532,13 @@ path in the library (no chroma planes, no upsample, no color convert).
 
 ## Quality gates
 
-All green at 0.7.3 on cyrius 6.5.35:
+All green at 0.8.0 on cyrius 6.5.35:
 
 | gate | command | result |
 |---|---|---|
 | link check | `make build` | OK, 588,976 bytes, no warnings |
-| tests | `make test` | 2,858/2,858, 0 failures |
-| fuzz | `make fuzz` | 9,975,418/9,975,418, 0 failures (~2.5 M cases) |
+| tests | `make test` | 2,938/2,938, 0 failures |
+| fuzz | `make fuzz` | 10,732,113/10,732,113, 0 failures (~2.6 M cases) |
 | bench | `make bench` | 17 benchmarks, fixtures self-verified, ~2 s |
 | lint | `make lint` | 0 warnings (incl. `fuzz/*.fcyr` + `tests/bcyr/*.bcyr`) |
 | fmt | `make fmt-check` | clean |

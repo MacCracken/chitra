@@ -140,5 +140,5 @@ fn chitra_image_free(img): i64 {
 # ================================================================
 # @public
 fn chitra_version(): i64 {
-    return 703;
+    return 800;
 }

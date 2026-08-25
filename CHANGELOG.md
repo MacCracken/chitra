@@ -5,6 +5,131 @@ All notable changes to chitra are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] - 2026-08-24
+
+**T.81 § A.2 multi-scan and partially-interleaved JPEG.** The last deferred
+decode class. A baseline file whose scans carry fewer components than the frame
+— what `cjpeg -scans` and `jpegtran -scans` emit — was refused with
+`CHITRA_ERR_UNSUPPORTED` from 0.6.0 through 0.7.3. It now decodes.
+
+**The oracle is external in both directions.** At each sampling ratio the same
+image is encoded three ways — interleaved, three `Ns=1` scans, and `Ns=1` then
+`Ns=2` — and `djpeg -nosmooth` decodes all three to identical bytes. chitra
+already decoded the interleaved one correctly, so the others are held to its
+exact bytes. **All nine fixtures are byte-identical to the reference.**
+
+**2,938 test assertions** across **11 suites**, **10,732,113 fuzz assertions**.
+
+### Added
+
+- **Multi-scan decode.** `_jpeg_decode_scan` owned five responsibilities and is
+  now four functions plus a resumable walk: `_jpeg_parse_sos` (scan header,
+  ordered component list, coverage), `_jpeg_decode_one_scan` (per-scan geometry,
+  table binding, lazy plane allocation, the MCU loop),
+  `_jpeg_build_image` (colour pass and `ChitraImage`), `_jpeg_decode_scans`
+  (the driver), and `_jpeg_resume_to_next_scan` in `jpeg_markers.cyr`.
+- **`Σ Hj·Vj ≤ 10` moved to the scan header, conditioned on `Ns > 1`.** T.81
+  § B.2.3 places it on "the image components contained in the **scan**", and
+  libjpeg proves the reading in both directions: `cjpeg -sample 4x4,1x1,1x1
+  -scans <script>` writes a valid 692-byte file that djpeg decodes, while the
+  same factors **interleaved** are refused by cjpeg itself. chitra rejected both
+  with `CHITRA_ERR_JPEG_SOF`; both now decode, byte-identical to djpeg.
+- `tests/tcyr/jpeg_multiscan.tcyr` — an 11th suite (75 assertions).
+
+### Fixed
+
+- **`seen_iend` was still a lie for the shape it most needed to catch.** 0.7.0
+  gated it on `BR_EOD`, which is set when the reader runs out of bytes — but
+  `_jpeg_br_load_byte` returns early on a real marker **without setting it**. A
+  file truncated inside its entropy data with a genuine `FF D9` appended
+  therefore stopped at that marker, left the flag clear, and reported a cleanly
+  closed stream. Measured: byte sum 232,762 against a correct 223,824, where
+  djpeg says "premature end of data segment".
+
+  The reader is now bounded by the scan's own entropy span, so running out of
+  scan and running out of data are the same event. It is also the correct bound
+  on its own terms — an entropy reader has no business reading past its own
+  scan, which matters far more now that the bytes after a scan are the **next
+  scan's header**.
+
+### Changed
+
+- **The one-component geometry collapse is gone**, replaced by a single § A.2
+  rule covering both layouts: an interleaved scan walks the frame MCU grid with
+  `H_i × V_i` blocks per component; a non-interleaved scan walks
+  `ceil(x_i/8) × ceil(y_i/8)` over that component's own § A.1.1 sample
+  dimensions with one block per MCU. `Nf = 1` falls out of it
+  (`x_1 = ceil(X·H/H) = X`) rather than being a special case.
+
+  **ADR 0006 claimed 0.8.0 could build on the 0.6.0 collapse. It could not** —
+  that collapse is valid only because a lone component *is* the maximum, and a
+  multi-scan file has three. The ADR is amended with that and five other
+  corrections a sweep found.
+- **Huffman selectors moved from the component to the scan.** `JF_COMP_TD` and
+  `JF_COMP_TA` are **removed** (internal accessors, no references outside
+  `src/`). A component absent from scan 2 retained scan 1's selectors, which is
+  a silent wrong-table decode the moment more than one scan exists.
+- **The MCU loop iterates the scan's components in scan order**, not frame
+  order. § A.2.3 composes an interleaved MCU in the order the scan header lists,
+  and a file may name them `{Cb, Y, Cr}`.
+- Deleting `JF_COMP_TD`/`TA` shrinks the component stride 48 → 32, so
+  `CHITRA_JPEG_FRAME_SIZE` **returns to 384** — the whole cut costs zero
+  allocation growth, and 0.6.1's "a refused JPEG costs 400 bytes" stays true.
+
+### Security
+
+- **Coverage is the bound, not a counter.** A component may be decoded exactly
+  once; every scan must name something new; so at most `Nf ≤ 3` scans succeed
+  and the driver terminates on the index itself rather than a proxy for it. No
+  scan limit and no resume-monotonicity tripwire were added — neither could fire
+  before coverage does.
+- **A component never decoded is refused.** This one is not cosmetic: an
+  omitted component is not neutral, because `Y = Cb = Cr = 0` through the BT.601
+  constants is RGB(0, 135, 0) — solid green, which decodes cleanly and looks
+  like a real picture. djpeg returns an image for such a file; chitra refuses to
+  invent two thirds of one.
+- **Amplification is now two gates.** One whole-image test against one scan's
+  span is wrong in both directions: measured per-scan spans on a flat 1024×1024
+  with a chroma-first script run `[2050, 12289, 2049]` at 2x2 and
+  `[514, 12289, 513]` at 4x4, so testing the whole output against the *first*
+  span rejects files djpeg reads. GATE 1 bounds each scan's planes against that
+  scan's span before its allocations; GATE 2 bounds the RGBA output against the
+  **summed spans of the scans actually decoded** — no pre-pass, nothing an
+  attacker can pad.
+- **The resume offset is byte-structural** (`entropy_start + espan`), never the
+  bit reader's position. That retires ADR 0006's first stated blocker: the fear
+  that a resumed walk could be steered by a cursor inside decoded content, which
+  a planted `FF DA` could freeze.
+- **A single-scan JPEG never enters the resume walk.** The driver exits on full
+  coverage before walking further, so no byte after an ordinary file's entropy
+  data is newly parsed and nothing that decoded before can newly reject on
+  trailing junk.
+- 120,000 new fuzz cases mutate the bytes *around* the scans — SOS headers,
+  inter-scan DHT/DRI segments, component selectors — because the new code is the
+  walk, not the decoder.
+
+### Performance
+
+- **No measurable change.** The recorded `bench-history.csv` row sits ~5 % above
+  0.7.3's, but so does `png_rgba8_256`, which shares nothing with the JPEG
+  restructure — so that is host drift between recording sessions, not a
+  regression. Re-measured back-to-back on the same host at the same moment,
+  0.7.3 and 0.8.0 agree within 1 % on every row (`png_rgba8_256` 5,703,994 vs
+  5,700,790 ns; `jpeg_gray_256` 3,019,574 vs 3,019,933). Worth stating because
+  the CSV is a within-host series and this session shows it is not a
+  within-*moment* one: comparing rows recorded hours apart can manufacture a
+  regression that a paired run does not reproduce.
+
+### Notes
+
+- `CHITRA_ERR_UNSUPPORTED` no longer covers any JPEG geometry. What remains
+  under it is progressive, arithmetic, 12-bit, hierarchical and CMYK — all
+  reclassified permanent in 0.6.1.
+- Collect-the-offsets-then-decode is impossible, and the fixtures show why: in
+  `ms_seq_420.jpg` the DHT segments sit **between** scans and the last scan
+  carries none of its own. Each scan must decode against the table state in
+  force at that point in the file.
+
 ## [0.7.3] - 2026-08-24
 
 **Harness and CI gaps — the sweep's least glamorous findings, and the ones most

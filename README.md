@@ -1,6 +1,6 @@
 # chitra
 
-Version: 0.7.3
+Version: 0.8.0
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder, a sibling AGNOS package in the mould of `sakshi` /
@@ -18,7 +18,7 @@ always 4 channels, always at the source dimensions, whatever went in.
 | Format | Coverage |
 |---|---|
 | **PNG** | Every spec-legal bit depth × color type: 1/2/4/8/16 across types 0/2/3/4/6 (§ 11.2.2 Table 11.1), plus **Adam7 interlace** for every cell. PLTE palettes, tRNS transparency (keyed and per-entry). IDAT inflate via `sankoch`. |
-| **JPEG** | JFIF **baseline** (SOF0 sequential Huffman, 8-bit): grayscale + YCbCr, chroma subsampling 4:4:4 / 4:2:2 / 4:2:0 and general `Hi,Vi` box upsampling, DRI / RST0–7 restart markers, and — since 0.6.0 — the T.81 § A.2 **non-interleaved** layout for a one-component frame (any `H`,`V` in 1..4). Verified **byte-identical to `djpeg -nosmooth`** across the sampling matrix. |
+| **JPEG** | JFIF **baseline** (SOF0 sequential Huffman, 8-bit): grayscale + YCbCr, chroma subsampling 4:4:4 / 4:2:2 / 4:2:0 and general `Hi,Vi` box upsampling, DRI / RST0–7 restart markers, RGB components via the Adobe APP14 transform, and the full T.81 § A.2 scan model — interleaved, **non-interleaved and partially interleaved**, single- or multi-scan (0.8.0). Verified **byte-identical to `djpeg -nosmooth`** across the sampling matrix. |
 | **BMP** | `BI_RGB` at 1 / 4 / 8 bpp (palette), 16 / 24 / 32 bpp, plus **`BI_RLE8` / `BI_RLE4`** run-length and **`BI_BITFIELDS`** channel masks; CORE / INFO / V2 / V3 / **V4** / **V5** headers; bottom-up **and** top-down. Verified **identical to ImageMagick**. |
 | **GIF** | GIF87a/89a, LZW, global **and** local color tables, 4-pass row interlace, transparency from a Graphic Control Extension. **First frame only** — see [ADR 0005](docs/adr/0005-gif-first-frame-only.md). Verified against two independent decoders. |
 
@@ -139,7 +139,7 @@ All deps are pinned in `cyrius.cyml`; the toolchain pin is
 ```bash
 cyrius deps          # resolve stdlib + sankoch + thread into lib/
 make build           # link-check the include chain (→ build/chitra_smoke)
-make test            # 2858 assertions across tests/tcyr/
+make test            # 2938 assertions across tests/tcyr/
 make fuzz            # ~2.2 M adversarial decode cases (fuzz/*.fcyr)
 make bench           # 17 decode benchmarks (tests/bcyr/chitra.bcyr)
 make dist            # regenerate dist/chitra.cyr — the artifact consumers link

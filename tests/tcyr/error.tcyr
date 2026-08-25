@@ -57,7 +57,7 @@ fn test_chitra_err_name() {
 # chitra_version() — major*10000 + minor*100 + patch
 # ================================================================
 fn test_chitra_version() {
-    assert_eq(chitra_version(), 703, "version 0.7.3 packs to 703");
+    assert_eq(chitra_version(), 800, "version 0.8.0 packs to 800");
     return 0;
 }
 
