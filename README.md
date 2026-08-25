@@ -19,7 +19,7 @@ always 4 channels, always at the source dimensions, whatever went in.
 |---|---|
 | **PNG** | Every spec-legal bit depth × color type: 1/2/4/8/16 across types 0/2/3/4/6 (§ 11.2.2 Table 11.1), plus **Adam7 interlace** for every cell. PLTE palettes, tRNS transparency (keyed and per-entry). IDAT inflate via `sankoch`. |
 | **JPEG** | JFIF **baseline** (SOF0 sequential Huffman, 8-bit): grayscale + YCbCr, chroma subsampling 4:4:4 / 4:2:2 / 4:2:0 and general `Hi,Vi` box upsampling, DRI / RST0–7 restart markers, RGB components via the Adobe APP14 transform, and the full T.81 § A.2 scan model — interleaved, **non-interleaved and partially interleaved**, single- or multi-scan (0.8.0). Verified **byte-identical to `djpeg -nosmooth`** across the sampling matrix. |
-| **BMP** | `BI_RGB` at 1 / 4 / 8 bpp (palette), 16 / 24 / 32 bpp, plus **`BI_RLE8` / `BI_RLE4`** run-length and **`BI_BITFIELDS`** channel masks; CORE / INFO / V2 / V3 / **V4** / **V5** headers; bottom-up **and** top-down. Verified **identical to ImageMagick**. |
+| **BMP** | `BI_RGB` at 1 / 4 / 8 bpp (palette), 16 / 24 / 32 bpp, plus **`BI_RLE8` / `BI_RLE4`** run-length and **`BI_BITFIELDS`** channel masks; CORE / **OS/2 2.x CORE2** / INFO / V2 / V3 / **V4** / **V5** headers (accepted DIB sizes 12/40/52/56/64/108/124); bottom-up **and** top-down. Verified **identical to ImageMagick**. |
 | **GIF** | GIF87a/89a, LZW, global **and** local color tables, 4-pass row interlace, transparency from a Graphic Control Extension. **First frame only** — see [ADR 0005](docs/adr/0005-gif-first-frame-only.md). Verified against two independent decoders. |
 
 ```
@@ -34,7 +34,7 @@ decoder. If you already know the format, `chitra_{png,jpeg,bmp,gif}_decode`
 have the identical shape, each with a `_rgba8` convenience wrapper.
 
 The budgeted variant (0.6.1) refuses **before beginning** any decode whose
-RGBA8 output would exceed `max_bytes` — a refusal allocates 16 bytes. It bounds
+RGBA8 output would exceed `max_bytes` — a refusal allocates 16 bytes, the `ChitraErr` itself, for PNG, JPEG and GIF, and 144 for BMP. It bounds
 the output, not the peak, and the function's own comment says exactly what it
 does not cover, because a memory guarantee that is not exact is not a
 guarantee. It matters more than it sounds: the bump allocator never frees, so
@@ -63,10 +63,13 @@ deferral is over; [ADR 0006](docs/adr/0006-defer-jpeg-multiscan-resumption.md)
 is amended with what the implementation actually cost, including a claim in its
 original text that turned out to be false.
 
-Two refusals are permanent rather than deferred: **encoding** (chitra is
-decode-only, in both directions of that sentence) and **`BI_JPEG` / `BI_PNG`
+Several refusals are permanent rather than deferred: **encoding** (chitra is
+decode-only, in both directions of that sentence); **`BI_JPEG` / `BI_PNG`
 inside a BMP**, which would have a decoder re-enter itself through
-attacker-controlled data.
+attacker-controlled data; and — reclassified from "deferred" by the 0.6.1
+sweep — arithmetic-coded, hierarchical/lossless/differential, CMYK/YCCK,
+12-bit and DNL-deferred-height JPEG. That leaves **progressive JPEG** as the
+only genuine deferral in the tree.
 
 ## Hardening
 
@@ -81,8 +84,8 @@ Untrusted bytes are the whole input surface, so the guards are the product:
   ~64 MB. PNG's remaining amplification case is documented as **accepted
   risk** rather than capped, because there the bomb and a legitimate solid
   image are the same file shape.
-- **`make fuzz`** — one harness per format, **~2.5 M adversarial decode cases,
-  9,975,418 assertions, 0 failures**, run in CI. They assert *both* that the decoder
+- **`make fuzz`** — one harness per format, **~2.6 M adversarial decode cases,
+  10,732,113 assertions, 0 failures**, run in CI. They assert *both* that the decoder
   survives and that it honours the documented `(0, *err_out set)` contract —
   the invariant a crash-only fuzzer misses.
 - **`make bench`** — 17 decode benchmarks with committed
@@ -92,8 +95,11 @@ Untrusted bytes are the whole input surface, so the guards are the product:
 - A 0.6.1 sweep for deferred and half-done work catalogued **84 findings** and
   turned up three defects on files standard tools produce: a `cjpeg -rgb` JPEG
   decoded hue-rotated with no error, an 81-byte GIF was wrongly refused, and a
-  16 KB JPEG padded with skipped segments allocated **117 MB**. All fixed; the
-  rest are scheduled in the roadmap's 0.7.x arc or named as scope guards.
+  16 KB JPEG padded with skipped segments allocated **117 MB**. **All of it is
+  closed**: the 0.7.x arc, 0.8.0's multi-scan JPEG and 0.9.0's surface work
+  spent every item, and two were deliberately **declined** after a reference
+  check contradicted the spec reading rather than fixed — which is the more
+  useful outcome and is recorded as such.
 - **Four security audits** in [`docs/audit/`](docs/audit/) — one per decode
   path, the last (0.5.3) covering BMP and GIF. None found a memory-safety
   defect. What they did find is the reason the reference cross-checks are not
@@ -118,9 +124,10 @@ exports **45 internal names**; the same file lists them, and
 `scripts/check-surface.sh` fails the build if the bundle and that list ever
 disagree in either direction.
 
-Three things are deliberately outside the promise: the internal names, the
+Four things are deliberately outside the promise: the internal names, the
 human-readable `chitra_err_name` strings (the *codes* are frozen — match on
-those), and bit-exact output across releases. The output contract is *correct*
+those), bit-exact output across releases, and memory behaviour — the bump
+allocator never frees and `chitra_image_free` is a documented no-op. The output contract is *correct*
 RGBA8 held to external oracles, so a repair that moves bytes toward the oracle
 is a bug fix — the § 13.13 depth-16 rescaling change in 0.7.x changed every
 16-bit PNG's output and was one. Full edges in
@@ -158,7 +165,7 @@ All deps are pinned in `cyrius.cyml`; the toolchain pin is
 cyrius deps          # resolve stdlib + sankoch + thread into lib/
 make build           # link-check the include chain (→ build/chitra_smoke)
 make test            # 3014 assertions across tests/tcyr/
-make fuzz            # ~2.2 M adversarial decode cases (fuzz/*.fcyr)
+make fuzz            # ~2.6 M adversarial decode cases (fuzz/*.fcyr)
 make bench           # 17 decode benchmarks (tests/bcyr/chitra.bcyr)
 make dist            # regenerate dist/chitra.cyr — the artifact consumers link
 make test-all        # version-check + dist + test + fuzz (the pre-release gate)
@@ -190,7 +197,7 @@ current surface, sizes and decode matrix, then:
   formats leave something undefined and chitra had to choose.
 
 The original package proposal lives in the mabda repo
-(`docs/proposals/v3.3-chitra-png-decoder-package.md`, the v3.3 "Asset
+(`docs/archive/proposals/v3.3-chitra-png-decoder-package.md`, the v3.3 "Asset
 Loading" arc, Phase AL.P0); chitra's own JPEG design note is
 [`docs/proposals/jpeg-baseline-decoder.md`](docs/proposals/jpeg-baseline-decoder.md).
 

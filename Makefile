@@ -12,7 +12,10 @@
 #   make build          — link-check the library (programs/smoke.cyr)
 #   make dist           — regenerate dist/chitra.cyr via `cyrius distlib`
 #   make lint / fmt-check / vet  — quality gates
-#   make version-check  — VERSION / cyrius.cyml / CHANGELOG / README agree
+#   make version-check  — VERSION / cyrius.cyml / CHANGELOG / README /
+#                         chitra_version() agree
+#   make check-surface  — dist exports vs docs/development/public-surface.md
+#   make count-assertions — NUL-safe assertion total across suites
 #   make test-all       — version-check + dist regen + CPU tests + fuzz
 #   make clean          — scrub build/
 

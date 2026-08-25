@@ -63,13 +63,15 @@ are non-negotiable — see
   `GPU_ERR_IMAGE_DECODE`. Do not widen or reorder it.
 - **`ChitraImage` field additions are append-only.** `width` @ +0, `height` @ +8,
   `pixels` @ +16, `channels` @ +24 keep their 0.1.x offsets (mabda's accessors
-  depend on them). New fields go at the end (`seen_iend` @ +32, `src_ctype` @ +40),
-  and any widen bumps `CHITRA_IMAGE_SIZE`. Never insert a field in the middle.
+  depend on them). New fields go at the end (`seen_iend` @ +32, `src_ctype` @ +40,
+  `src_depth` @ +48; `CHITRA_IMAGE_SIZE` is **56**), and any widen bumps
+  `CHITRA_IMAGE_SIZE`. Never insert a field in the middle. **As of 1.0.0 the
+  layout is frozen**, so even an append is a major bump plus an ADR.
 
-Any change to the `@public` surface
-(`chitra_png_decode`, `chitra_png_decode_rgba8`, `chitra_jpeg_decode`,
-`chitra_jpeg_decode_rgba8`, `chitra_image_decode`, the `chitra_image_*`
-accessors, the error API, the `ChitraErrCode` enum) requires a `Breaking`
+Any change to the frozen public surface — the **29 names** enumerated in
+[`docs/development/public-surface.md`](docs/development/public-surface.md),
+which is the authoritative list and is checked against `dist/chitra.cyr` by
+`make lint`, so it cannot drift unnoticed — requires a `Breaking`
 CHANGELOG entry and an ADR.
 
 ## Dependencies
@@ -95,10 +97,15 @@ Every behavior change needs at least:
 - One **error-path** test (malformed input, truncated chunk, illegal
   bit-depth × color-type cell, etc.) asserting the right `ChitraErrCode`
 
-Place each in the matching `tests/tcyr/` suite — `error.tcyr` (error paths),
-`interlace.tcyr` (Adam7), `jpeg.tcyr` (baseline JPEG decode + reject paths),
-`png.tcyr` (the core PNG decode matrix), or `subbyte.tcyr` (1/2/4-bit
-grayscale/palette). The suites are globbed by `make test`; each is a standalone
+Place each in the matching `tests/tcyr/` suite — `bmp.tcyr` (the BMP matrix,
+RLE and masks), `budget.tcyr` (byte-budget refusals and their allocation cost),
+`error.tcyr` (error paths), `gif.tcyr` (GIF + LZW), `interlace.tcyr` (Adam7),
+`jpeg.tcyr` (baseline JPEG decode + reject paths), `jpeg_multiscan.tcyr`
+(§ A.2 multi-scan / partially interleaved), `jpeg_noninterleaved.tcyr`
+(§ A.2.2), `png.tcyr` (the core PNG decode matrix), `stream_end.tcyr`
+(`seen_iend` on all four formats), `subbyte.tcyr` (1/2/4-bit
+grayscale/palette), or `surface.tcyr` (record offsets, error names, the frozen
+accessors). The suites are globbed by `make test`; each is a standalone
 `main()`. The current baseline is **3,014 assertions across 12 suites** — PRs that
 lower coverage will be asked to add it.
 Confirm the count with `make count-assertions`.
@@ -106,7 +113,8 @@ Confirm the count with `make count-assertions`.
 Beyond the suites, two harness kinds exist and are worth running before you
 send a decode change:
 
-- `make fuzz` — `fuzz/*.fcyr`, ~2.2 M adversarial decode cases across four
+- `make fuzz` — `fuzz/*.fcyr`, ~2.6 M adversarial decode cases / 10,732,113
+  assertions across four
   harnesses (PNG, JPEG, BMP, GIF — one per format). Asserts
   **both** survival and the documented `(0, *err_out set)` failure contract.
   A new decode path should gain a case here.
@@ -147,8 +155,9 @@ send a decode change:
   include to a domain module breaks the bundle.
 - **`[lib].modules` order in `cyrius.cyml` is dependency order:** `error.cyr` →
   `png_chunks.cyr` → `png_filter.cyr` → `png_color.cyr` → `png.cyr` →
-  `jpeg_huffman.cyr` → `jpeg_idct.cyr` → `jpeg_markers.cyr` → `jpeg.cyr`. Don't
-  reorder casually.
+  `jpeg_huffman.cyr` → `jpeg_idct.cyr` → `jpeg_markers.cyr` → `jpeg.cyr` →
+  `bmp.cyr` → `gif_lzw.cyr` → `gif.cyr` (`gif_lzw.cyr` is a frame-independent
+  leaf and must precede `gif.cyr`, which drives it). Don't reorder casually.
 - **Re-run `make dist` after touching module order or any domain module**, and
   confirm `dist/chitra.cyr` still compiles. The rationale lives in
   [`docs/architecture/002-flat-modules-distlib-concatenation.md`](docs/architecture/002-flat-modules-distlib-concatenation.md).

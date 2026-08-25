@@ -1155,9 +1155,10 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
 # validated those offsets, but the color pass re-validates defensively
 # against (src, len) so it is safe even if called on a hand-built raw.
 #
-# Only bit depth 8 is handled here (parse_raw rejects others loud), so
-# every sample is one byte and scanline layout is dense channels-per-
-# pixel with no bit unpacking.
+# This pass handles every spec-legal depth. At depth 8 each sample is one byte
+# and the scanline is dense channels-per-pixel with no bit unpacking; 1/2/4 are
+# unpacked MSB-first and scaled 255/85/17; 16 is rescaled to 8 per PNG § 13.13
+# in _png_scale16 (0.7.1 — it was a high-byte truncation through 0.7.0).
 
 # ================================================================
 # Color-type sample-byte sizes (bit depth 8 => 1 byte per channel).
@@ -1553,7 +1554,7 @@ fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
 # (IHDR / IDAT-concat / IEND / PLTE / tRNS), color types 0/2/3/4/6 at every
 # spec-legal bit depth (1/2/4/8/16, validated per color_type — § 11.2.2
 # Table 11.1), Adam7 interlace, sankoch IDAT inflate, the five unfilter
-# predictors, canonical-RGBA8 output (16-bit truncates to the high byte;
+# predictors, canonical-RGBA8 output (16-bit rescales per § 13.13 — 0.7.1;
 # sub-byte scales 255/85/17), and the kii security guards. JPEG is 0.3+.
 #
 # PLTE/tRNS wiring: chitra_png_parse_raw captures PLTE/tRNS only as
@@ -1562,7 +1563,7 @@ fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
 # color pass, which resolves the spans (see png_color.cyr's header).
 
 # ================================================================
-# ChitraImage — the public decode result (48 bytes).
+# ChitraImage — the public decode result (56 bytes).
 #   +0:  width       (i64 — pixels)
 #   +8:  height      (i64 — pixels)
 #   +16: pixels      (ptr — owned RGBA8, width*height*4 bytes)
@@ -1613,9 +1614,13 @@ fn chitra_image_channels(img): i64 { return load64(img + IMAGE_CHANNELS_OFFSET);
 fn chitra_image_seen_iend(img): i64 { return load64(img + IMAGE_SEEN_IEND_OFFSET); }
 # The source color type before RGBA8 normalization — lets a consumer report the
 # original format even though pixels are canonical. For PNG this is the PNG
-# color_type (0/2/3/4/6). For JPEG (chitra 0.3.0) it is an out-of-PNG-range
-# sentinel `0x100 | num_components` (0x101 grayscale, 0x103 YCbCr) so a consumer
-# switching on PNG's 0/2/3/4/6 never aliases a JPEG value (see ADR 0003).
+# color_type (0/2/3/4/6). Every other format uses an out-of-PNG-range sentinel,
+# so a consumer switching on PNG's 0/2/3/4/6 never aliases one (see ADR 0003):
+#   JPEG — `0x100 | ncomp`, plus bit 4 when the components are RGB rather than
+#          YCbCr: 0x101 grayscale, 0x103 YCbCr, 0x113 RGB (0.6.1, ADR 0009).
+#   BMP  — `0x200 | bpp`: 0x201/0x204/0x208 palette, 0x210 16 bpp,
+#          0x218 24 bpp, 0x220 32 bpp.
+#   GIF  — `0x300 | min_code_size`.
 fn chitra_image_source_color_type(img): i64 { return load64(img + IMAGE_SRC_CTYPE_OFFSET); }
 # Bits per sample in the SOURCE, before normalization to RGBA8 (0.9.0).
 #
@@ -1712,11 +1717,12 @@ fn chitra_version(): i64 {
 # construction from a DHT's BITS (code-length counts) + HUFFVAL (symbols). This
 # module is frame-independent table machinery, so it is included BEFORE
 # jpeg_markers.cyr (whose DHT parser drives the build into frame-owned storage).
-# The entropy bit-reader + the DECODE procedure land in bite 4.
+# The entropy bit-reader, the DECODE procedure and _jpeg_decode_block all live
+# in this module.
 #
 # Construction follows ITU-T T.81 Annex C (HUFFSIZE/HUFFCODE generation) folded
 # into the Annex F figure F.15 decoder-table derivation (MINCODE/MAXCODE/VALPTR).
-# The DECODE procedure (Annex F.2.2.3) the next bite implements:
+# The DECODE procedure (Annex F.2.2.3), implemented here as _jpeg_decode:
 #   code = nextbit(); L = 1
 #   while code > maxcode[L]: L += 1; code = (code << 1) | nextbit()
 #   value = huffval[ valptr[L] + code - mincode[L] ]
@@ -2296,10 +2302,14 @@ fn _jpeg_idct_block(zz, quant, out): i64 {
 #   bite 2 — parse SOF0 component specs (id / H / V / quant-selector, max H/V)
 #            and DQT quantization tables, with the sampling-factor security
 #            guards (Hi,Vi in 1..4 — reject 0 per CVE-2018-11212; reject
-#            duplicate component ids; ΣHi·Vi ≤ 10).
+#            duplicate component ids). NOTE: ΣHi·Vi ≤ 10 is NOT enforced here
+#            — T.81 § B.2.3 scopes it to an interleaved MCU, so 0.8.0 moved it
+#            to _jpeg_parse_sos (jpeg.cyr), conditioned on Ns > 1.
 #   bite 3 — parse DHT and build canonical Huffman decode tables (via
 #            jpeg_huffman.cyr) into frame storage (4 DC + 4 AC).
-# APPn / COM / DNL payloads are skipped here; DRI sets the restart interval.
+# COM / DNL and all APPn except APP14 are skipped here; APP14 is parsed for the
+# Adobe colour transform (0.6.1, ADR 0009). DRI sets the restart interval, and
+# _jpeg_resume_to_next_scan (0.8.0) walks the markers between scans.
 # See docs/adr/0004-jpeg-decode-model.md + docs/proposals/jpeg-baseline-decoder.md.
 #
 # JPEG marker legend (the byte after a 0xFF; ITU-T T.81 Table B.1):
@@ -2771,8 +2781,11 @@ fn _jpeg_parse_dri(cur, frame): i64 {
 # Parse a SOF0 segment (T.81 § B.2.2): Lf(2) P(1) Y(2) X(2) Nf(1) then Nf*3
 # component specs (Ci, Hi/Vi packed, Tqi). Cursor is at the 2-byte length.
 # Validates precision, component count, dimensions, sampling factors (1..4,
-# reject 0 → CVE-2018-11212 div-by-zero), duplicate component ids, and
-# ΣHi·Vi ≤ 10. Returns 0 on success (frame filled) or a CHITRA_ERR_* code.
+# reject 0 → CVE-2018-11212 div-by-zero) and duplicate component ids. It does
+# NOT enforce ΣHi·Vi ≤ 10: that bounds an INTERLEAVED MCU (T.81 § B.2.3), so it
+# lives in _jpeg_parse_sos (jpeg.cyr) conditioned on Ns > 1 — applied frame-wide
+# it rejects files libjpeg writes, e.g. `cjpeg -sample 4x4,1x1,1x1 -scans`.
+# Returns 0 on success (frame filled) or a CHITRA_ERR_* code.
 # ================================================================
 fn _jpeg_parse_sof0(cur, frame): i64 {
     if (_cur_can_read(cur, 2) == 0) { return CHITRA_ERR_TRUNCATED; }
@@ -3103,14 +3116,19 @@ fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
 # @public — chitra JPEG decoder: JPEG bytes -> canonical RGBA8 (0.3.0).
 # jpeg.cyr — the public decode entry. Wires the marker scan (jpeg_markers),
 # the SOS scan header, the entropy/IDCT block pipeline (jpeg_huffman + jpeg_idct),
-# and the color pass into a ChitraImage (the same 48-byte result PNG produces).
+# and the color pass into a ChitraImage (the same 56-byte result PNG produces).
 #
-# Scope (bite 7): baseline JFIF — grayscale (1 component) and YCbCr (3) with
-# arbitrary chroma subsampling (4:4:4 / 4:2:2 / 4:2:0 / general Hi,Vi), box
-# upsampling, and DRI/RSTn restart markers. The result is the shared ChitraImage
-# (offsets from png.cyr); source_color_type carries a JPEG sentinel
-# (0x100 | num_components) so a consumer's PNG 0/2/3/4/6 switch never aliases it
-# (ADR 0003 / review).
+# Scope: baseline JFIF — grayscale (1 component), YCbCr (3), and RGB (3, via
+# the Adobe APP14 transform or 'R','G','B' component ids — 0.6.1, ADR 0009);
+# arbitrary chroma subsampling (4:4:4 / 4:2:2 / 4:2:0 / general Hi,Vi) with box
+# upsampling; DRI/RSTn restart markers; and the complete T.81 § A.2 scan model
+# — interleaved, non-interleaved, partially interleaved, single- and multi-scan
+# (0.6.0 for Nf = 1, 0.8.0 for the rest) — every baseline scan geometry decodes.
+#
+# The result is the shared ChitraImage (offsets from png.cyr); source_color_type
+# carries a JPEG sentinel — 0x100 | ncomp, plus bit 4 when the components are
+# RGB rather than YCbCr, so 0x101 gray / 0x103 YCbCr / 0x113 RGB — and a
+# consumer's PNG 0/2/3/4/6 switch never aliases it (ADR 0003 / review).
 
 # ================================================================
 # YCbCr -> RGB color conversion (JFIF full-range, ITU-R BT.601). Fixed-point
@@ -4176,13 +4194,16 @@ fn chitra_image_decode(src, len, err_out): i64 {
 #   4. The pixel data does NOT necessarily follow the palette. Its offset is a
 #      field in the file header, and it is authoritative; there can be a gap.
 #
-# Scope (0.4.0): BI_RGB uncompressed at 1 / 4 / 8 bpp (palette-indexed),
-# 24 bpp and 32 bpp, with BITMAPCOREHEADER (12-byte) and BITMAPINFOHEADER
-# (40-byte) DIB headers, both row orders. RLE4/RLE8, BI_BITFIELDS, 16 bpp and
-# the BI_JPEG / BI_PNG embedded streams are REJECTED with distinct codes rather
-# than half-decoded — the same defer-don't-half-implement posture ADR 0004 set
-# for non-baseline JPEG. BI_JPEG/BI_PNG are worth refusing on their own merit:
-# they would have a decoder re-enter itself, which is a recursion surface.
+# Scope: BI_RGB uncompressed at 1 / 4 / 8 bpp (palette-indexed), 16, 24 and
+# 32 bpp (0.4.0); BI_RLE8 / BI_RLE4 run-length (0.5.1); and BI_BITFIELDS
+# channel masks with the V4/V5 headers (0.5.2). Accepted DIB header sizes are
+# an ALLOW-LIST — 12 (BITMAPCOREHEADER), 40 (BITMAPINFOHEADER), 52 (V2), 56
+# (V3), 64 (OS/2 2.x BITMAPCOREHEADER2, 0.7.2), 108 (V4), 124 (V5) — not a
+# lower bound. Both row orders. The deferral list is EMPTY as of 0.5.2.
+#
+# Only the BI_JPEG / BI_PNG embedded streams are REJECTED, and permanently
+# rather than as a deferral: they would have a decoder re-enter itself through
+# attacker-controlled data, which is a recursion surface, not a feature.
 #
 # The `(src, len)` cursor and the security ceilings are the ones png_chunks.cyr
 # already defines — BMP gets the same bounds discipline for free.

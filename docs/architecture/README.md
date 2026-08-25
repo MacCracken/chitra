@@ -8,7 +8,7 @@ chitra is a **library** — there is no CLI, no stdout emit, no terminal/ANSI su
 
 ## Module map
 
-The pipeline runs left-to-right; each module owns one stage. Data flows by value through two records — `ChitraPngRaw` (parse output) and `ChitraImage` (public result) — not a shared scratch buffer. The include order is fixed by `[lib].modules` in [`../../cyrius.cyml`](../../cyrius.cyml): `error → png_chunks → png_filter → png_color → png → jpeg_huffman → jpeg_idct → jpeg_markers → jpeg`. The diagram and table below trace the PNG stages; the four JPEG modules are covered in [item 004](004-jpeg-decode-pipeline.md).
+The pipeline runs left-to-right; each module owns one stage. Data flows by value through two records — `ChitraPngRaw` (parse output) and `ChitraImage` (public result) — not a shared scratch buffer. The include order is fixed by `[lib].modules` in [`../../cyrius.cyml`](../../cyrius.cyml): `error → png_chunks → png_filter → png_color → png → jpeg_huffman → jpeg_idct → jpeg_markers → jpeg → bmp → gif_lzw → gif`. The diagram and table below trace the PNG stages; the four JPEG modules are covered in [item 004](004-jpeg-decode-pipeline.md).
 
 ```
   (src, len)                                                    ChitraImage
@@ -48,7 +48,7 @@ The pipeline runs left-to-right; each module owns one stage. Data flows by value
 
 Stdlib includes (`string`, `fmt`, `alloc`, `io`, `vec`, `str`, `syscalls`, `assert`, `bench`, `args`, `flags`, `thread`, `sankoch`) live **only** in [`../../src/lib.cyr`](../../src/lib.cyr) — the domain modules are flat. That flatness is exactly what makes `cyrius distlib` strip-concatenation produce a compile-clean `dist/chitra.cyr` (item 002). DEFLATE itself is sankoch's job, not chitra's: `thread.cyr` must precede `sankoch.cyr` because sankoch's public-API lock wraps `mutex_lock`/`mutex_unlock`.
 
-A note on doc-drift for future readers: `src/error.cyr`'s enum comments for `CHITRA_ERR_INTERLACE` ("single-pass only (chitra 0.2)") and `CHITRA_ERR_BIT_DEPTH` ("bit_depth != 8 … chitra 0.2 / AL.P0d scope"), and `png_color.cyr`'s header line "Only bit depth 8 is handled here", are **stale**. As of 0.2.1 chitra decodes Adam7 and every spec-legal bit depth (1/2/4/8/16, validated per color type — PNG § 11.2.2 Table 11.1). Those two error codes now fire only for genuinely illegal combinations (e.g. color type 3 at bit depth 16).
+A note for future readers, kept because the underlying fact still catches people: `CHITRA_ERR_INTERLACE` and `CHITRA_ERR_BIT_DEPTH` read like capability limits and are not. Since 0.2.1 chitra decodes Adam7 and every spec-legal bit depth (1/2/4/8/16, validated per colour type — PNG § 11.2.2 Table 11.1), so both fire **only** on genuinely illegal values, e.g. colour type 3 at depth 16. The stale enum comments this note used to point at were corrected in 0.3.2, and 0.9.0 replaced the two `chitra_err_name` strings for the same reason — they now read "illegal interlace method" and "illegal bit depth for color type".
 
 ## Items
 

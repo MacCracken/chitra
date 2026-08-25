@@ -77,7 +77,7 @@ decode. Each maps to a `ChitraErrCode`
 - ✅ **Decompression-bomb ratio cap** — the ratio of inflated output to
   compressed IDAT input is bounded by `CHITRA_MAX_INFLATE_RATIO = 1100`
   (constant in [`src/png_chunks.cyr:43`](src/png_chunks.cyr); checked at
-  [`src/png_filter.cyr:562`](src/png_filter.cyr)), just above DEFLATE's
+  [`src/png_filter.cyr:612`](src/png_filter.cyr)), just above DEFLATE's
   theoretical 1032:1 maximum (RFC 1951 § 3.2.5), so a zip-bomb-style input is
   rejected instead of expanded. Failure → `CHITRA_ERR_DIMENSIONS`.
   ⚠️ **Accepted risk, stated rather than quietly fixed**: this ratio bounds
@@ -96,9 +96,9 @@ decode. Each maps to a `ChitraErrCode`
   `CHITRA_MAX_RAW_BYTES = 268435456` (256 MB)
   ([`src/png_chunks.cyr:38`](src/png_chunks.cyr)), and every allocation is
   null-checked. The IHDR-derived inflated/pixel buffer sizes over the ceiling
-  fail as `CHITRA_ERR_DIMENSIONS` ([`src/png_filter.cyr:543-550`](src/png_filter.cyr));
+  fail as `CHITRA_ERR_DIMENSIONS` ([`src/png_filter.cyr:593-597`](src/png_filter.cyr));
   the IDAT-accumulator over the ceiling and any allocation that returns null
-  fail as `CHITRA_ERR_OOM` ([`src/png_filter.cyr:445`](src/png_filter.cyr)).
+  fail as `CHITRA_ERR_OOM` ([`src/png_filter.cyr:459`](src/png_filter.cyr)).
 - ✅ **Inflate exact-size second line of defense** — the inflated stream size
   must match exactly the size derived from IHDR (`height × (1 + row_bytes)`);
   any mismatch from `sankoch` aborts the decode. Failure →
@@ -118,7 +118,7 @@ decode. Each maps to a `ChitraErrCode`
 - ✅ **Palette-index bounds checks** — every palette pixel index, on both the
   sub-byte and the depth-8 path, is rejected if it points past the PLTE entry
   count, and per-entry tRNS reads are bounded by the tRNS array length
-  ([`src/png_color.cyr:198`](src/png_color.cyr),
+  ([`src/png_color.cyr:196`](src/png_color.cyr),
   [`src/png_color.cyr:328`](src/png_color.cyr)). Palette images with a
   missing/short PLTE are rejected. Failure → `CHITRA_ERR_BAD_CHUNK`.
 - ✅ **PLTE / tRNS structural guards** — PLTE is rejected if duplicated, if it
@@ -176,16 +176,20 @@ conformance, resource and defence-in-depth rather than exploit fixes:
   inverting the failure contract at the exact moment a failure must be
   reported. A BSS-resident fallback `ChitraErr` keeps the contract intact once
   the heap is gone.
-- ✅ **Geometry chitra does not implement is refused, not approximated** — a
-  scan carrying fewer components than the frame is non-interleaved (T.81
-  § A.2.2) or partially interleaved (§ A.2.3); neither is implemented, so both
-  reject with `CHITRA_ERR_UNSUPPORTED` rather than emitting fabricated pixels.
-  **0.6.0 narrowed what this covers**: the one-component case it originally
-  described now *decodes* (§ A.2 geometry is implemented for `Nf = 1`), and the
-  measured reason the multi-scan case is still refused is that a naive
-  relaxation makes those files **decode to a wrong image with no error raised**
-  — the silent-mis-decode class, not a crash. See
-  [ADR 0006](docs/adr/0006-defer-jpeg-multiscan-resumption.md).
+- ✅ **The § A.2 scan model is fully implemented (0.8.0), so nothing in it is
+  approximated** — interleaved, non-interleaved (§ A.2.2), partially
+  interleaved (§ A.2.3), single- and multi-scan all decode. This bullet used to
+  describe a refusal, and the refusal is gone: 0.6.0 implemented the `Nf = 1`
+  case and 0.8.0 the rest, so **`Ns < Nf` is no longer a rejection at all**.
+  What replaced the gate as the bound is the **per-component coverage
+  bitmask** — a component may be decoded exactly once, so a file gets at most
+  `Nf` scans and every scan must name something new
+  ([`src/jpeg.cyr:738`](src/jpeg.cyr)). That is what makes the scan walk
+  terminate; no scan counter and no resume tripwire were added, because neither
+  could fire before coverage does. The measured reason it was not relaxed
+  earlier still stands as the reason it needed its own cut: a naive relaxation
+  makes those files **decode to a wrong image with no error raised**. See
+  [ADR 0006](docs/adr/0006-defer-jpeg-multiscan-resumption.md), amended.
 - ✅ **The amplification denominator excludes bytes the decoder never reads
   (0.6.1).** `CHITRA_MAX_JPEG_RATIO` divided by the whole file length, so an
   attacker bought allowance with padding: a 16,556-byte file, 16,404 bytes of
@@ -216,21 +220,30 @@ conformance, resource and defence-in-depth rather than exploit fixes:
   output — 1,149 of 1,536 bytes wrong. An undefined transform is declined
   rather than guessed at.
 - ✅ **The ΣHj·Vj ≤ 10 cap is conditioned, not relaxed (0.6.0)** — T.81 § B.2.3
-  conditions it on `Ns > 1`, and it bounds an interleaved MCU. It stays at the
-  SOF0 parse, once per file, before any geometry derives from those factors;
-  moving it to the scan header would put it after the allocations it exists to
-  bound. Its reachability was proven in **both** directions before release: with
+  conditions it on `Ns > 1`, and it bounds an interleaved MCU. As of **0.8.0 it lives at the scan
+  header** ([`src/jpeg.cyr:183`](src/jpeg.cyr)), summed over the *scan's* own
+  components rather than the frame's — which is where § B.2.3 puts it, and
+  which is required for correctness: applied frame-wide it rejected files
+  libjpeg writes, since `cjpeg -sample 4x4,1x1,1x1 -scans` is legal, sums to
+  18, and every scan in it is non-interleaved. That position is still ahead of
+  every allocation, because planes are allocated per scan by
+  `_jpeg_decode_one_scan` after the scan header parses. Its reachability was proven in **both** directions before release: with
   the condition removed a legal one-component file rejects again, and with the
   cap itself removed a three-component file declaring ΣHj·Vj = 24 decodes to
   garbage. A conditioned cap that quietly became dead code is exactly the 0.5.3
   BMP finding.
 
 > Note on two narrow codes: `CHITRA_ERR_INTERLACE` and `CHITRA_ERR_BIT_DEPTH`
-> ([`src/error.cyr:26-27`](src/error.cyr)) are validity rejections, not
+> ([`src/error.cyr:40-41`](src/error.cyr)) are validity rejections, not
 > capability limits — chitra decodes Adam7 and every spec-legal bit depth, so
 > they fire only on genuinely illegal values (an interlace method outside
 > {0,1}, or a bit-depth × color-type pair outside § 11.2.2 Table 11.1, e.g.
-> color-type-3 at depth 16). Their enum comments were corrected in 0.3.2. See
+> color-type-3 at depth 16). Their enum comments were corrected in 0.3.2, and
+> **0.9.0 replaced both `chitra_err_name` strings** for the same reason — they
+> read as capability limits ("interlace unsupported" / "bit depth unsupported")
+> and now read "illegal interlace method" / "illegal bit depth for color type".
+> Error *codes* are frozen at 1.0.0; the human-readable strings explicitly are
+> not, so match on `chitra_err_code`. See
 > [`docs/audit/2026-06-26-audit.md`](docs/audit/2026-06-26-audit.md).
 
 ### BMP (0.4.0)
@@ -291,8 +304,17 @@ turn it away, so the header parser *is* the entire perimeter:
   4096×4096 image genuinely needs ~137 KB of RLE, so the cap leaves 8.5×
   headroom over the format's own best case. Failure → `CHITRA_ERR_DIMENSIONS`.
 - ✅ **Accepted DIB header sizes are an allow-list**, not a lower bound:
-  12 / 40 / 52 / 56 / 108 / 124. An unrecognised size rejects rather than being
-  treated as "at least an INFO header". **`BI_JPEG` and `BI_PNG` are refused outright** — honouring them
+  12 / 40 / 52 / 56 / **64** / 108 / 124 — 64 being the OS/2 2.x
+  `BITMAPCOREHEADER2` admitted in 0.7.2, whose fields past +40 are
+  units/recording/rendering, so its mask fields are deliberately *not* read.
+  The other OS/2 sizes (16..60) are still refused: their compression and
+  clrused fields are absent and would have to be guessed. An unrecognised size
+  rejects rather than being treated as "at least an INFO header". **0.7.2 also
+  rejects `BI_ALPHABITFIELDS` on a 52-byte V2 header** rather than relocating
+  its mask — that header has room for three masks and the compression names
+  four, and ImageMagick refuses the combination outright, so there is no
+  reference to agree with and guessing where the fourth field lives would be
+  the 0.5.3 defect in a new costume. **`BI_JPEG` and `BI_PNG` are refused outright** — honouring them
   would have a decoder re-enter itself, and a recursion surface is better
   declined than bounded.
 - ✅ **`planes != 1` is a malformed header, not a feature.** There has never
@@ -320,10 +342,20 @@ hostile LZW stream takes:
 - ✅ **Out-of-range codes.** A code above `next_code` has no entry and is
   rejected; the single legal exception (`code == next_code`, the KwKwK case) is
   handled explicitly rather than by reading past the dictionary.
-- ✅ **A truncated LZW stream rejects** rather than zero-padding. JPEG
-  zero-pads past end-of-data because a truncated scan still has a well-defined
-  block to finish; LZW has no such notion, and padding would fabricate
-  dictionary entries.
+- ✅ **A truncated LZW stream never zero-pads** — but note precisely what that
+  does and does not mean, because the distinction is the guarantee. The bit
+  reader returns exhaustion rather than fabricated bits: JPEG zero-pads past
+  end-of-data because a truncated scan still has a well-defined block to
+  finish, LZW has no such notion, and padded bits would fabricate dictionary
+  entries out of nothing. It does **not** mean the decode rejects. Running out
+  of codes is *tolerated as a clean end*, because real encoders in the wild omit
+  the End code; chitra returns the partial frame with the unwritten tail
+  zero-filled (ADR 0005's posture — decode what is there) and reports the
+  shortfall through **`chitra_image_seen_iend() == 0`** (0.7.0). A caller that
+  must distinguish a complete frame from a prefix has to read that accessor;
+  the error channel will not tell it. Byte-level truncation of the file itself
+  — a sub-block chain running off the end — still rejects with
+  `CHITRA_ERR_TRUNCATED`.
 - ✅ **Sub-block chains** — every length byte is bounds-checked against the
   input, and the gathered payload is capped at the input length, so a chain
   cannot make chitra hold more than the file itself. The same walk skips
@@ -342,6 +374,15 @@ hostile LZW stream takes:
   of degenerate content is close to the bomb ratio** — a solid 4096×4096
   really does compress to ~13 KB — so it bounds the extreme case, not the
   merely aggressive one. Failure → `CHITRA_ERR_DIMENSIONS`.
+
+  **Scope, stated because 0.6.1 narrowed it**: the ratio bounds the **frame**
+  (`fw * fh`), not the RGBA8 buffer chitra returns. 0.6.1 removed the canvas
+  check as unsound — an 81-byte GIF declaring a 1920×1080 logical screen and
+  painting a small first frame into it is the ordinary shape of an optimised
+  animation, and the cap was refusing it. So `screen_w * screen_h * 4` is
+  bounded by `CHITRA_MAX_PIXELS` / `CHITRA_MAX_RAW_BYTES` alone. This is the
+  same **accepted risk** the PNG bullet carries, for the same reason: at the
+  canvas level the bomb and the legitimate file have the same shape.
 - ✅ **Graphic Control Extension block size validated (0.5.3)** — it is fixed
   at 4, and every field after it was addressed by a fixed offset. A GCE
   declaring another size had chitra read the packed byte and transparent index
@@ -439,9 +480,11 @@ chitra's parser beyond spec.
 
 > Coverage note: as of 0.5.3 every format has been audited, and both
 > hardening gates have been closed since 0.3.3. The fuzz gap
-> is closed — `make fuzz` drives both public decode entries
-> over ~2.2 M adversarial cases (7,482,610 assertions, 0 failures),
-> including JPEG entropy-segment mutation, and asserts the documented
+> is closed — `make fuzz` drives all four public decode entries and the
+> format-sniffing router over ~2.6 M adversarial cases (10,732,113 assertions,
+> 0 failures), including JPEG entropy-segment mutation and the PNG scanline-
+> and IDAT-stream-mutation modes added in 0.7.3; it runs in CI as of 0.7.3,
+> and asserts the documented
 > `(0, *err_out set)` failure contract as well as survival; and `make bench`
 > measures decode latency for all four formats with a committed CSV history. Note
 > that benchmarks are a performance signal, **not** a security one — they are

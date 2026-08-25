@@ -15,9 +15,9 @@ assumed — they are what the consumers actually call:
 
 - **mabda** uses two names: `chitra_png_decode_rgba8`,
   `chitra_jpeg_decode_rgba8`.
-- **kii** uses ten: `chitra_image_decode`, `chitra_image_{width,height,pixels,
+- **kii** uses nine: `chitra_image_decode`, `chitra_image_{width,height,pixels,
   seen_iend,source_color_type}`, `chitra_png_check_signature`,
-  `chitra_jpeg_check_signature`, `chitra_err`, `chitra_err_code`.
+  `chitra_jpeg_check_signature`, `chitra_err_code`.
 
 A rename is cheap in the abstract and expensive against that list.
 

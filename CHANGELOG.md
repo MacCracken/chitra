@@ -5,6 +5,85 @@ All notable changes to chitra are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Documentation
+
+**A tree-wide staleness sweep — 158 verified corrections across 36 files.** No
+decode behaviour changed and the bundle's exported names are **byte-for-byte
+identical** to the 1.0.0 tag; `dist/chitra.cyr` differs only in comments.
+
+The sweep ran every claim against the tree rather than reading for plausibility,
+and 38 of 196 candidate findings were **refuted** and dropped — mostly things
+that look stale and are not: dated audit reports, released CHANGELOG entries,
+and ADR *Context* sections are historical records, and correcting them would
+have made them wrong.
+
+What it found, by class:
+
+- **Shipped work still described as pending.** The largest cluster, all from the
+  0.8.0 § A.2 cut: `SECURITY.md`, `CLAUDE.md`, `docs/sources.md`,
+  `architecture/004` and ADRs 0004/0006 each still said multi-scan and
+  partially-interleaved JPEG were **refused with `CHITRA_ERR_UNSUPPORTED`**, and
+  described the deleted `Nf = 1` effective-geometry collapse as current. An
+  agent following CLAUDE.md's hardening checklist would have gone looking for a
+  guard that no longer exists; a consumer reading SECURITY.md would have
+  concluded `cjpeg -scans` output is unsupported.
+- **A security guarantee that had reversed.** SECURITY.md claimed *"a truncated
+  LZW stream **rejects**"*. It does not: exhaustion is tolerated as a clean end
+  (real encoders omit the End code), the partial frame is returned with its tail
+  zero-filled, and the shortfall is reported through `chitra_image_seen_iend()
+  == 0`. What is true — and is what the bullet now says — is that the bit reader
+  never **zero-pads bits**, because padded bits would fabricate dictionary
+  entries.
+- **Drifted code anchors.** Ten-plus `file:line` citations across `SECURITY.md`,
+  `CLAUDE.md` and ADRs 0002/0003 pointed at unrelated lines — the PNG
+  inflate-ratio cap cited `png_filter.cyr:562`, which is `seen_iend = 1;` inside
+  the IEND branch. `scripts/check-anchors.sh` cannot see this class: it flags
+  citations landing on a brace or past EOF, not ones landing on a line that
+  simply says something else.
+- **Numbers stale by up to four releases.** Fuzz totals (7,482,610 / 9,975,418 →
+  **10,732,113**), per-suite assertion counts, per-module line counts, the dist
+  and smoke byte sizes, and a benchmark table that was **missing every BMP and
+  GIF row**.
+- **`ChitraImage` still called 48 bytes** in `src/png.cyr`'s own header comment,
+  twenty lines above the `CHITRA_IMAGE_SIZE = 56` it introduces.
+- **`source_color_type` under-documented on a frozen accessor** — the 0.6.1 RGB
+  sentinel `0x113`, BMP's `0x200 | bpp` and GIF's `0x300 | min_code_size` were
+  missing from the source comment, `state.md` and the getting-started guide. A
+  consumer switching on `0x103` for a 3-component JPEG silently mis-handles
+  every `cjpeg -rgb` file, which is the exact defect 0.6.1 exists to expose.
+- **A miscount corrected in the 1.0.0 freeze docs**: kii calls **nine** chitra
+  names, not ten. `chitra_err` appears in kii only inside its own
+  `_kii_map_chitra_err`. The consumer evidence ADR 0010 rests on is otherwise
+  unchanged, and both consumers still sit entirely inside the FROZEN block.
+- **`cyrius.cyml`'s package description** advertised two of the four shipped
+  formats and pinned JPEG at "v0.3.0".
+
+### Changed
+
+- **`docs/development/roadmap.md` is 684 → 380 lines.** Fourteen
+  `### ~~x.y.z~~ — SHIPPED` sections were retrospectives duplicating the
+  CHANGELOG, which the file's own header says is where per-release detail
+  lives. They are replaced by **Lessons carried forward**: seven findings that
+  generalise past the release that produced them and appear nowhere else in the
+  tree, kept because each changed how the next cut was done — a sweep finding is
+  a hypothesis; every new fuzz mode needs its own no-op proof; ask what the
+  denominator is; reachability is part of what a regression test proves; a
+  change to how samples are reduced is never local to the reduction; follow the
+  reference where a conformance argument cannot be confirmed; guards that cannot
+  fire are left out rather than written down. Each of the seven was verified
+  absent from the rest of the tree before the sections were deleted.
+- **`scripts/check-surface.sh`'s guarantee is stated accurately.** It compares
+  the **union** of the FROZEN and INTERNAL_NAMES blocks against the bundle, so
+  it catches a name appearing or vanishing — but *which* block a name sits in is
+  enforced by review, not by the script. The manifest previously implied it
+  caught category changes too.
+- **`architecture/001` no longer claims every dependency-touching `make` target
+  carries the `check-lib-wiring` guard.** `dist` and `check-surface` do not, and
+  `test-all` lists `dist` **before** `test`, so under serial make a symlinked
+  `lib/` is not caught until after the bundle has been regenerated.
+
 ## [1.0.0] - 2026-08-24
 
 **The public API and ABI are frozen.**
@@ -89,7 +168,7 @@ API/ABI freeze, because each one changes the public surface". v1.0 follows with
 no code churn, which is the property a version promising stability should have.
 
 Two measured facts shaped every call: **mabda uses two names**
-(`chitra_png_decode_rgba8`, `chitra_jpeg_decode_rgba8`) and **kii uses ten**,
+(`chitra_png_decode_rgba8`, `chitra_jpeg_decode_rgba8`) and **kii uses nine**,
 including `chitra_image_seen_iend` and both signature predicates. A rename is
 cheap in the abstract and expensive against that list. See
 [ADR 0010](docs/adr/0010-the-v1-surface.md).
@@ -1627,7 +1706,8 @@ JPEG matrices are byte-for-byte what 0.3.1 shipped; **728 assertions across
   Corrected: the `chitra_image_decode` router description, which claimed
   unrecognized bytes fall through to `chitra_png_decode` — the router
   actually tries PNG magic, then JPEG SOI, then rejects with
-  `CHITRA_ERR_SIGNATURE` ([`jpeg.cyr:424`](src/jpeg.cyr)); the
+  `CHITRA_ERR_SIGNATURE` ([`jpeg.cyr`](src/jpeg.cyr) — line anchor dropped:
+  the router grew to four formats after this entry was written); the
   `getting-started` error-code table, which stopped at 12 and omitted every
   JPEG code 13-23, and named the success constant `CHITRA_ERR_OK` rather
   than `CHITRA_OK`; the `make test` suite list, which omitted `jpeg.tcyr`

@@ -20,6 +20,14 @@
 #   - JPEG — assembled with an in-harness MSB-first bit writer (0xFF stuffing
 #            included) over the Annex K DC luminance table plus a compact AC
 #            table, emitting real DC + AC coefficients per block.
+#   - BMP  — the plain path has no compression, so the generator is just
+#            header + palette + bottom-up rows; the RLE8 fixture is
+#            run-length encoded in-harness so the decode side walks real
+#            opcodes rather than a stored run.
+#   - GIF  — the only format needing a real encoder on the fixture side:
+#            the harness LZW-compresses the index plane so the decode side
+#            exercises the genuine dictionary build, not a clear-code
+#            passthrough.
 #
 # Every generated fixture is DECODE-VERIFIED before it is timed (see
 # `_verify`). A benchmark that silently measures a rejected input is worse

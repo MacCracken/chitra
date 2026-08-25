@@ -1,7 +1,7 @@
 [package]
 name = "chitra"
 version = "${file:VERSION}"
-description = "chitra (चित्र — image / picture) — pure-Cyrius CPU raster decoder for AGNOS (PNG + JPEG → canonical RGBA8; PNG: all bit depths 1/2/4/8/16 + Adam7; JPEG v0.3.0: JFIF baseline, grayscale + YCbCr, 4:4:4/4:2:2/4:2:0 + restart markers)"
+description = "chitra (चित्र — image / picture) — pure-Cyrius CPU raster decoder for AGNOS. PNG / JPEG / BMP / GIF → canonical RGBA8. PNG: depths 1/2/4/8/16 + Adam7; JPEG: JFIF baseline, gray/YCbCr/RGB, interleaved + non-interleaved + multi-scan; BMP: BI_RGB / RLE / BITFIELDS, 1-32 bpp; GIF: first frame"
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/chitra"
 language = "cyrius"
@@ -39,7 +39,8 @@ modules = [
 # Stdlib base set mirrors mabda's foundation, plus "sankoch" (RFC 1950/1951
 # zlib_decompress + crc32/adler32 for PNG IDAT inflate — same dep kii uses)
 # and "thread" (sankoch's _sankoch_lock/_unlock wrap mutex_lock/mutex_unlock).
-# Both pulled in now so the v0.1.0 PNG decoder bites have them ready.
+# Both are load-bearing: sankoch for PNG IDAT inflate + chunk CRC, thread for
+# sankoch's internal lock.
 stdlib = [
     "string",
     "fmt",

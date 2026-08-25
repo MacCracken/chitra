@@ -35,22 +35,40 @@ None of these are ever returned to the allocator during a decode.
 ### The rejection path allocates too
 
 Worth stating separately, because it is the least intuitive consequence and it
-is measurable: **a JPEG that is refused still costs 22,096 bytes**. A 15-byte
-file whose SOF0 declares 12-bit precision is rejected correctly — and by then
-`chitra_jpeg_scan_markers` has already allocated the frame record (320 B), the
-quantization store (2,048 B) and eight Huffman table records (19,712 B), none
-of which come back. It is not memoized either: every call pays it again. So a
-consumer being fed hostile input pays for the files it *refuses*, at roughly
-1,473:1 against a minimal one. (For contrast: a JPEG rejected at the
-**signature** costs 16 bytes, and a malformed PNG costs ~16.5 KB once — that
-one is sankoch's table setup, memoized — then ~120 B per call.) Reducing this
-is the named prerequisite for the byte-budget surface in
-[`../adr/0007-byte-budget-surface-deferred.md`](../adr/0007-byte-budget-surface-deferred.md).
+is measurable — though **0.6.1 fixed the worst of it**, and the before/after is
+the point.
+
+**Through 0.6.0**, a JPEG that was refused still cost **22,160 bytes** (ADR 0007
+measured 22,096 before that release's own APP14 repair grew the frame record
+from 320 to 384). A 15-byte file whose SOF0 declares 12-bit precision is
+rejected correctly — but by then `chitra_jpeg_scan_markers` had already
+allocated the frame record, the quantization store (2,048 B) and eight Huffman
+table records (19,712 B), none of which come back, and none of it memoized: every
+call paid it again. A consumer fed hostile input paid for the files it *refused*,
+at roughly 1,473:1 against a minimal one.
+
+**Since 0.6.1** the table stores are allocated lazily — `_jpeg_alloc_quant` and
+`_jpeg_alloc_huff` fire only when a DQT or DHT first defines something, each
+guarded `== 0`, and **per frame rather than per definition** (a single DHT may
+carry thousands of definitions, so per-definition allocation would trade a flat
+cost for one that scales with file size). A refused JPEG now costs the frame
+record plus the `ChitraErr`. For contrast: a JPEG rejected at the **signature**
+costs 16 bytes, and a malformed PNG costs ~16.5 KB once — that one is sankoch's
+table setup, memoized — then ~120 B per call.
+
+Reducing this was the named prerequisite for the byte-budget surface, and both
+halves shipped in 0.6.1: [`../adr/0007-byte-budget-surface-deferred.md`](../adr/0007-byte-budget-surface-deferred.md)
+decided the shape, [`../adr/0008-byte-budget-as-shipped.md`](../adr/0008-byte-budget-as-shipped.md)
+records what it became — two names rather than eight, with a refusal costing 16
+bytes (144 for BMP).
 
 ## The `*_free` no-ops
 
-Three `@public` "free" functions exist purely for API symmetry, and all are
-verified no-ops that return `0`:
+Three "free" functions exist purely for API symmetry, and all are verified
+no-ops that return `0`. Only **one is public**: `chitra_image_free`, frozen at
+1.0.0. The other two are internal, visible in `dist/chitra.cyr` solely because
+`cyrius distlib` strip-concatenates
+([`../development/public-surface.md`](../development/public-surface.md)):
 
 - `chitra_image_free(img)` — `src/png.cyr`. Body is `return 0;`. The header
   states it plainly: *"The stdlib `alloc` is a bump allocator with no per-block
@@ -62,7 +80,7 @@ verified no-ops that return `0`:
   `ChitraJpegFrame` and its side allocations (quant / Huffman storage, the MCU
   planes) live in the same bump arena; same no-op rationale, safe on a 0 ptr.
 
-Because the bodies ignore their argument entirely, **both are safe to call on a
+Because the bodies ignore their argument entirely, **all three are safe to call on a
 `0` pointer** — calling `chitra_image_free(0)` after a failed decode is a no-op,
 not a crash. They are kept (rather than deleted) so that:
 
@@ -121,5 +139,9 @@ as memory-pressure relief. They are markers, not collectors.
   the arena-reset pattern above is unsafe for PNG today.
 - [`../adr/0007-byte-budget-surface-deferred.md`](../adr/0007-byte-budget-surface-deferred.md)
   — the bounded-allocation entry point this note motivates.
-- [`../audit/2026-06-26-audit.md`](../audit/2026-06-26-audit.md) — current-state audit.
+- [`../audit/2026-06-26-audit.md`](../audit/2026-06-26-audit.md) — the audit
+  that recorded the refusal-path allocation cost (a dated record of what was
+  true then, not a current-state claim).
+- [`../audit/2026-08-24-audit.md`](../audit/2026-08-24-audit.md) — the most
+  recent audit.
 - [`../development/state.md`](../development/state.md) — volatile state (versions, sizes, counts).

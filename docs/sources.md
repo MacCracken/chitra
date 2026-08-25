@@ -1,6 +1,6 @@
 # chitra — Sources
 
-> Last Updated: 2026-06-27
+> Last Updated: 2026-08-24 (1.0.0)
 
 The citation index for chitra's algorithmic and domain content. AGNOS
 math/domain crates carry a sources file so every nontrivial algorithm is
@@ -27,7 +27,7 @@ within each, by the module/function that consumes them.
 > deterministic; it can differ from libjpeg by ≤1 LSB on negative
 > intermediates.
 
-## JPEG (shipped, 0.3.0)
+## JPEG (shipped, 0.3.0–0.8.0)
 
 ### Format syntax and entropy decode
 
@@ -41,10 +41,11 @@ within each, by the module/function that consumes them.
   - Annex C + Annex F (F.2.2.3, Figure F.16 + Annex C code-assignment) —
     canonical Huffman code construction (`mincode`/`maxcode`/`valptr` from
     the 16 BITS counts + HUFFVAL list) and the DECODE procedure. Used by:
-    `src/jpeg_huffman.cyr` — DHT parse + `_jpeg_decode_huff`.
+    `src/jpeg_huffman.cyr` — DHT parse (`_jpeg_huff_build`) + the DECODE
+    procedure `_jpeg_decode`.
   - § F.2.2.1 + Figure F.12 — the RECEIVE and EXTEND procedures
     (read S bits, sign-reconstruct the DC/AC magnitude). Used by:
-    `src/jpeg_huffman.cyr` — `_jpeg_receive`, `_jpeg_extend`.
+    `src/jpeg_huffman.cyr` — `_jpeg_br_bits` (RECEIVE), `_jpeg_extend` (EXTEND).
   - § F.1.2.1 / F.2.2 — baseline DC difference (predictor) + AC run/size
     (RRRR/SSSS, EOB, ZRL) decode. Used by: `src/jpeg.cyr` MCU/block
     decode loop.
@@ -60,9 +61,13 @@ within each, by the module/function that consumes them.
     walks its data units in raster order, one per MCU, "regardless of the
     values of H1 and V1". Diverges from the interleaved layout as soon as the
     factors exceed 1. chitra rejected this through 0.5.3; **0.6.0 decodes it**
-    for a one-component frame via the effective-geometry collapse, and defers
-    the multi-scan case (`Ns < Nf`) with `CHITRA_ERR_UNSUPPORTED`. Used by:
-    `src/jpeg.cyr` decode-scan geometry. See
+    for a one-component frame, and **0.8.0 decodes the rest** — both the
+    partially-interleaved case (`Ns < Nf` within one scan) and multi-scan
+    (several SOS segments), driven by `_jpeg_decode_scans` and bounded by the
+    per-component coverage bitmask. 0.6.0's effective-geometry collapse was
+    **deleted** rather than extended: one general § A.1.1 rule now covers both
+    layouts, keyed on `Ns == 1` rather than `Nf == 1`. No JPEG scan geometry
+    rejects any more. Used by: `src/jpeg.cyr` decode-scan geometry. See
     [`adr/0006-defer-jpeg-multiscan-resumption.md`](adr/0006-defer-jpeg-multiscan-resumption.md).
   - § B.2.3 — scan header: `1 ≤ Ns ≤ 4`, each `Csj` names a distinct frame
     component, and — **conditioned on `Ns > 1`** — `Σ H_j·V_j ≤ 10`. Used by:
@@ -167,7 +172,7 @@ audit ([`audit/2026-06-27-audit.md`](audit/2026-06-27-audit.md)).
   analog for chitra's tolerate-and-skip (never-parse) EXIF handling.
   <https://github.com/lvandeve/lodepng/issues/221>
 
-## PNG (shipped, 0.1.0–0.2.1)
+## PNG (shipped, 0.1.0–0.7.1)
 
 The PNG decode path's algorithmic sources, included so this file covers the
 whole crate. The full guard-to-source mapping is in
@@ -196,7 +201,15 @@ whole crate. The full guard-to-source mapping is in
   - § 11.3.2 — tRNS semantics: the chunk names ONE exact sample value to
     treat as transparent. Used by: `src/png_color.cyr` (0.3.3 — the key is
     now compared at full sample width, so a depth-16 key no longer aliases
-    onto the 256 values sharing its high byte).
+    onto the 256 values sharing its high byte). 0.7.1 also made tRNS on
+    colour types 4 and 6 a rejection, which § 11.3.2 forbids outright.
+  - § 13.13 — sample-depth rescaling: `floor(input × MAXOUT / MAXIN + 0.5)`.
+    Used by: `src/png_color.cyr` `_png_scale16`, as `(v*255 + 32767) / 65535`
+    (0.7.1 — a high-byte **truncation** through 0.7.0, which was off by up to
+    one level on every depth-16 sample and changed decoded output for every
+    16-bit image when it was fixed).
+## BMP (shipped, 0.4.0–0.7.2)
+
 - **Microsoft BMP / DIB format** — `BITMAPFILEHEADER`,
   `BITMAPCOREHEADER` (12-byte, OS/2 1.x), `BITMAPINFOHEADER` (40-byte), the
   `BI_*` compression enumeration, bottom-up-by-default row order with a
@@ -269,4 +282,7 @@ whole crate. The full guard-to-source mapping is in
 - [`adr/0004-jpeg-decode-model.md`](adr/0004-jpeg-decode-model.md) — JPEG decode-model decision
 - [`adr/0002-security-model.md`](adr/0002-security-model.md) — security model + PNG guard inventory
 - [`audit/2026-06-26-audit.md`](audit/2026-06-26-audit.md) — PNG security audit
+- [`audit/2026-06-27-audit.md`](audit/2026-06-27-audit.md) — JPEG security audit
+- [`audit/2026-08-23-audit.md`](audit/2026-08-23-audit.md) — P-1 sweep, PNG + JPEG
+- [`audit/2026-08-24-audit.md`](audit/2026-08-24-audit.md) — P-1 sweep, BMP + GIF
 - Upstream JPEG CVE corpus (referenced, not duplicated): [kii's 2026-05-22 audit](https://github.com/MacCracken/kii/blob/main/docs/audit/2026-05-22-audit.md)

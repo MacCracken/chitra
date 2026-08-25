@@ -1,7 +1,9 @@
 # @public — chitra library include chain.
 # chitra (चित्र — image / picture) — pure-Cyrius CPU raster decoder.
 #
-# Provides: PNG → canonical RGBA8 decode (v0.1.0). Sibling AGNOS package
+# Provides: PNG, JPEG, BMP and GIF → canonical RGBA8 decode, plus the
+# format-sniffing router chitra_image_decode and the byte-budget entry
+# chitra_image_decode_budget. Sibling AGNOS package
 # in the mould of sakshi / patra / samvada. Consumed by mabda for
 # gpu_texture_load_png (a plain dist dep — chitra is pure CPU Cyrius,
 # no C shim).
@@ -55,15 +57,16 @@ include "src/png.cyr"
 # chitra JPEG domain modules (0.3.0 — JFIF baseline). Flat, dependency
 # order; jpeg_huffman.cyr is frame-independent table machinery, so it
 # precedes jpeg_markers.cyr (whose DHT parser drives the build). Both
-# reuse png_chunks.cyr's byte cursor + error.cyr codes. More jpeg_*.cyr
-# modules join here as the 0.3.0 bites land.
+# reuse png_chunks.cyr's byte cursor + error.cyr codes. The four JPEG
+# modules are final as of the 1.0.0 freeze.
 # ================================================================
 include "src/jpeg_huffman.cyr"
 include "src/jpeg_idct.cyr"
 include "src/jpeg_markers.cyr"
 include "src/jpeg.cyr"
 
-# BMP (0.4.0) — BI_RGB uncompressed. Depends on error.cyr for codes,
+# BMP (0.4.0 BI_RGB; + RLE8/RLE4 0.5.1; + BITFIELDS/16 bpp/V4-V5 0.5.2).
+# Depends on error.cyr for codes,
 # png_chunks.cyr for the security ceilings, and png.cyr for ChitraImage.
 include "src/bmp.cyr"
 

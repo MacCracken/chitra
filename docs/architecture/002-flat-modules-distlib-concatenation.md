@@ -15,9 +15,10 @@ consumer links directly (there is no CLI — chitra is a library; see
 source tree obeys one rule:
 
 > **Stdlib `include` directives appear in exactly one file: `src/lib.cyr`. The
-> nine domain modules — `error.cyr`, `png_chunks.cyr`, `png_filter.cyr`,
+> **twelve** domain modules — `error.cyr`, `png_chunks.cyr`, `png_filter.cyr`,
 > `png_color.cyr`, `png.cyr`, `jpeg_huffman.cyr`, `jpeg_idct.cyr`,
-> `jpeg_markers.cyr`, `jpeg.cyr` — are FLAT: they carry no `include` lines at all.**
+> `jpeg_markers.cyr`, `jpeg.cyr`, `bmp.cyr`, `gif_lzw.cyr`, `gif.cyr` — are
+> FLAT: they carry no `include` lines at all.**
 
 `src/lib.cyr` is the single include chain ([`../../src/lib.cyr`](../../src/lib.cyr)):
 it pulls the stdlib (`string`, `fmt`, `alloc`, `vec`, `str`, `io`, `args`,

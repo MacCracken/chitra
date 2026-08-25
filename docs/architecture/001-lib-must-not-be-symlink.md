@@ -62,8 +62,15 @@ cross-linked dependency tree.
 
 ## What it affects
 
-Every `make` target that touches the dependency tree. If the guard fires, no
-build/test/dist work proceeds until `lib/` is a real directory again.
+Most `make` targets that touch the dependency tree — `build`, `test` and
+`fuzz` depend on `check-lib-wiring` directly, and if it fires, no work proceeds
+until `lib/` is a real directory again.
+
+**Two targets do not carry it**, which is worth knowing before relying on the
+guard: `dist` and `check-surface`. That matters most for `test-all`, whose
+prerequisite list is `version-check dist test fuzz` — under serial make the
+`cyrius distlib` run completes *before* `test` reaches the guard, so a
+symlinked `lib/` is not caught until after the bundle has been regenerated.
 
 ## The fix
 

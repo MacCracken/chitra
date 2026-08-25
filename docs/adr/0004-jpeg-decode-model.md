@@ -139,6 +139,18 @@ Two related decisions ride with it:
   a wrong image, with no error — is in
   [`0006-defer-jpeg-multiscan-resumption.md`](0006-defer-jpeg-multiscan-resumption.md).
 
+> **Superseded in 0.8.0**, on both points above. **`Ns < Nf` decodes** —
+> multi-scan and partially-interleaved files are no longer deferred, and
+> `CHITRA_ERR_UNSUPPORTED` no longer covers any JPEG scan geometry; the § A.2
+> class is complete. And the ΣHj·Vj ≤ 10 cap **did** move: it now lives at the
+> *scan* header (`_jpeg_parse_sos`), summed over the scan's own components,
+> because § B.2.3 scopes it to an interleaved MCU — applied frame-wide it still
+> rejected `cjpeg -sample 4x4,1x1,1x1 -scans`, which is legal, sums to 18, and
+> whose every scan is non-interleaved. It remains ahead of every allocation,
+> since planes are allocated per scan after the scan header parses. See
+> [`0006-defer-jpeg-multiscan-resumption.md`](0006-defer-jpeg-multiscan-resumption.md)
+> (amended) and the 0.8.0 CHANGELOG.
+
 Unchanged: progressive, arithmetic, 12-bit precision, hierarchical / lossless /
 differential and 4-component CMYK all still reject with their distinct codes.
 The clean-rejection set as a security control is exactly as it was.

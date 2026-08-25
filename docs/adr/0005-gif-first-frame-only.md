@@ -79,7 +79,7 @@ handed an animated GIF gets its first frame rather than a `SIGNATURE` error.
 - **The output contract is unchanged.** Four formats, one shape. Every
   existing consumer gains GIF support on a `[deps.chitra]` re-pin with no code
   change — the same property that made JPEG and BMP cheap to adopt.
-- **`ChitraImage` stays 48 bytes** and mabda's accessors stay valid. The
+- **GIF costs `ChitraImage` no new field** — it was 48 bytes before this decision and after it, and mabda's accessors stay valid. (It reached 56 bytes in 0.9.0 for `src_depth`, per [ADR 0010](0010-the-v1-surface.md) — unrelated to GIF.) The
   append-only field discipline is not spent on a feature no consumer wants.
 - **The decode surface stays small.** Disposal methods are a compositing
   model — "restore to background", "restore to previous" — and implementing

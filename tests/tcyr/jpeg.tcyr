@@ -1,5 +1,8 @@
-# tests/tcyr/jpeg.tcyr — JPEG (JFIF baseline) marker framing, SOF0 + DQT parse,
-# and non-baseline / malformed rejection (0.3.0, bites 1-2). Self-contained CPU
+# tests/tcyr/jpeg.tcyr — JPEG (JFIF baseline): marker framing, SOF0 / DQT / DHT
+# parsing, entropy + IDCT, full decode across the chroma-sampling matrix,
+# DRI/RSTn restart markers, the Adobe APP14 colour-transform cells (0.6.1), and
+# the non-baseline / malformed rejections. The § A.2 scan geometries live in
+# jpeg_noninterleaved.tcyr and jpeg_multiscan.tcyr. Self-contained CPU
 # suite (own main + assert_summary), standalone like error.tcyr/png.tcyr:
 # include the lib chain + the assert harness. Fixtures are tiny hand-built JPEG
 # marker streams embedded as byte arrays (no file I/O).

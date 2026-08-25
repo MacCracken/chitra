@@ -1,6 +1,14 @@
 # 0006 — Non-interleaved JPEG: decode the one-component class, defer multi-scan
 
-**Status**: Accepted
+**Status**: Accepted — **the deferral it records was discharged by 0.8.0.**
+The `Nf = 1` half shipped in 0.6.0; multi-scan and partially-interleaved files
+(`Ns < Nf`) **decode as of 0.8.0**. Read this ADR as the design record that
+drove that cut, not as a description of current behaviour: `Ns < Nf` is no
+longer refused, `CHITRA_ERR_UNSUPPORTED` no longer covers any JPEG scan
+geometry, and the § A.2 class is complete. The `## Amended` section below was
+written *before* 0.8.0 and is what the implementation was built from — including
+the correction that this cut could **not** build on 0.6.0's effective-geometry
+collapse, which was deleted rather than extended.
 **Date**: 2026-08-24
 
 ## Context
@@ -65,7 +73,10 @@ both directions: its encoder refuses `-sample 4x4,2x2,2x2` interleaved
 factors with a non-interleaved scan script.
 
 `Ns < Nf` rejects with **`CHITRA_ERR_UNSUPPORTED`** (4), not the
-`CHITRA_ERR_JPEG_SOS` (17) it used through 0.5.3. Seventeen said *"your file is
+`CHITRA_ERR_JPEG_SOS` (17) it used through 0.5.3. *(Superseded: that rejection
+existed from 0.6.0 through 0.7.3 only. **0.8.0 decodes `Ns < Nf`**, and what
+replaced the gate as the bound is the per-component coverage bitmask
+`JF_COVERED` — a component may be decoded exactly once.)* Seventeen said *"your file is
 malformed"* about a file libjpeg writes on request; four says *"chitra
 declines"*, which is what is true and what the house already uses for
 progressive, arithmetic, CMYK and `BI_JPEG`. No new error code: the existing

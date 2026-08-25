@@ -47,7 +47,7 @@ Four security audits, every format line-by-line reviewed.
 **10,732,113 fuzz assertions**, 17 benchmarks — 0 failures throughout.
 
 Released tags: 0.1.0, 0.2.0, 0.2.1, 0.3.0, 0.3.1, 0.3.2, 0.3.3, 0.4.0, 0.5.0,
-0.5.1, 0.5.2, 0.5.3, 0.6.0, 0.6.1, 0.7.0, 0.7.1, 0.7.2, 0.7.3, 0.8.0, 0.9.0
+0.5.1, 0.5.2, 0.5.3, 0.6.0, 0.6.1, 0.7.0, 0.7.1, 0.7.2, 0.7.3, 0.8.0, 0.9.0, 1.0.0
 (SemVer; **the public surface is frozen as of 1.0.0** — see
 [`public-surface.md`](public-surface.md) for what that covers and
 [ADR 0010](../adr/0010-the-v1-surface.md) for the calls made to get there).
@@ -123,7 +123,7 @@ BMP (0.4.0):
 Format-agnostic:
 
 - `chitra_image_decode(src, len, err_out)` → `ChitraImage*` — the
-  **signature-sniffing router** ([`jpeg.cyr:460`](../../src/jpeg.cyr)): the
+  **signature-sniffing router** ([`jpeg.cyr:1040`](../../src/jpeg.cyr)): the
   8-byte PNG magic → `chitra_png_decode`; else the JPEG SOI marker →
   `chitra_jpeg_decode`; else the BMP `BM` magic → `chitra_bmp_decode`; else
   the `GIF87a`/`GIF89a` magic → `chitra_gif_decode`; else
@@ -131,6 +131,13 @@ Format-agnostic:
   It does *not* fall through to the PNG decoder for unrecognized bytes — an
   unknown format is rejected at the router. The single entry a consumer
   should reach for when it does not know the format up front.
+- `chitra_image_decode_budget(src, len, max_bytes, err_out)` → `ChitraImage*`
+  (0.6.1) — decodes unless the RGBA8 output would exceed `max_bytes`. A refusal
+  sets `CHITRA_ERR_BUDGET` (34) and costs 16 bytes (144 for BMP). It is **never
+  a validity opinion**: an unreadable header goes to the router so the real
+  error is reported, not a budget refusal. It bounds the declared *output*, not
+  the peak, and its own comment says what it does not cover
+  ([ADR 0008](../adr/0008-byte-budget-as-shipped.md)).
 
 Shared:
 
@@ -161,9 +168,10 @@ stream ended the way its format says it should), `src_ctype`@40,
 `src_depth`@48 (0.9.0 — bits per channel in the SOURCE: the IHDR depth for
 PNG, 8 for JPEG and GIF, the widest declared channel for BMP). For a
 PNG, `src_ctype` is the pre-normalization PNG color_type (0/2/3/4/6); for a
-JPEG it carries the sentinel `0x100 | num_components` (so `0x101` grayscale,
-`0x103` YCbCr); for a BMP, `0x200 | bpp` (so `0x201`/`0x204`/`0x208` indexed,
-`0x218` at 24 bpp, `0x220` at 32 bpp); for a GIF, `0x300 | min_code_size`.
+JPEG it carries `0x100 | num_components`, with bit 4 set when the components
+are RGB rather than YCbCr (so `0x101` grayscale, `0x103` YCbCr, **`0x113` RGB**
+— 0.6.1); for a BMP, `0x200 | bpp` (so `0x201`/`0x204`/`0x208` indexed,
+`0x210` for the packed 16-bpp layouts, `0x218` at 24 bpp, `0x220` at 32 bpp); for a GIF, `0x300 | min_code_size`.
 The +32/+40/+48 fields are **append-only** — 0.1.x offsets preserved, so
 mabda's accessors are unaffected. `tests/tcyr/surface.tcyr` pins each offset
 individually, so a reordering that looks harmless in source fails a test.
@@ -212,11 +220,12 @@ JFIF **baseline** (SOF0) sequential Huffman, 8-bit precision only:
 
 Decode pipeline: `chitra_jpeg_scan_markers` (SOI..SOS marker walk —
 DQT / DHT / SOF0 / DRI parse + reject non-baseline) → `_jpeg_parse_sos` →
-`_jpeg_decode_scan` (per-component MCU loop: `_jpeg_decode_block`
+`_jpeg_decode_scans` → `_jpeg_decode_one_scan` (per-component MCU loop: `_jpeg_decode_block`
 [bit-reader + Annex F `DECODE` + `RECEIVE`/`EXTEND`, DC diff + AC run/size],
 `_jpeg_idct_block` [dequant + zig-zag + libjpeg `islow` integer IDCT +
-level-shift `+128` and `[0,255]` clamp], plane placement) → box upsample +
-full-range BT.601 YCbCr→RGB → `ChitraImage`. **Non-baseline modes
+level-shift `+128` and `[0,255]` clamp], plane placement) → `_jpeg_build_image`
+(box upsample + full-range BT.601 YCbCr→RGB, or a straight copy for RGB
+components) → `ChitraImage`. **Non-baseline modes
 (progressive, arithmetic, 12-bit precision, hierarchical/lossless/
 differential, 4-component CMYK/YCCK) are rejected with distinct error
 codes** — the defer-don't-half-implement posture. See
@@ -247,7 +256,10 @@ transform chitra does not implement or does not recognise.
 BMP: `BMP_HEADER`=24, `BMP_DEPTH`=25, `BMP_COMPRESSION`=26 (now **only**
 `BI_JPEG` / `BI_PNG`, refused permanently), `BMP_PALETTE`=27, `BMP_RLE`=32
 (0.5.1), `BMP_MASK`=33 (0.5.2). GIF: `GIF_HEADER`=28, `GIF_LZW`=29,
-`GIF_PALETTE`=30, `GIF_NO_IMAGE`=31. Both paths reuse `TRUNCATED`=2, `OOM`=6
+`GIF_PALETTE`=30, `GIF_NO_IMAGE`=31.
+
+Caller policy (not a file defect): `BUDGET`=34 (0.6.1), set only by
+`chitra_image_decode_budget` — neither a validity failure nor an OOM. Both paths reuse `TRUNCATED`=2, `OOM`=6
 and `DIMENSIONS`=10 — the latter is what the 0.5.3 amplification caps raise.
 
 For PNG every byte access is bounds-checked against the input span, CRC-32 is
@@ -280,40 +292,41 @@ order. Stdlib includes live **only** in `lib.cyr`.
 
 PNG + shared:
 
-- `error.cyr` (149 L) — the `ChitraErr` model: the `ChitraErrCode` enum
+- `error.cyr` (168 L) — the `ChitraErr` model: the `ChitraErrCode` enum
   (now incl. the 13–23 JPEG codes), the 16-byte `GpuErr`-compatible record,
   `chitra_err_*` constructors / accessors / `print_name`, and the
   error-name table. Dep-free.
-- `png_chunks.cyr` (282 L) — the bounds-checked `(src, len)` cursor (every
+- `png_chunks.cyr` (283 L) — the bounds-checked `(src, len)` cursor (every
   u8 / u32-BE / skip validated against `len` before access), the 8-byte
   signature check, chunk-type predicates (IHDR / IDAT / IEND / PLTE / tRNS),
-  color-type→channels, the security ceilings (`MAX_PIXELS`=16777216,
-  `MAX_RAW_BYTES`=268435456, `MAX_DIM`=65535, and the four amplification
-  ratios — `MAX_INFLATE_RATIO`=1100 PNG, `MAX_JPEG_RATIO`=4096,
+  color-type→channels, the shared security ceilings (`MAX_PIXELS`=16777216,
+  `MAX_RAW_BYTES`=268435456, `MAX_DIM`=65535) and PNG's own amplification
+  ratio `MAX_INFLATE_RATIO`=1100. **The other three ratios live in the modules
+  that use them, not here** — `MAX_JPEG_RATIO`=4096 in `jpeg_markers.cyr`,
   `MAX_BMP_RLE_RATIO`=4096 and `MAX_GIF_RATIO`=16384, the last two added in
   0.5.3), and the
   internal `ChitraPngRaw` handoff struct + accessors. The JPEG modules reuse
   this byte cursor.
-- `png_filter.cyr` (621 L) — the five § 9 unfilter predictors
+- `png_filter.cyr` (671 L) — the five § 9 unfilter predictors
   (None / Sub / Up / Average / Paeth), the Adam7 7-pass deinterlace, and
   `chitra_png_parse_raw`: the two-pass chunk walk (CRC-32 each chunk via
   sankoch, parse IHDR, capture PLTE/tRNS spans, concat IDAT, inflate with
   the bomb caps, unfilter into the scanline buffer). Every failure returns
   a `ChitraErr`, never an OOB read.
-- `png_color.cyr` (352 L) — `chitra_png_color_to_rgba8`: the canonical-RGBA8
+- `png_color.cyr` (403 L) — `chitra_png_color_to_rgba8`: the canonical-RGBA8
   normalization pass — grayscale → (g,g,g,255), RGB → (r,g,b,255), palette →
   PLTE RGB + per-entry tRNS alpha, gray+alpha → (g,g,g,a), RGBA passthrough,
   with tRNS keying for types 0/2 and sub-byte / 16-bit sample handling.
   PLTE/tRNS are resolved from the original `src` via the captured
   (offset, length) spans, re-validated defensively.
-- `png.cyr` (125 L) — the public PNG decode API (`chitra_png_decode` /
+- `png.cyr` (162 L) — the public PNG decode API (`chitra_png_decode` /
   `chitra_png_decode_rgba8`), the 56-byte `ChitraImage` + accessors,
   `chitra_image_free`, the JPEG `src_ctype` sentinel doc, and
   `chitra_version`.
 
 JPEG (0.3.0):
 
-- `jpeg_huffman.cyr` (329 L) — frame-independent Huffman machinery: the
+- `jpeg_huffman.cyr` (344 L) — frame-independent Huffman machinery: the
   canonical decode-table representation (`mincode`/`maxcode`/`valptr`/
   `huffval`) built from DHT BITS + HUFFVAL (T.81 Annex C + F) with
   over-subscription rejection; the entropy bit-reader (MSB-first, `0xFF00`
@@ -330,20 +343,22 @@ JPEG (0.3.0):
   header / DQT / DHT / DRI and **rejecting** non-baseline modes), the
   `ChitraJpegFrame` storage, and the JPEG security guards: sampling factors
   clamped 1..4 (rejecting 0 — the CVE-2018-11212 divide-by-zero), duplicate
-  component ids rejected, ΣHi·Vi ≤ `MAX_BLOCKS_PER_MCU` (10) enforced before
-  MCU geometry (0.6.0: **conditioned on `ncomp > 1`**, per T.81 § B.2.3 — the
-  rule bounds an interleaved MCU and a one-component frame has none),
-  `MAX_DIM`/`MAX_PIXELS` re-checked, plus `MAX_COMPONENTS`=4,
+  component ids rejected, `MAX_DIM`/`MAX_PIXELS` re-checked, plus `MAX_COMPONENTS`=4,
   `MAX_SAMP_FACTOR`=4, `MAX_QUANT_TABLES`=4, `MAX_HUFF_TABLES`=4.
-- `jpeg.cyr` (533 L) — the public JPEG decode API (`chitra_jpeg_decode` /
+- `jpeg.cyr` (1,056 L) — the public JPEG decode API (`chitra_jpeg_decode` /
   `chitra_jpeg_decode_rgba8`) and the format-sniffing `chitra_image_decode`
-  router; `_jpeg_parse_sos` (scan header — Td/Ta selectors, baseline
-  Ss=0/Se=63/Ah=Al=0), the subsampling-aware `_jpeg_decode_scan` MCU loop
-  (max_h×max_v data units, per-component subsampled planes, box upsample),
-  and the BT.601 YCbCr→RGB color pass → `ChitraImage`. 0.6.0 added the § A.2
-  effective-geometry collapse for a one-component frame and split the single
-  `ns != ncomp` scan test into three branches with honest codes (`Ns < 1` and
-  `Ns > Nf` are validity failures; `Ns < Nf` is the deferral).
+  router; `_jpeg_parse_sos` (scan header — per-scan Td/Ta
+  selectors, baseline Ss=0/Se=63/Ah=Al=0, and the § B.2.3 ΣHj·Vj ≤ 10 cap
+  conditioned on `Ns > 1`, summed over the *scan's* components, ahead of that
+  scan's plane allocation); then the three functions 0.8.0 split
+  `_jpeg_decode_scan` into — `_jpeg_decode_scans` (the driver, terminating on
+  the per-component coverage bitmask), `_jpeg_decode_one_scan` (the
+  subsampling-aware MCU loop and plane placement) and `_jpeg_build_image` (box
+  upsample, the BT.601-or-RGB colour pass, the `ChitraImage`) — plus
+  `_jpeg_resume_to_next_scan` and the entropy-span walk. **0.8.0 deleted
+  0.6.0's effective-geometry collapse** and replaced it with one general
+  § A.1.1 rule: `Ns < Nf` (non-interleaved *and* partially interleaved) now
+  **decodes**, and only `Ns < 1` and `Ns > Nf` remain validity failures.
 
 BMP (0.4.0):
 
@@ -381,7 +396,7 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
 `error.cyr` → `png_chunks.cyr` → `png_filter.cyr` → `png_color.cyr` →
 `png.cyr` → `jpeg_huffman.cyr` → `jpeg_idct.cyr` → `jpeg_markers.cyr` →
 `jpeg.cyr` → `bmp.cyr` → `gif_lzw.cyr` → `gif.cyr` (the order in
-`[lib].modules`). Domain-module total: **4,930 L** across 12 files, plus
+`[lib].modules`). Domain-module total: **6,041 L** across 12 files, plus
 `lib.cyr` (74 L).
 
 ## Sizes
@@ -409,14 +424,14 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
 
 - `make test` (globs `tests/tcyr/*.tcyr`; each is a standalone `main()`) →
   **3,014 assertions, all pass** across 12 suites:
-  - `gif.tcyr` — **638** (signature, plain / interlaced 4×4 and 8×8 /
+  - `gif.tcyr` — **643** (signature, plain / interlaced 4×4 and 8×8 /
     transparent / animated-first-frame fixtures with **every pixel asserted**,
     the no-image and bad-min-code-size rejections, a truncation sweep, the
     four-format router, and the 0.5.3 amplification bomb — plain, padded, and
     a real GIF proving the cap does not reject valid input). Fixtures are real ImageMagick GIFs; expectations were
     corroborated by a second independent decoder, which is what caught the
     KwKwK bug.
-  - `bmp.tcyr` — **1,042** (signature, 24/32 bpp, 1/4/8 bpp palette,
+  - `bmp.tcyr` — **1,062** (signature, 24/32 bpp, 1/4/8 bpp palette,
     `BITMAPCOREHEADER`, bottom-up **and** top-down producing identical output,
     the 32-bpp undefined-alpha heuristic, deferred-mode + malformed-header
     rejections, an out-of-range palette index, a full truncation sweep, the
@@ -440,7 +455,7 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
     wrong returns the right *set* of pixels in the wrong places, and only
     position-sensitive expectations catch that.
   - `error.tcyr` — **20** (error codes, `chitra_err_*` accessors, name
-    round-trips, `chitra_version` → 900).
+    round-trips, `chitra_version` → 10000).
   - `interlace.tcyr` — **35** (Adam7 cross-checked against the trusted
     non-interlaced decode for 7 color/depth/odd-dimension cases).
   - `jpeg.tcyr` — **284** (marker scan + non-baseline rejection, SOF0
@@ -454,7 +469,7 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
     corrected grid asks for three, so the reader zero-pads and it proves the
     guard is gone rather than proving conformance; the conformance weight lives
     in `jpeg_noninterleaved.tcyr` on real encoder output).
-  - `png.tcyr` — **380** (cursor bounds, all five unfilter predictors, one
+  - `png.tcyr` — **393** (cursor bounds, all five unfilter predictors, one
     embedded fixture per color type at depth 8/16, palette+tRNS / keyed-color
     fixtures, `_rgba8` wrapper, adversarial rejections, and the 0.3.3
     chunk-ordering / § 5.4 regressions incl. the unknown-ancillary control;
@@ -462,7 +477,7 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
     range, and a palette tRNS placed **before** PLTE).
   - `subbyte.tcyr` — **143** (gray/palette at 1/2/4, multi-row padding,
     sub-byte ct2/4/6 reject).
-  - `stream_end.tcyr` — **18** (0.7.0). `chitra_image_seen_iend` for every
+  - `stream_end.tcyr` — **22** (0.7.0). `chitra_image_seen_iend` for every
     format, in both directions — a suite that only checked the truncated cases
     would pass with the field hardcoded the other way. Its GIF fixture is a
     *structurally valid* file whose LZW sub-block chain ends early, because
@@ -473,6 +488,18 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
     changes nothing about the decode, and that a budget refusal is never a
     validity opinion. A budget suite that only checked error codes would pass
     with the exhaustion vector wide open.
+  - `jpeg_multiscan.tcyr` — **75** (0.8.0). The three-way oracle: at each
+    sampling ratio the same image encoded interleaved, as three `Ns=1` scans,
+    and as `Ns=1` then `Ns=2`, all held to `djpeg -nosmooth` — nine
+    byte-identical. Plus the coverage-bitmask rejections (a component named
+    twice, a scan naming nothing new) and `Σ Hj·Vj = 18` decoding when every
+    scan is non-interleaved.
+  - `surface.tcyr` — **76** (0.9.0). The frozen surface itself: every
+    `ChitraImage` offset pinned individually so a reordering that looks
+    harmless in source fails a test, `ChitraErr`'s GpuErr-compatible layout,
+    the error-name strings, the four signature predicates accepting their own
+    format and rejecting the other three, and `source_depth` across all four
+    formats.
   - `jpeg_noninterleaved.tcyr` — **237** (0.6.0; T.81 § A.2). Built on real
     libjpeg-turbo 3.2.0 files, with the regeneration recipe in the suite header
     so the corpus is reproducible. Its source pattern varies in **both** axes
@@ -492,7 +519,7 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
   a green `make test` *is* the reference cross-check.
 - `make fuzz` (= `cyrius fuzz`, globbing `fuzz/*.fcyr`) → **10,732,113
   assertions, 0 failures** over **~2.6 M decode cases**, across 4 harnesses —
-  one per format (4,467 lines). 0.6.0 added a **256-value sweep of the SOF0
+  one per format (5,551 lines). 0.6.0 added a **256-value sweep of the SOF0
   sampling byte** (every value of it is now a live input, including the illegal
   ones that must still reject) and 100,000 entropy-mutation cases behind a
   non-interleaved header — a shape whose entropy bytes never reached the
@@ -506,16 +533,16 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
   byte sequence) and *contract* (failure returns 0 **and** sets `*err_out`;
   success leaves it 0) — the second being what a crash-only fuzzer misses,
   and what matters because mabda maps `ChitraErr` onto `GpuErr`.
-  - `fuzz_png.fcyr` (294 L) — random bytes, **valid signature + random chunk
+  - `fuzz_png.fcyr` (559 L) — random bytes, **valid signature + random chunk
     stream**, bit-flipped fixture, full truncation sweep, degenerate lengths.
-  - `fuzz_jpeg.fcyr` (566 L) — the same shapes plus **entropy-segment-only
+  - `fuzz_jpeg.fcyr` (1,803 L) — the same shapes plus **entropy-segment-only
     mutation** against the 8×8 and the real 16×16 gradient, so hostile bits
     reach the bit-reader / `DECODE` behind a valid header. Opens with a
     self-check asserting its fixtures decode and its entropy span is wide
     enough to mutate — the first draft silently exercised a 4-byte span, and
     a harness that no-ops is worse than none.
 - `make bench` (= `cyrius bench tests/bcyr/chitra.bcyr`) → **17 benchmarks**,
-  ~2 s (12 in 0.3.3, +3 BMP in 0.4.0, +1 GIF in 0.5.0 — the GIF case carries a
+  ~2 s (12 in 0.3.3, +3 BMP in 0.4.0, +1 BMP RLE in 0.5.1, +1 GIF in 0.5.0 — the GIF case carries a
   small greedy **LZW encoder**, because a benchmark built from literal codes
   alone would never make the decoder walk a dictionary chain). The harness **generates its
   fixtures at realistic sizes**
@@ -538,19 +565,24 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
 
 | benchmark | ns/px | total |
 |---|---|---|
-| `jpeg_gray_256` | 43 | 2.93 ms |
-| `png_rgba8_256` | 83 | 5.41 ms |
-| `jpeg_ycbcr420_256` | 91 | 5.95 ms |
-| `png_rgb8_256` | 99 | 6.52 ms |
-| `jpeg_ycbcr422_256` | 108 | 7.09 ms |
-| `png_rgba16_256` | 139 | 9.16 ms |
-| `png_rgba8_adam7_256` | 128 | 8.38 ms |
-| `jpeg_ycbcr444_256` | 145 | 9.49 ms |
-| `png_gray8_256` | 153 | 10.03 ms |
-| `png_palette8_256` | 154 | 10.10 ms |
+| `bmp_rgb24_256` | 7 | 0.48 ms |
+| `bmp_palette8_256` | 11 | 0.72 ms |
+| `bmp_rle8_256` | 20 | 1.29 ms |
+| `bmp_rgba32_256` | 21 | 1.38 ms |
+| `jpeg_gray_256` | 46 | 3.01 ms |
+| `gif_lzw_256` | 46 | 3.04 ms |
+| `png_rgba8_256` | 87 | 5.70 ms |
+| `jpeg_ycbcr420_256` | 97 | 6.33 ms |
+| `png_rgb8_256` | 106 | 6.93 ms |
+| `jpeg_ycbcr422_256` | 115 | 7.57 ms |
+| `png_rgba8_adam7_256` | 135 | 8.86 ms |
+| `png_rgba16_256` | 147 | 9.62 ms |
+| `jpeg_ycbcr444_256` | 154 | 10.08 ms |
+| `png_gray8_256` | 163 | 10.70 ms |
+| `png_palette8_256` | 164 | 10.75 ms |
 
 Fixed cost at 16×16 (throughput-irrelevant — the icon case):
-`png_rgba8` **60 µs**, `jpeg_gray` **16 µs**.
+`png_rgba8` **64 µs**, `jpeg_gray` **17 µs**.
 
 These are **host- and load-dependent**, and the per-pixel figure includes
 inflate, whose cost depends on how the generated fixture compresses — compare
@@ -599,8 +631,8 @@ and it is exactly what drifted in 0.3.1.
 - **Downstream pins are behind, and further behind than at 0.5.2** — the
   0.4.0–0.5.3 arc landed two formats and nine decode repairs while both pins
   stood still (chitra does not push, and neither pin auto-follows):
-  - mabda `[deps.chitra] tag = "0.3.1"` → 0.5.3
-  - kii `[deps.chitra] tag = "0.3.0"` → 0.5.3 (kii also carries
+  - mabda `[deps.chitra] tag = "0.3.1"` → 1.0.0
+  - kii `[deps.chitra] tag = "0.3.0"` → 1.0.0 (kii also carries
     `path = "../chitra"`, so a local kii build already resolves against this
     working tree)
 

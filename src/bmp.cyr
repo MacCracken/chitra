@@ -15,13 +15,16 @@
 #   4. The pixel data does NOT necessarily follow the palette. Its offset is a
 #      field in the file header, and it is authoritative; there can be a gap.
 #
-# Scope (0.4.0): BI_RGB uncompressed at 1 / 4 / 8 bpp (palette-indexed),
-# 24 bpp and 32 bpp, with BITMAPCOREHEADER (12-byte) and BITMAPINFOHEADER
-# (40-byte) DIB headers, both row orders. RLE4/RLE8, BI_BITFIELDS, 16 bpp and
-# the BI_JPEG / BI_PNG embedded streams are REJECTED with distinct codes rather
-# than half-decoded — the same defer-don't-half-implement posture ADR 0004 set
-# for non-baseline JPEG. BI_JPEG/BI_PNG are worth refusing on their own merit:
-# they would have a decoder re-enter itself, which is a recursion surface.
+# Scope: BI_RGB uncompressed at 1 / 4 / 8 bpp (palette-indexed), 16, 24 and
+# 32 bpp (0.4.0); BI_RLE8 / BI_RLE4 run-length (0.5.1); and BI_BITFIELDS
+# channel masks with the V4/V5 headers (0.5.2). Accepted DIB header sizes are
+# an ALLOW-LIST — 12 (BITMAPCOREHEADER), 40 (BITMAPINFOHEADER), 52 (V2), 56
+# (V3), 64 (OS/2 2.x BITMAPCOREHEADER2, 0.7.2), 108 (V4), 124 (V5) — not a
+# lower bound. Both row orders. The deferral list is EMPTY as of 0.5.2.
+#
+# Only the BI_JPEG / BI_PNG embedded streams are REJECTED, and permanently
+# rather than as a deferral: they would have a decoder re-enter itself through
+# attacker-controlled data, which is a recursion surface, not a feature.
 #
 # The `(src, len)` cursor and the security ceilings are the ones png_chunks.cyr
 # already defines — BMP gets the same bounds discipline for free.

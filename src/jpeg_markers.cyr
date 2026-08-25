@@ -11,10 +11,14 @@
 #   bite 2 — parse SOF0 component specs (id / H / V / quant-selector, max H/V)
 #            and DQT quantization tables, with the sampling-factor security
 #            guards (Hi,Vi in 1..4 — reject 0 per CVE-2018-11212; reject
-#            duplicate component ids; ΣHi·Vi ≤ 10).
+#            duplicate component ids). NOTE: ΣHi·Vi ≤ 10 is NOT enforced here
+#            — T.81 § B.2.3 scopes it to an interleaved MCU, so 0.8.0 moved it
+#            to _jpeg_parse_sos (jpeg.cyr), conditioned on Ns > 1.
 #   bite 3 — parse DHT and build canonical Huffman decode tables (via
 #            jpeg_huffman.cyr) into frame storage (4 DC + 4 AC).
-# APPn / COM / DNL payloads are skipped here; DRI sets the restart interval.
+# COM / DNL and all APPn except APP14 are skipped here; APP14 is parsed for the
+# Adobe colour transform (0.6.1, ADR 0009). DRI sets the restart interval, and
+# _jpeg_resume_to_next_scan (0.8.0) walks the markers between scans.
 # See docs/adr/0004-jpeg-decode-model.md + docs/proposals/jpeg-baseline-decoder.md.
 #
 # JPEG marker legend (the byte after a 0xFF; ITU-T T.81 Table B.1):
@@ -486,8 +490,11 @@ fn _jpeg_parse_dri(cur, frame): i64 {
 # Parse a SOF0 segment (T.81 § B.2.2): Lf(2) P(1) Y(2) X(2) Nf(1) then Nf*3
 # component specs (Ci, Hi/Vi packed, Tqi). Cursor is at the 2-byte length.
 # Validates precision, component count, dimensions, sampling factors (1..4,
-# reject 0 → CVE-2018-11212 div-by-zero), duplicate component ids, and
-# ΣHi·Vi ≤ 10. Returns 0 on success (frame filled) or a CHITRA_ERR_* code.
+# reject 0 → CVE-2018-11212 div-by-zero) and duplicate component ids. It does
+# NOT enforce ΣHi·Vi ≤ 10: that bounds an INTERLEAVED MCU (T.81 § B.2.3), so it
+# lives in _jpeg_parse_sos (jpeg.cyr) conditioned on Ns > 1 — applied frame-wide
+# it rejects files libjpeg writes, e.g. `cjpeg -sample 4x4,1x1,1x1 -scans`.
+# Returns 0 on success (frame filled) or a CHITRA_ERR_* code.
 # ================================================================
 fn _jpeg_parse_sof0(cur, frame): i64 {
     if (_cur_can_read(cur, 2) == 0) { return CHITRA_ERR_TRUNCATED; }

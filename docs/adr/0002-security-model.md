@@ -69,8 +69,8 @@ loop bound depends on it.
   rejected loud rather than half-decoded (e.g. color_type 3 + depth 16
   is rejected), `src/png_filter.cyr:164`-`185`.
 - **Decompression-amplification defense.** An IDAT-accumulator cap
-  (`src/png_filter.cyr:445`-`448`), a derived inflated/pixel-size cap
-  (`:500`-`507`), and a compression-ratio cap of 1100:1 — above
+  (`src/png_filter.cyr:459`-`462`), a derived inflated/pixel-size cap
+  (`:593`-`600`), and a compression-ratio cap of 1100:1 — above
   DEFLATE's theoretical 1032:1 ceiling per RFC 1951 § 3.2.5 —
   (`:519`-`522`) defend against zip-bomb inputs. sankoch's inflate is
   also bounded to the exact pre-computed output size, and the result is
@@ -107,17 +107,17 @@ the audit ([`../audit/2026-06-26-audit.md`](../audit/2026-06-26-audit.md)).
 | Interlace value gate `{0,1}` | `src/png_filter.cyr:171` | `CHITRA_ERR_INTERLACE` |
 | Bit-depth × color-type Table 11.1 allow-list | `src/png_filter.cyr:175`-`185` | `CHITRA_ERR_BIT_DEPTH` |
 | Dimension caps before the pixel multiply | `src/png_filter.cyr:191`-`197` | `CHITRA_ERR_DIMENSIONS` |
-| Per-chunk length cap | `src/png_filter.cyr:413`-`417` | `CHITRA_ERR_BAD_CHUNK` |
-| Per-chunk span fits remaining before CRC scan | `src/png_filter.cyr:418`-`422` | `CHITRA_ERR_TRUNCATED` |
-| Per-chunk CRC-32 (every chunk) | `src/png_filter.cyr:431`-`440` | `CHITRA_ERR_CRC` |
-| IDAT-fusing accumulator cap | `src/png_filter.cyr:445`-`448` | `CHITRA_ERR_OOM` |
-| PLTE: single, pre-IDAT, ≤768, multiple-of-3 | `src/png_filter.cyr:454`-`460` | `CHITRA_ERR_BAD_CHUNK` |
-| IEND zero-length enforcement | `src/png_filter.cyr:506`-`513` | `CHITRA_ERR_BAD_CHUNK` |
-| Derived inflated/pixel-size caps (Adam7-aware) | `src/png_filter.cyr:543`-`550` | `CHITRA_ERR_DIMENSIONS` |
-| Zero-IDAT structural reject | `src/png_filter.cyr:556` | `CHITRA_ERR_NO_IDAT` |
-| Decompression-bomb ratio cap (1100:1) | `src/png_filter.cyr:562`-`565` | `CHITRA_ERR_DIMENSIONS` |
-| Inflate failure + exact-size second line | `src/png_filter.cyr:597` | `CHITRA_ERR_INFLATE` |
-| Per-row filter-byte allow-list `{0..4}` | `_chitra_unfilter_row` (`src/png_filter.cyr:39`) → `:615` / deinterlace `:312` | `CHITRA_ERR_FILTER` |
+| Per-chunk length cap | `src/png_filter.cyr:414`-`416` | `CHITRA_ERR_BAD_CHUNK` |
+| Per-chunk span fits remaining before CRC scan | `src/png_filter.cyr:419`-`421` | `CHITRA_ERR_TRUNCATED` |
+| Per-chunk CRC-32 (every chunk) | `src/png_filter.cyr:432`-`441` | `CHITRA_ERR_CRC` |
+| IDAT-fusing accumulator cap | `src/png_filter.cyr:459`-`462` | `CHITRA_ERR_OOM` |
+| PLTE: single, pre-IDAT, ≤768, multiple-of-3 | `src/png_filter.cyr:468`-`471` | `CHITRA_ERR_BAD_CHUNK` |
+| IEND zero-length enforcement | `src/png_filter.cyr:557`-`560` | `CHITRA_ERR_BAD_CHUNK` |
+| Derived inflated/pixel-size caps (Adam7-aware) | `src/png_filter.cyr:593`-`600` | `CHITRA_ERR_DIMENSIONS` |
+| Zero-IDAT structural reject | `src/png_filter.cyr:605`-`606` | `CHITRA_ERR_NO_IDAT` |
+| Decompression-bomb ratio cap (1100:1) | `src/png_filter.cyr:612`-`615` | `CHITRA_ERR_DIMENSIONS` |
+| Inflate failure + exact-size second line | `src/png_filter.cyr:648`-`649` | `CHITRA_ERR_INFLATE` |
+| Per-row filter-byte allow-list `{0..4}` | `_chitra_unfilter_row` (`src/png_filter.cyr:39`) → `:665` / deinterlace `:312` | `CHITRA_ERR_FILTER` |
 | Color-pass re-assert of dimension caps | `src/png_color.cyr:95`-`101` | `CHITRA_ERR_DIMENSIONS` |
 | Scanline-buffer sufficiency check | `src/png_color.cyr:108`-`112` | `CHITRA_ERR_DIMENSIONS` |
 | tRNS span re-validated within `(src, len)` | `src/png_color.cyr:125`-`128` | `CHITRA_ERR_BAD_CHUNK` |
@@ -254,16 +254,16 @@ tracked gaps in this ADR's original text; both are now closed.
   substrate flaw remains an upstream finding; tracked in
   [`../development/state.md`](../development/state.md) /
   [`../development/roadmap.md`](../development/roadmap.md).
-- **No in-tree fuzz / bench harness yet.** The cap and rejection paths
-  are unit-tested but not yet differentially fuzzed against a reference
-  decoder inside this repo, and worst-case decode latency is **not yet
-  measured**. Both are open follow-ups, not claims.
-- **Two stale enum comments to retire.** `src/error.cyr:26`-`27` still
-  describe `CHITRA_ERR_INTERLACE` / `CHITRA_ERR_BIT_DEPTH` as
-  "single-pass only" / "bit_depth != 8" — accurate for 0.2, stale as of
-  0.2.1, which decodes Adam7 and all spec-legal depths. The codes now
-  fire only for genuinely illegal combos (e.g. color_type 3 + depth 16).
-  Cosmetic doc-drift, no behavioral impact.
+- ~~**No in-tree fuzz / bench harness yet.**~~ **Closed in 0.3.3.** Four
+  harnesses now live in `fuzz/` (one per format) behind `make fuzz`, and
+  `tests/bcyr/chitra.bcyr` behind `make bench`, with `bench-history.csv`
+  carrying a row per release. `make fuzz` has run in CI since 0.7.3.
+- ~~**Two stale enum comments to retire.**~~ **Closed in 0.3.2**, when the
+  `CHITRA_ERR_INTERLACE` / `CHITRA_ERR_BIT_DEPTH` enum comments were
+  corrected, and again in **0.9.0**, when their `chitra_err_name` strings were
+  reworded for the same reason — both codes fire only on genuinely illegal
+  values (e.g. colour type 3 at depth 16), not on unsupported features. Error
+  *codes* are frozen at 1.0.0; the strings are explicitly not.
 
 ## Alternatives considered
 

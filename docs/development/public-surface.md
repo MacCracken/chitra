@@ -2,8 +2,10 @@
 
 > The list `scripts/check-surface.sh` checks `dist/chitra.cyr` against. Every
 > `chitra_`-prefixed function in the bundle must appear in exactly one of the
-> two blocks below, so a name cannot appear, vanish, or change category
-> unnoticed.
+> two blocks below, so a name cannot appear or vanish unnoticed. Note what the
+> gate does and does not check: it compares the **union** of the two blocks
+> against the bundle. *Which* block a name sits in — and therefore whether it
+> is promised — is enforced by review, not by the script.
 >
 > This file is a **contract**, not documentation of one. Prose about what these
 > functions do lives in [`../guides/getting-started.md`](../guides/getting-started.md)
@@ -20,7 +22,7 @@ from the 29 that are not.
 The distinction matters most at v1.0, because the promise being made is about
 the FROZEN block only, and it is now in force. A consumer reaching into the INTERNAL block is not
 covered by it — and the names there are deliberately not `_`-prefixed only
-because renaming ~40 functions immediately before a freeze is a large churn
+because renaming 45 functions immediately before a freeze is a large churn
 diff for zero runtime benefit, with a real risk of a typo silently disabling a
 test.
 
@@ -142,8 +144,11 @@ Not functions, but part of the same promise:
 Recorded because they decide what a rename actually costs:
 
 - **mabda** — `chitra_png_decode_rgba8`, `chitra_jpeg_decode_rgba8`. Two names.
-- **kii** — `chitra_image_decode`, `chitra_image_{width,height,pixels,
-  seen_iend,source_color_type}`, `chitra_png_check_signature`,
-  `chitra_jpeg_check_signature`, `chitra_err`, `chitra_err_code`.
+- **kii** — nine names: `chitra_image_decode`,
+  `chitra_image_{width,height,pixels,seen_iend,source_color_type}`,
+  `chitra_png_check_signature`, `chitra_jpeg_check_signature`,
+  `chitra_err_code`. Counted by **call site**: `chitra_err` appears in kii only
+  inside its own `_kii_map_chitra_err`, which is a kii function, not a call
+  into chitra.
 
 Both stay inside the FROZEN block.

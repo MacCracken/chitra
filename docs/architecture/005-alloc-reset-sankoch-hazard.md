@@ -79,10 +79,14 @@ Until it is fixed upstream:
   a separate arena rather than the global one. A global `alloc_reset()` on a
   PNG-decoding path hits this.
 
-This is one of two reasons the byte-budget entry point in
-[`../adr/0007-byte-budget-surface-deferred.md`](../adr/0007-byte-budget-surface-deferred.md)
-matters: with the arena boundary unsafe for PNG, a caller has no way at all to
-bound decode memory today.
+This is one of two reasons the byte-budget entry point mattered — and it
+**shipped in 0.6.1** as `chitra_image_decode_budget`, one of the 29 frozen names
+at 1.0.0 ([`../adr/0008-byte-budget-as-shipped.md`](../adr/0008-byte-budget-as-shipped.md)
+is the as-shipped record; 0007 decided the shape). But note precisely what it
+does and does not solve: it bounds the **declared RGBA output of one decode**,
+not cumulative arena growth. A caller decoding untrusted input in a loop still
+has no way to reclaim, so the hazard this note documents is unresolved for PNG
+regardless.
 
 ## Who is exercising this today
 

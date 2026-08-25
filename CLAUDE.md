@@ -27,8 +27,11 @@ share it, and further formats can join without a rename.
 Own **CPU-side raster image decode** for AGNOS. Turn encoded image bytes into
 canonical RGBA8 with zero GPU dependency and no C shim — the pure-Cyrius answer
 to "load this image into a texture." All four common raster formats — PNG,
-baseline JPEG, BMP and GIF — decode to that one surface. What remains before
-v1.0 is the API/ABI freeze, not format coverage.
+baseline JPEG, BMP and GIF — decode to that one surface. **As of 1.0.0 the
+public surface is frozen**, so what remains is maintenance inside that promise
+(see [`docs/development/public-surface.md`](docs/development/public-surface.md)),
+not format coverage. Adding a format is still additive; changing a frozen name
+is a major bump plus an ADR.
 
 ## Current State
 
@@ -150,9 +153,9 @@ non-negotiable — re-verify each before tagging.
 
 **PNG** (the kii-inherited guards):
 
-1. **Decompression-bomb caps** — two distinct gates: the fused IDAT *input* accumulator is capped at `CHITRA_MAX_RAW_BYTES` → `CHITRA_ERR_OOM` (`png_filter.cyr:445`), and the IHDR-derived inflated/pixel *output* sizes are capped → `CHITRA_ERR_DIMENSIONS` (`png_filter.cyr:543`-`550`)
+1. **Decompression-bomb caps** — two distinct gates: the fused IDAT *input* accumulator is capped at `CHITRA_MAX_RAW_BYTES` → `CHITRA_ERR_OOM` (`png_filter.cyr:459`), and the IHDR-derived inflated/pixel *output* sizes are capped → `CHITRA_ERR_DIMENSIONS` (`png_filter.cyr:593`-`597`)
 2. **Lying-IHDR rejection** — declared dimensions cross-checked against actual data → `CHITRA_ERR_DIMENSIONS`
-3. **Ratio caps** — output:input expansion bounded by `CHITRA_MAX_INFLATE_RATIO` → `CHITRA_ERR_DIMENSIONS` (`png_filter.cyr:562`)
+3. **Ratio caps** — output:input expansion bounded by `CHITRA_MAX_INFLATE_RATIO` → `CHITRA_ERR_DIMENSIONS` (`png_filter.cyr:612`)
 4. **Chunk-CRC validation** — every chunk's CRC-32 checked → `CHITRA_ERR_CRC`
 5. **Bounds on every read** — truncated input → `CHITRA_ERR_TRUNCATED`, never an OOB read
 6. **Filter-byte validation** — per-row filter ∈ {0,1,2,3,4} → else `CHITRA_ERR_FILTER`
@@ -172,9 +175,9 @@ non-negotiable — re-verify each before tagging.
 7. **Amplification cap** — output:input bounded by `CHITRA_MAX_JPEG_RATIO` → `CHITRA_ERR_DIMENSIONS`. JPEG needs this *more* than PNG does: the entropy bit-reader zero-pads past end-of-data, so a hostile file needs **no scan payload at all** — the declared SOF0 geometry alone drives the work, and the bump allocator never reclaims it
 8. **Only length-bearing markers are skipped by length** — standalone markers (SOI, EOI, RSTn, TEM) and the T.81 Table B.1 reserved range are rejected, not treated as segments. Otherwise the walk reads two attacker bytes as a length and the cursor is steered by the input
 9. **Fill bytes tolerated, both sides** — § B.1.1.2 allows any number of `0xFF` bytes before a marker. The header walk *and* the entropy reader must both collapse the run, or valid files are rejected
-10. **Geometry chitra does not implement is rejected, not approximated** — as of 0.6.0 that means MULTI-SCAN and partially-interleaved files (`Ns < Nf`), which reject with `CHITRA_ERR_UNSUPPORTED` (a deferral, not a validity error — the file is valid and chitra declines it; see [ADR 0006](docs/adr/0006-defer-jpeg-multiscan-resumption.md)). It no longer means the one-component case, which now decodes
-11. **For a ONE-component frame the sampling factors are INERT (0.6.0)** — not merely ignorable. § A.1.1 gives `x_i = ceil(X·H_i/H_max)`, and with `Nf = 1` the lone component IS the maximum, so `x_1 = X` for every legal `(H,V)`. That is why the non-interleaved layout is an *effective-geometry collapse* (force `H = V = max_h = max_v = 1`) rather than a second decoder — and why it needs no plane zero-fill: `cpw = ceil(w/8)*8` covers the plane with NO unwritten margin. Keep ONE grid variable; a second (`grid_w` for the count while `mcu_cols` sizes the plane) lets placement diverge from count
-12. **ΣHj·Vj ≤ 10 is § B.2.3 and applies only when Ns > 1** — it bounds an INTERLEAVED MCU, and a one-component frame has none. Conditioned, not removed, and it stays at the SOF0 parse (moving it to the scan header would put it after the allocations it exists to bound)
+10. **No baseline scan geometry is deferred any more (0.8.0)** — the § A.2 class is complete: interleaved, non-interleaved, partially interleaved (`Ns < Nf`), single- and multi-scan all decode. The `Ns < Nf` gate was deleted, and what replaces it as the bound is the **per-component coverage bitmask** — a component may be decoded exactly once, so a file gets at most `Nf` scans and every scan must name something new (`_jpeg_decode_scans`, `src/jpeg.cyr:738`). `CHITRA_ERR_UNSUPPORTED` no longer covers any scan geometry; on the JPEG path it now means only an unrecognised APP14 transform (the non-baseline modes carry codes 19..23). See [ADR 0006](docs/adr/0006-defer-jpeg-multiscan-resumption.md), amended
+11. **ONE § A.2 rule covers both layouts (0.8.0)** — a scan is non-interleaved when **`Ns == 1`**, whatever `Nf` is. `_jpeg_decode_one_scan` then walks a scan grid `s_cols × s_rows = ceil(x_i/8) × ceil(y_i/8)` over that component's own § A.1.1 sample dimensions, one data unit per MCU, leaving `max_h`/`max_v` **alone**. 0.6.0's *effective-geometry collapse* (forcing `H = V = max_h = max_v = 1`) was **deleted, not extended**: it was valid only because with `Nf = 1` the lone component IS the maximum, and a one-component *scan* of a three-component *frame* has a maximum that is not itself. `Nf = 1` now falls out of the same general formula. Keep ONE grid variable; a second (`grid_w` for the count while `mcu_cols` sizes the plane) lets placement diverge from count
+12. **ΣHj·Vj ≤ 10 is § B.2.3 and applies only when Ns > 1** — it bounds an INTERLEAVED MCU, and a one-component scan has none. Conditioned, not removed — and as of 0.8.0 it lives at the **scan** header (`_jpeg_parse_sos`, `src/jpeg.cyr:183`), summed over the *scan's* components, not the frame's. That is still ahead of every allocation, because planes are allocated per scan by `_jpeg_decode_one_scan` after the scan header parses. Applying it frame-wide rejected files libjpeg writes: `cjpeg -sample 4x4,1x1,1x1 -scans` is legal, sums to 18, and decodes
 13. **A 3-component JPEG is not necessarily YCbCr (0.6.1)** — `cjpeg -rgb` writes RGB components with an Adobe APP14 `transform=0` and ids `'R','G','B'`. Applying BT.601 to them hue-rotates the image with NO error: 1,149 of 1,536 bytes wrong, a blue pixel returned dark red. Order of authority: the APP14 transform, else the component ids, else YCbCr. An undefined transform is DECLINED — assuming YCbCr for it is the same guess in a smaller form
 14. **Allocation timing is part of the attack surface (0.6.1)** — `chitra_jpeg_scan_markers` allocated 22,160 bytes BEFORE any check could refuse the file, on every call, unmemoized. Tables are now allocated when a DQT/DHT first defines something, guarded `== 0` — per FRAME, never per DEFINITION: a single DHT may carry 3,854 definitions, so per-definition allocation trades a flat cost for one that SCALES with file size
 15. **An amplification denominator must exclude bytes the decoder never decodes (0.6.1)** — `CHITRA_MAX_JPEG_RATIO` divided by whole-file length, so 16,404 bytes of skipped APPn padding bought a 4096×4096 decode and 117 MB. The denominator is now a real entropy-span walk. This is the 0.5.3 BMP-RLE lesson: ask what the attacker actually SPENT
@@ -185,7 +188,7 @@ non-negotiable — re-verify each before tagging.
 1. **Header fields validated before use** — every field is checked before it derives another, and every derived size is capped before allocation: dimensions vs `CHITRA_MAX_DIM` / `CHITRA_MAX_PIXELS`, `stride * height` vs `CHITRA_MAX_RAW_BYTES`
 2. **The pixel-data offset is attacker-controlled** — it is a header field, not "after the palette", and it can point anywhere. The whole `data_off + stride*height` span is validated against `len` → `CHITRA_ERR_TRUNCATED`
 3. **Palette span + index bounds** — the palette span is validated against `len`, and every index is hard-rejected against the declared entry count → `CHITRA_ERR_BMP_PALETTE`. Never clamp an index; reject it
-4. **The deferral list is empty as of 0.5.2** — RLE8/RLE4 (0.5.1), BITFIELDS/16 bpp/V4/V5 (0.5.2). `BI_JPEG` / `BI_PNG` are refused **permanently**: honouring them re-enters the decoder, which is a recursion surface, not a feature. Accepted DIB header sizes are an **allow-list** (12/40/52/56/108/124), not a lower bound
+4. **The deferral list is empty as of 0.5.2** — RLE8/RLE4 (0.5.1), BITFIELDS/16 bpp/V4/V5 (0.5.2). `BI_JPEG` / `BI_PNG` are refused **permanently**: honouring them re-enters the decoder, which is a recursion surface, not a feature. Accepted DIB header sizes are an **allow-list** (12/40/52/56/**64**/108/124), not a lower bound — 64 is the OS/2 2.x `BITMAPCOREHEADER2` (0.7.2), whose +40 onward is units/recording/rendering, so its mask fields must NOT be read
 5. **No checksum exists** — BMP has nothing like PNG's per-chunk CRC, so every byte of a BMP reaching the parser is attacker-chosen with nothing to turn it away but chitra's own bounds. Treat the header parser as the entire perimeter
 6. **RLE (0.5.1)** — termination is structural (every opcode consumes ≥ 2 bytes; the cursor only advances). Bounds-check every write **individually**, not per-run: reject a run past the row end, never clip it, or you decode a different image than the file encodes. Check **delta at the jump** against both dimensions — a delta past the end followed by no writes is still malformed. Top-down + RLE is rejected (the end-of-line escape counts rows from the bottom), and RLE8/RLE4 must match 8/4 bpp
 7. **Channel masks are attacker input (0.5.2)** — validate every one: contiguous (a split mask names no real channel), non-overlapping (two channels claiming a bit is a contradiction), inside the pixel word (a 24-bit mask on 16 bpp reads bits that are not there), and at least one color channel present. An unvalidated width feeds a shift, and an unvalidated shift reads outside the pixel
@@ -243,8 +246,11 @@ File findings in `docs/audit/YYYY-MM-DD-audit.md`. Severity: CRITICAL / HIGH / M
 - [`docs/adr/`](docs/adr/) — architecture decision records. *Why X over Y?* (e.g. "fork kii's png.cyr vs. shared dep")
 - [`docs/architecture/`](docs/architecture/) — non-obvious constraints. *What can't I derive from the code alone?* (e.g. the `lib/`-must-not-be-a-symlink quirk, the flat-domain-module + distlib invariant)
 - [`docs/guides/`](docs/guides/) — task-oriented how-tos (e.g. "consuming chitra from mabda")
-- [`docs/development/roadmap.md`](docs/development/roadmap.md) — shipped (PNG, baseline JPEG, BMP, GIF + the 0.5.x arc, § A.2 Nf=1 in 0.6.0), backlog (byte-budget surface 0.6.1, JPEG multi-scan 0.7.0), v1.0 criteria
+- [`docs/development/roadmap.md`](docs/development/roadmap.md) — shipped (all four formats, the 0.5.x and 0.7.x arcs, § A.2 multi-scan in 0.8.0, the freeze in 1.0.0), the two items 1.0.0 did **not** close (the sankoch pin bump, the downstream consumer pins), and the durable out-of-scope guards
 - [`docs/development/state.md`](docs/development/state.md) — live state snapshot, refreshed every release
+- [`docs/development/public-surface.md`](docs/development/public-surface.md) — the frozen 29-name surface + both record layouts, and what the promise deliberately excludes; gated by `scripts/check-surface.sh` on every `make lint`
+- [`docs/sources.md`](docs/sources.md) — the specs each guard cites, section by section
+- [`docs/examples/`](docs/examples/) — runnable consumer sketches
 - [`docs/audit/`](docs/audit/) — security audit reports (`YYYY-MM-DD-audit.md`)
 - [`docs/proposals/`](docs/proposals/) — design notes written *before* a large feature lands (e.g. the baseline-JPEG plan)
 - `fuzz/*.fcyr` (`make fuzz`) and `tests/bcyr/chitra.bcyr` (`make bench`) — the two hardening harnesses; both **generate** their inputs, and both self-verify before asserting anything

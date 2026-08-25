@@ -30,7 +30,7 @@ isn't on your PATH yet, see the agnosticos bootstrap.
 cyrius deps        # resolve stdlib + sankoch + thread into lib/
 make build         # link-check: builds build/chitra_smoke from programs/smoke.cyr
 make test          # 3014 assertions across tests/tcyr/
-make fuzz          # ~10⁶ adversarial decode cases across fuzz/*.fcyr
+make fuzz          # ~2.6 M adversarial decode cases across fuzz/*.fcyr
 make bench         # 17 decode benchmarks (tests/bcyr/chitra.bcyr)
 make dist          # = cyrius distlib → dist/chitra.cyr
 make test-all      # version-check + dist + test + fuzz — the pre-release gate
@@ -46,13 +46,15 @@ A few notes on what each step proves:
   only to prove the full include chain (stdlib + sankoch + thread +
   domain modules) parses and links clean; it writes a one-line banner
   and exits 0.
-- **`make test`** runs the seven suites under `tests/tcyr/` — each is a
-  standalone `main()`: `bmp.tcyr` (1010), `error.tcyr` (20), `gif.tcyr` (622),
-  `interlace.tcyr` (35), `jpeg.tcyr` (226), `png.tcyr` (360),
-  `subbyte.tcyr` (143).
+- **`make test`** runs the twelve suites under `tests/tcyr/` — each is a
+  standalone `main()`: `bmp.tcyr` (1062), `budget.tcyr` (23), `error.tcyr` (20),
+  `gif.tcyr` (643), `interlace.tcyr` (35), `jpeg.tcyr` (284),
+  `jpeg_multiscan.tcyr` (75), `jpeg_noninterleaved.tcyr` (238), `png.tcyr` (393),
+  `stream_end.tcyr` (22), `subbyte.tcyr` (143), `surface.tcyr` (76) — 3,014
+  assertions in total.
 - **`make fuzz`** drives all four public decode entries over random,
   signature-prefixed, bit-flipped, truncated and entropy-mutated input —
-  ~1.9 M cases. It asserts **both** that the decoder survives and that
+  ~2.6 M cases, 10,732,113 assertions. It asserts **both** that the decoder survives and that
   it honours the documented contract (failure returns 0 *and* sets
   `*err_out`). Part of `make test-all`.
 - **`make bench`** measures decode latency. It generates its own fixtures
@@ -95,6 +97,7 @@ returns an owned `ChitraImage`:
 
 ```
 fn chitra_image_decode(src, len, err_out): i64
+fn chitra_image_decode_budget(src, len, max_bytes, err_out): i64
 ```
 
 If you already know the format, the format-specific decoders have the
@@ -131,8 +134,10 @@ directly:
 - `chitra_image_source_color_type(img)` — the pre-normalization source
   type, so you can report the original format even though the pixels are
   canonical RGBA8. For PNG it is the PNG color_type (0/2/3/4/6); for JPEG
-  it is `0x100 | num_components` (`0x101` grayscale, `0x103` YCbCr); for BMP
-  it is `0x200 | bpp` (`0x208` palette-8, `0x218` 24 bpp, `0x220` 32 bpp); for
+  it is `0x100 | num_components` with **bit 4 set when the components are RGB**
+  (`0x101` grayscale, `0x103` YCbCr, `0x113` RGB — 0.6.1); for BMP it is
+  `0x200 | bpp` (`0x201`/`0x204`/`0x208` palette, `0x210` 16 bpp, `0x218`
+  24 bpp, `0x220` 32 bpp); for
   GIF it is `0x300 | min_code_size`
 - `chitra_image_source_depth(img)` — **bits per channel in the source**
   (0.9.0). The output is always 8 bits per channel, so without this a
@@ -236,7 +241,7 @@ the pixels. A *malformed* IEND (e.g. non-zero length) is a hard error.
 | `CHITRA_ERR_JPEG_PRECISION` | 21 | Sample precision other than 8-bit |
 | `CHITRA_ERR_JPEG_MODE` | 22 | Hierarchical / lossless / differential mode |
 | `CHITRA_ERR_JPEG_COMPONENTS` | 23 | Unsupported component count (e.g. 4-component CMYK / YCCK) |
-| `CHITRA_ERR_BMP_HEADER` | 24 | Malformed BMP file/DIB header — size outside the {12,40,52,56,108,124} allow-list, `planes != 1`, or a bad offset |
+| `CHITRA_ERR_BMP_HEADER` | 24 | Malformed BMP file/DIB header — size outside the {12,40,52,56,64,108,124} allow-list, `planes != 1`, or a bad offset |
 | `CHITRA_ERR_BMP_DEPTH` | 25 | BMP bpp outside {1,4,8,16,24,32} |
 | `CHITRA_ERR_BMP_COMPRESSION` | 26 | BMP compression chitra refuses — only the embedded `BI_JPEG` / `BI_PNG` streams, which are permanently out of scope |
 | `CHITRA_ERR_BMP_PALETTE` | 27 | BMP palette missing, short, or an index outside it |
@@ -268,15 +273,19 @@ Table 11.1 (e.g. color type 3 at bit depth 16).
   the color pass is interlace-agnostic)
 - IDAT inflate via sankoch (RFC 1950/1951)
 - The five § 9 unfilter predictors (None / Sub / Up / Average / Paeth)
-- Canonical RGBA8 output (16-bit → high byte; sub-byte grayscale scales
+- Canonical RGBA8 output (16-bit **rescaled** per § 13.13,
+  `floor(v*255/65535 + 0.5)` — a high-byte truncation through 0.7.0; sub-byte grayscale scales
   ×255/85/17; palette indexes PLTE; tRNS resolved)
 - The inherited kii security guards (decompression-bomb caps,
   lying-IHDR rejection, ratio caps) — see [SECURITY.md](../../SECURITY.md)
 
-**Baseline JPEG** is feature-complete as of 0.3.0:
+**Baseline JPEG** is feature-complete as of 0.8.0:
 
 - JFIF baseline (SOF0) sequential Huffman, 8-bit precision
-- Grayscale (1 component) and YCbCr (3 components) → RGBA8
+- Grayscale (1 component), YCbCr (3 components) and **RGB** (3 components with
+  an Adobe APP14 `transform=0`, 0.6.1) → RGBA8
+- The complete **T.81 § A.2 scan model** (0.8.0): interleaved, non-interleaved,
+  partially interleaved, single- and multi-scan
 - Chroma subsampling 4:4:4 / 4:2:2 / 4:2:0 and general per-component
   Hi/Vi (box upsampling)
 - DRI / RST0–7 restart markers
@@ -288,9 +297,16 @@ Table 11.1 (e.g. color type 3 at bit depth 16).
 
 ### Not yet — and never
 
-- **GIF / BMP** — not yet (tracked, not dropped); JPEG baseline shipped in
-  0.3.0. The package name is format-agnostic precisely so these can land
-  without a rename.
+- **Multi-frame GIF and APNG** — chitra returns the **first frame** only
+  ([ADR 0005](../adr/0005-gif-first-frame-only.md)). An optimised animation
+  whose first frame is a background plate decodes to that plate. A future
+  multi-frame surface would be a *separate* entry point returning a frame list,
+  leaving `chitra_gif_decode` untouched — additive, not a reversal.
+- **Progressive JPEG** — deferred, not supported. Every non-baseline mode
+  rejects with a distinct `CHITRA_ERR_JPEG_*` code rather than half-decoding
+  ([ADR 0004](../adr/0004-jpeg-decode-model.md)).
+- **`BI_JPEG` / `BI_PNG` inside a BMP** — refused permanently: honouring them
+  would have a decoder re-enter itself through attacker-controlled data.
 - **Encoding** — chitra is a decoder. Writing PNG (or any format) is
   out of scope, permanently.
 
@@ -299,7 +315,7 @@ Table 11.1 (e.g. color type 3 at bit depth 16).
 - **Architecture & non-obvious constraints**: [`docs/architecture/README.md`](../architecture/README.md)
 - **Roadmap (JPEG and beyond)**: [`docs/development/roadmap.md`](../development/roadmap.md)
 - **Per-release / in-flight state**: [`docs/development/state.md`](../development/state.md)
-- **Security model + threat analysis**: [`SECURITY.md`](../../SECURITY.md), [ADR 0002](../adr/0002-security-model.md), [PNG audit](../audit/2026-06-26-audit.md), [JPEG audit](../audit/2026-06-27-audit.md)
+- **Security model + threat analysis**: [`SECURITY.md`](../../SECURITY.md), [ADR 0002](../adr/0002-security-model.md), and the four audit reports in [`../audit/`](../audit/) — [2026-06-26](../audit/2026-06-26-audit.md) (PNG), [2026-06-27](../audit/2026-06-27-audit.md) (JPEG), [2026-08-23](../audit/2026-08-23-audit.md) (PNG + JPEG sweep), [2026-08-24](../audit/2026-08-24-audit.md) (BMP + GIF), [PNG audit](../audit/2026-06-26-audit.md), [JPEG audit](../audit/2026-06-27-audit.md)
 - **Why chitra forked kii's decoder**: [ADR 0001](../adr/0001-fork-kii-png-decoder.md)
 - **All design decisions**: [`docs/adr/`](../adr/README.md)
 - **CHANGELOG**: [`CHANGELOG.md`](../../CHANGELOG.md)

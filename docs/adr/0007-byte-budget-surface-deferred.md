@@ -76,7 +76,18 @@ exactly one header parser. It carries its own risk — allocation timing inside
 the parser every JPEG decode uses — which is why it is a cut of its own with
 the full suite and the fuzz harnesses behind it.
 
-## The intended shape, reserved so 0.6.1 does not re-litigate it
+## The intended shape reserved in 0.6.0 — **not** what shipped
+
+> **Superseded by [`0008-byte-budget-as-shipped.md`](0008-byte-budget-as-shipped.md).**
+> 0.6.1 did re-litigate this, deliberately, and shipped **two** names rather
+> than eight: `chitra_image_decode_budget` and `CHITRA_ERR_BUDGET`. The probe /
+> info surface below — `chitra_image_probe`, `chitra_info_decode_bytes`,
+> `chitra_info_{width,height,format}` and a `ChitraInfo` record — was
+> **rejected** and exists nowhere in the tree or in the frozen 1.0.0 surface.
+> The short reason: a published byte *count* gets consumed as a number, someone
+> sizes a pool with it, and that very release moved the JPEG figure by ~21 KB.
+> The figures quoted in this section were also re-measured. Keep reading this
+> as the reasoning that got to 0.6.1, not as an API description.
 
 - `chitra_image_probe(src, len, err_out)` → a small owned record; header parse
   only, no decode buffers.
@@ -151,6 +162,9 @@ the full suite and the fuzz harnesses behind it.
   settles.
 
 ## References
+
+- [`0008-byte-budget-as-shipped.md`](0008-byte-budget-as-shipped.md) — what
+  actually shipped in 0.6.1, and why it is two names rather than eight.
 
 - [`../architecture/003-bump-allocator-no-free.md`](../architecture/003-bump-allocator-no-free.md)
   — why cost is cumulative.

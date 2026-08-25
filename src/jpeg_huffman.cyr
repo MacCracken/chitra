@@ -3,11 +3,12 @@
 # construction from a DHT's BITS (code-length counts) + HUFFVAL (symbols). This
 # module is frame-independent table machinery, so it is included BEFORE
 # jpeg_markers.cyr (whose DHT parser drives the build into frame-owned storage).
-# The entropy bit-reader + the DECODE procedure land in bite 4.
+# The entropy bit-reader, the DECODE procedure and _jpeg_decode_block all live
+# in this module.
 #
 # Construction follows ITU-T T.81 Annex C (HUFFSIZE/HUFFCODE generation) folded
 # into the Annex F figure F.15 decoder-table derivation (MINCODE/MAXCODE/VALPTR).
-# The DECODE procedure (Annex F.2.2.3) the next bite implements:
+# The DECODE procedure (Annex F.2.2.3), implemented here as _jpeg_decode:
 #   code = nextbit(); L = 1
 #   while code > maxcode[L]: L += 1; code = (code << 1) | nextbit()
 #   value = huffval[ valptr[L] + code - mincode[L] ]

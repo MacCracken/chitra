@@ -1,14 +1,19 @@
 # @public — chitra JPEG decoder: JPEG bytes -> canonical RGBA8 (0.3.0).
 # jpeg.cyr — the public decode entry. Wires the marker scan (jpeg_markers),
 # the SOS scan header, the entropy/IDCT block pipeline (jpeg_huffman + jpeg_idct),
-# and the color pass into a ChitraImage (the same 48-byte result PNG produces).
+# and the color pass into a ChitraImage (the same 56-byte result PNG produces).
 #
-# Scope (bite 7): baseline JFIF — grayscale (1 component) and YCbCr (3) with
-# arbitrary chroma subsampling (4:4:4 / 4:2:2 / 4:2:0 / general Hi,Vi), box
-# upsampling, and DRI/RSTn restart markers. The result is the shared ChitraImage
-# (offsets from png.cyr); source_color_type carries a JPEG sentinel
-# (0x100 | num_components) so a consumer's PNG 0/2/3/4/6 switch never aliases it
-# (ADR 0003 / review).
+# Scope: baseline JFIF — grayscale (1 component), YCbCr (3), and RGB (3, via
+# the Adobe APP14 transform or 'R','G','B' component ids — 0.6.1, ADR 0009);
+# arbitrary chroma subsampling (4:4:4 / 4:2:2 / 4:2:0 / general Hi,Vi) with box
+# upsampling; DRI/RSTn restart markers; and the complete T.81 § A.2 scan model
+# — interleaved, non-interleaved, partially interleaved, single- and multi-scan
+# (0.6.0 for Nf = 1, 0.8.0 for the rest) — every baseline scan geometry decodes.
+#
+# The result is the shared ChitraImage (offsets from png.cyr); source_color_type
+# carries a JPEG sentinel — 0x100 | ncomp, plus bit 4 when the components are
+# RGB rather than YCbCr, so 0x101 gray / 0x103 YCbCr / 0x113 RGB — and a
+# consumer's PNG 0/2/3/4/6 switch never aliases it (ADR 0003 / review).
 
 # ================================================================
 # YCbCr -> RGB color conversion (JFIF full-range, ITU-R BT.601). Fixed-point

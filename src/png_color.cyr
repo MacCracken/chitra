@@ -17,9 +17,10 @@
 # validated those offsets, but the color pass re-validates defensively
 # against (src, len) so it is safe even if called on a hand-built raw.
 #
-# Only bit depth 8 is handled here (parse_raw rejects others loud), so
-# every sample is one byte and scanline layout is dense channels-per-
-# pixel with no bit unpacking.
+# This pass handles every spec-legal depth. At depth 8 each sample is one byte
+# and the scanline is dense channels-per-pixel with no bit unpacking; 1/2/4 are
+# unpacked MSB-first and scaled 255/85/17; 16 is rescaled to 8 per PNG § 13.13
+# in _png_scale16 (0.7.1 — it was a high-byte truncation through 0.7.0).
 
 # ================================================================
 # Color-type sample-byte sizes (bit depth 8 => 1 byte per channel).

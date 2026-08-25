@@ -110,7 +110,8 @@ jobs:
         # CLAUDE.md names `make test-all` (version-check + dist + test + fuzz)
         # as the pre-release gate, but through 0.7.2 no workflow ran `make
         # fuzz` — so the gate existed only on a developer's machine, and the
-        # ~2.3 M-case harnesses could rot without CI noticing. ~20 s here.
+        # ~2.6 M-case harnesses (10.7 M assertions) could rot without CI
+        # noticing. ~20 s here.
         #
         # Benchmarks stay OUT deliberately: their numbers are host- and
         # load-dependent, so gating correctness on them manufactures flakes.

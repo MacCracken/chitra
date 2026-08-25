@@ -9,7 +9,7 @@
 # (IHDR / IDAT-concat / IEND / PLTE / tRNS), color types 0/2/3/4/6 at every
 # spec-legal bit depth (1/2/4/8/16, validated per color_type — § 11.2.2
 # Table 11.1), Adam7 interlace, sankoch IDAT inflate, the five unfilter
-# predictors, canonical-RGBA8 output (16-bit truncates to the high byte;
+# predictors, canonical-RGBA8 output (16-bit rescales per § 13.13 — 0.7.1;
 # sub-byte scales 255/85/17), and the kii security guards. JPEG is 0.3+.
 #
 # PLTE/tRNS wiring: chitra_png_parse_raw captures PLTE/tRNS only as
@@ -18,7 +18,7 @@
 # color pass, which resolves the spans (see png_color.cyr's header).
 
 # ================================================================
-# ChitraImage — the public decode result (48 bytes).
+# ChitraImage — the public decode result (56 bytes).
 #   +0:  width       (i64 — pixels)
 #   +8:  height      (i64 — pixels)
 #   +16: pixels      (ptr — owned RGBA8, width*height*4 bytes)
@@ -69,9 +69,13 @@ fn chitra_image_channels(img): i64 { return load64(img + IMAGE_CHANNELS_OFFSET);
 fn chitra_image_seen_iend(img): i64 { return load64(img + IMAGE_SEEN_IEND_OFFSET); }
 # The source color type before RGBA8 normalization — lets a consumer report the
 # original format even though pixels are canonical. For PNG this is the PNG
-# color_type (0/2/3/4/6). For JPEG (chitra 0.3.0) it is an out-of-PNG-range
-# sentinel `0x100 | num_components` (0x101 grayscale, 0x103 YCbCr) so a consumer
-# switching on PNG's 0/2/3/4/6 never aliases a JPEG value (see ADR 0003).
+# color_type (0/2/3/4/6). Every other format uses an out-of-PNG-range sentinel,
+# so a consumer switching on PNG's 0/2/3/4/6 never aliases one (see ADR 0003):
+#   JPEG — `0x100 | ncomp`, plus bit 4 when the components are RGB rather than
+#          YCbCr: 0x101 grayscale, 0x103 YCbCr, 0x113 RGB (0.6.1, ADR 0009).
+#   BMP  — `0x200 | bpp`: 0x201/0x204/0x208 palette, 0x210 16 bpp,
+#          0x218 24 bpp, 0x220 32 bpp.
+#   GIF  — `0x300 | min_code_size`.
 fn chitra_image_source_color_type(img): i64 { return load64(img + IMAGE_SRC_CTYPE_OFFSET); }
 # Bits per sample in the SOURCE, before normalization to RGBA8 (0.9.0).
 #

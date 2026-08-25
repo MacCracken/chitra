@@ -14,7 +14,7 @@ concatenated source in and calls the decode functions directly.
 
 Cyrius has no opaque-handle facility and no stable cross-bundle symbol
 ABI. Records are plain byte buffers; field access is `load64`/`store64`
-at a constant byte offset (`src/png.cyr:32-38` declares the offsets as
+at a constant byte offset (`src/png.cyr:34-41` declares the offsets as
 `IMAGE_*_OFFSET` constants). When mabda reads a decoded image it reads
 those same offsets, and when a decode fails it maps the returned
 `ChitraErr` onto its own `GPU_ERR_IMAGE_DECODE`. There is no translation
@@ -25,7 +25,7 @@ consumer boundary:
 
 - **`ChitraErr`** — `src/error.cyr:9-11`: a 16-byte record, `+0` code,
   `+8` detail pointer. Returned by-pointer through the `err_out` slot of
-  `chitra_png_decode` (`src/png.cyr:63`).
+  `chitra_png_decode` (`src/png.cyr:102`).
 - **`ChitraImage`** — `src/png.cyr:20-38`: the decode result. As of
   0.2.1 it is 48 bytes: `width@0`, `height@8`, `pixels@16` (owned RGBA8),
   `channels@24` (always 4), `seen_iend@32`, `src_ctype@40`.
@@ -41,7 +41,7 @@ contract, with two specific rules.**
 
 (a) **`ChitraErr` is a fixed 16-byte record deliberately
 layout-compatible with mabda's `GpuErr`** — `+0` code, `+8` detail
-pointer (`src/error.cyr:9-11`, `chitra_err_new` at `:39-44`). The shared
+pointer (`src/error.cyr:9-11`, `chitra_err_new` at `:92`). The shared
 shape means a chitra decode failure maps onto `GPU_ERR_IMAGE_DECODE`
 with zero translation: mabda reads the code and detail pointer at the
 offsets its own `GpuErr` already uses.
