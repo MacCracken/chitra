@@ -1,7 +1,7 @@
 # @public — chitra PNG decoder: PNG bytes -> canonical RGBA8.
 #
-# png.cyr — the public decode API. Wires the AL.P0b parse driver
-# (chitra_png_parse_raw: framing + inflate + unfilter) to the AL.P0d
+# png.cyr — the public decode API. Wires the parse driver
+# (chitra_png_parse_raw: framing + inflate + unfilter) to the
 # color pass (chitra_png_color_to_rgba8: canonical-RGBA8 + tRNS) and
 # wraps the result in a ChitraImage.
 #
@@ -106,11 +106,11 @@ fn chitra_image_source_depth(img): i64 { return load64(img + IMAGE_SRC_DEPTH_OFF
 fn chitra_png_decode(src, len, err_out): i64 {
     store64(err_out, 0);
 
-    # ---- parse: framing + inflate + unfilter (AL.P0b) ----
+    # ---- parse: framing + inflate + unfilter ----
     var raw = chitra_png_parse_raw(src, len, err_out);
     if (raw == 0) { return 0; }      # *err_out already set by parse_raw
 
-    # ---- color pass: canonical RGBA8 + tRNS (AL.P0d) ----
+    # ---- color pass: canonical RGBA8 + tRNS ----
     var rgba = chitra_png_color_to_rgba8(raw, src, len, err_out);
     if (rgba == 0) { return 0; }     # *err_out already set by the color pass
 

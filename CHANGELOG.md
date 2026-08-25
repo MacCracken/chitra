@@ -60,6 +60,28 @@ What it found, by class:
 - **`cyrius.cyml`'s package description** advertised two of the four shipped
   formats and pinned JPEG at "v0.3.0".
 
+A second pass over the same class — record-size and offset claims in source
+comments, checked against the constants they sit next to — found five the
+sweep had not:
+
+- `jpeg_markers.cyr` still described the **48-byte** component spec in three
+  places, including a layout comment listing `Td`/`Ta` fields that 0.8.0
+  deleted, fifteen lines above the code that says so. The stride has been 32
+  since 0.8.0. One of those comments read **`+296 adobe_transform`** directly
+  above `var JF_ADOBE_TRANSFORM = 232;` — 232 is `104 + 4×32`; 296 was the
+  answer when the stride was 48.
+- The entropy bit-reader's field list read *"The 24-byte... actually 48-byte
+  record"* — thinking-out-loud that shipped — and omitted `+48 eod` entirely.
+  `BR_SIZE` is **56**.
+- `chitra_image_decode`'s own header comment still said it *"routes to the PNG
+  or JPEG decoder"*, which is the doc-drift that fed the same wrong claim into
+  `architecture/004`.
+- The PNG modules carried **`AL.P0b` / `AL.P0d` / `AL.P0e`** phase labels in
+  fourteen comments — codes from mabda's v3.3 asset-loading proposal, which has
+  since moved to that repo's archive, so a reader cannot resolve them at all.
+  Replaced with plain stage names. The one remaining mention, in `README.md`,
+  is a citation *of* that proposal and stays.
+
 ### Changed
 
 - **`docs/development/roadmap.md` is 684 → 380 lines.** Fourteen

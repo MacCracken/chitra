@@ -60,8 +60,9 @@ var CHITRA_MAX_JPEG_RATIO     = 4096;
 #   +80  sos_offset       (i64 — byte offset of the SOS length field)
 #   +88  huff             (ptr — 8 HuffTable records: slots 0..3 DC, 4..7 AC)
 #   +96  huff_present     (i64 — bitmask of Huffman tables seen, bit Tc*4+Th)
-#   +104 components       (4 × 48-byte specs: +0 id, +8 H, +16 V, +24 Tq,
-#                          +32 Td, +40 Ta [Td/Ta filled at SOS])
+#   +104 components       (4 × 32-byte specs: +0 id, +8 H, +16 V, +24 Tq.
+#                          Td/Ta are NOT here — 0.8.0 moved the Huffman
+#                          selectors to the per-scan block; see JF_SCAN)
 # ================================================================
 var JF_WIDTH            = 0;
 var JF_HEIGHT           = 8;
@@ -76,7 +77,7 @@ var JF_QUANT_PRESENT    = 72;
 var JF_SOS_OFFSET       = 80;    # byte offset of the SOS length field (set at SOS)
 var JF_HUFF             = 88;    # ptr to 8 HuffTable records (slots 0..3 DC, 4..7 AC)
 var JF_HUFF_PRESENT     = 96;    # bitmask of Huffman tables seen (bit = class*4 + id)
-var JF_COMP             = 104;   # 4 × 48-byte component specs
+var JF_COMP             = 104;   # 4 × JF_COMP_STRIDE component specs
 var JF_COMP_STRIDE      = 32;
 var JF_COMP_ID          = 0;     # SOF fields
 var JF_COMP_H           = 8;
@@ -87,8 +88,9 @@ var JF_COMP_TQ          = 24;
 # retained scan 1's selectors here, which is a silent wrong-table decode the
 # moment more than one scan exists. They live in JF_SCAN now, and deleting them
 # shrinks the component stride from 48 to 32.
-# +296 adobe_transform — the APP14 Adobe colour-transform code, or -1 when no
-# Adobe marker was seen. Sits after the 4 x 48-byte component specs (104 + 192).
+# +232 adobe_transform — the APP14 Adobe colour-transform code, or -1 when no
+# Adobe marker was seen. Sits after the 4 x 32-byte component specs
+# (104 + 128 = 232); it was +296 while the stride was 48.
 var JF_ADOBE_TRANSFORM  = 232;
 # ---- per-SCAN state (0.8.0, multi-scan) ------------------------------------
 # A baseline file may carry several scans, each naming a subset of the frame's

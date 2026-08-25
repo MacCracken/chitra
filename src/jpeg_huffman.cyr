@@ -90,10 +90,11 @@ fn _jpeg_huff_build(table, bits): i64 {
 # pull over the entropy-coded segment after SOS. A 0xFF in the stream is either
 # followed by 0x00 (a stuffing byte to discard, the 0xFF is real data) or by a
 # marker code (RSTn / EOI / ...), at which point the reader stops and records
-# the marker; subsequent bit reads pad with zeros. The 24-byte... actually
-# 48-byte record:
+# the marker; subsequent bit reads pad with zeros. The 56-byte record:
 #   +0 base  +8 pos  +16 end  +24 buf (current byte)  +32 cnt (bits left in buf)
 #   +40 marker (the marker byte after a 0xFF, or 0)
+#   +48 eod — set when the reader needs a byte its span does not contain, which
+#             is what distinguishes "ran out of scan" from a real EOI (0.7.0)
 # ================================================================
 var BR_BASE   = 0;
 var BR_POS    = 8;

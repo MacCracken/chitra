@@ -1,12 +1,12 @@
-# @internal — PNG unfilter predictors + the raw-decode driver (AL.P0b).
+# @internal — PNG unfilter predictors + the raw-decode driver.
 # png_filter.cyr — the five PNG filter-undo predictors (spec § 9) and
 # chitra_png_parse_raw, the top-level byte-buffer framing driver that
 # produces a ChitraPngRaw (parsed IHDR + inflated, unfiltered scanlines).
 #
 # Forked from kii/src/png.cyr's _png_paeth / _png_unfilter_row and
 # png_decode_pixels, re-shaped onto the byte-buffer cursor in
-# png_chunks.cyr. The canonical-RGBA8 color pass (AL.P0d) consumes the
-# ChitraPngRaw this returns; the public chitra_png_decode (AL.P0e) wraps
+# png_chunks.cyr. The canonical-RGBA8 color pass consumes the
+# ChitraPngRaw this returns; the public chitra_png_decode wraps
 # both. Everything here returns a ChitraErr ptr on any failure path —
 # never an OOB access or crash on untrusted input.
 
@@ -345,7 +345,7 @@ fn _chitra_deinterlace(inflated, pixels, width, height, channels, depth, err_out
 }
 
 # ================================================================
-# chitra_png_parse_raw — the AL.P0b top-level. Turns (src, len) PNG
+# chitra_png_parse_raw — the parse-stage top-level. Turns (src, len) PNG
 # bytes into a ChitraPngRaw (parsed IHDR + inflated, unfiltered raw
 # scanlines + captured PLTE/tRNS spans). Returns the ChitraPngRaw ptr
 # on success, or 0 on failure with the ChitraErr written through
@@ -464,7 +464,7 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
                 if (is_plte == 1) {
                     # Spec § 5.5 / 5.6: at most one PLTE, must precede IDAT,
                     # length a multiple of 3, <= 768. Capture the span (bytes
-                    # processed by the AL.P0d color pass, not here).
+                    # processed by the color pass, not here).
                     if (seen_plte == 1)      { store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK)); return 0; }
                     if (seen_idat == 1)      { store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK)); return 0; }
                     if (chunk_len > 768)     { store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK)); return 0; }

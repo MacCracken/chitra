@@ -1036,10 +1036,12 @@ fn chitra_image_decode_budget(src, len, max_bytes, err_out): i64 {
 }
 
 # ================================================================
-# chitra_image_decode — format-sniffing top-level decode. Routes to the PNG or
-# JPEG decoder by signature (PNG 8-byte magic, or JPEG SOI 0xFFD8) — the
-# format-agnostic entry the "chitra" name was chosen for. Returns a ChitraImage
-# ptr, or 0 with *err_out set (CHITRA_ERR_SIGNATURE for an unrecognized format).
+# chitra_image_decode — format-sniffing top-level decode. Routes by signature,
+# in order: the 8-byte PNG magic, then JPEG SOI (0xFFD8), then BMP 'BM', then
+# GIF 'GIF87a'/'GIF89a' — the format-agnostic entry the "chitra" name was
+# chosen for. Unrecognised bytes are REJECTED here; there is deliberately no
+# fall-through to a default decoder. Returns a ChitraImage ptr, or 0 with
+# *err_out set (CHITRA_ERR_SIGNATURE for an unrecognized format).
 # ================================================================
 # @public
 fn chitra_image_decode(src, len, err_out): i64 {

@@ -1,4 +1,4 @@
-# @internal — PNG byte-buffer chunk framing + IDAT inflate (AL.P0b).
+# @internal — PNG byte-buffer chunk framing + IDAT inflate.
 # png_chunks.cyr — turn untrusted PNG bytes into a parsed IHDR + the
 # concatenated, inflated IDAT stream. Forked from kii/src/png.cyr's
 # proven framing/CRC/security core, re-shaped from path-based io reads
@@ -10,7 +10,7 @@
 # decompression-bomb / lying-IHDR / dimension caps are ported verbatim
 # from kii (audit 2026-05-22 findings 1/2/3).
 #
-# The handoff to the later color pass (AL.P0d) is the ChitraPngRaw
+# The handoff to the later color pass is the ChitraPngRaw
 # struct produced by chitra_png_parse_raw (see png_filter.cyr for the
 # unfilter step that fills the scanline buffer).
 
@@ -43,9 +43,9 @@ var CHITRA_MAX_DIM       = 65535;      # per-side cap
 var CHITRA_MAX_INFLATE_RATIO = 1100;
 
 # ================================================================
-# ChitraPngRaw — the AL.P0b -> AL.P0d handoff record (104 bytes).
+# ChitraPngRaw — the parse -> colour-pass handoff record (104 bytes).
 # Produced by chitra_png_parse_raw (framing + inflate + unfilter); the
-# canonical-RGBA8 color pass (AL.P0d) consumes it. PLTE/tRNS spans are
+# canonical-RGBA8 colour pass consumes it. PLTE/tRNS spans are
 # captured here as (offset-into-src, length) pairs — the bytes are NOT
 # processed yet (that is the color pass's job). offset 0 with length 0
 # means "chunk absent".

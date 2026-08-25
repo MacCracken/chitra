@@ -176,7 +176,7 @@ fn chitra_err_print_name(code): i64 {
 
 # --- png_chunks.cyr ---
 
-# @internal — PNG byte-buffer chunk framing + IDAT inflate (AL.P0b).
+# @internal — PNG byte-buffer chunk framing + IDAT inflate.
 # png_chunks.cyr — turn untrusted PNG bytes into a parsed IHDR + the
 # concatenated, inflated IDAT stream. Forked from kii/src/png.cyr's
 # proven framing/CRC/security core, re-shaped from path-based io reads
@@ -188,7 +188,7 @@ fn chitra_err_print_name(code): i64 {
 # decompression-bomb / lying-IHDR / dimension caps are ported verbatim
 # from kii (audit 2026-05-22 findings 1/2/3).
 #
-# The handoff to the later color pass (AL.P0d) is the ChitraPngRaw
+# The handoff to the later color pass is the ChitraPngRaw
 # struct produced by chitra_png_parse_raw (see png_filter.cyr for the
 # unfilter step that fills the scanline buffer).
 
@@ -221,9 +221,9 @@ var CHITRA_MAX_DIM       = 65535;      # per-side cap
 var CHITRA_MAX_INFLATE_RATIO = 1100;
 
 # ================================================================
-# ChitraPngRaw — the AL.P0b -> AL.P0d handoff record (104 bytes).
+# ChitraPngRaw — the parse -> colour-pass handoff record (104 bytes).
 # Produced by chitra_png_parse_raw (framing + inflate + unfilter); the
-# canonical-RGBA8 color pass (AL.P0d) consumes it. PLTE/tRNS spans are
+# canonical-RGBA8 colour pass consumes it. PLTE/tRNS spans are
 # captured here as (offset-into-src, length) pairs — the bytes are NOT
 # processed yet (that is the color pass's job). offset 0 with length 0
 # means "chunk absent".
@@ -462,15 +462,15 @@ fn _chitra_gray_scale(depth): i64 {
 
 # --- png_filter.cyr ---
 
-# @internal — PNG unfilter predictors + the raw-decode driver (AL.P0b).
+# @internal — PNG unfilter predictors + the raw-decode driver.
 # png_filter.cyr — the five PNG filter-undo predictors (spec § 9) and
 # chitra_png_parse_raw, the top-level byte-buffer framing driver that
 # produces a ChitraPngRaw (parsed IHDR + inflated, unfiltered scanlines).
 #
 # Forked from kii/src/png.cyr's _png_paeth / _png_unfilter_row and
 # png_decode_pixels, re-shaped onto the byte-buffer cursor in
-# png_chunks.cyr. The canonical-RGBA8 color pass (AL.P0d) consumes the
-# ChitraPngRaw this returns; the public chitra_png_decode (AL.P0e) wraps
+# png_chunks.cyr. The canonical-RGBA8 color pass consumes the
+# ChitraPngRaw this returns; the public chitra_png_decode wraps
 # both. Everything here returns a ChitraErr ptr on any failure path —
 # never an OOB access or crash on untrusted input.
 
@@ -809,7 +809,7 @@ fn _chitra_deinterlace(inflated, pixels, width, height, channels, depth, err_out
 }
 
 # ================================================================
-# chitra_png_parse_raw — the AL.P0b top-level. Turns (src, len) PNG
+# chitra_png_parse_raw — the parse-stage top-level. Turns (src, len) PNG
 # bytes into a ChitraPngRaw (parsed IHDR + inflated, unfiltered raw
 # scanlines + captured PLTE/tRNS spans). Returns the ChitraPngRaw ptr
 # on success, or 0 on failure with the ChitraErr written through
@@ -928,7 +928,7 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
                 if (is_plte == 1) {
                     # Spec § 5.5 / 5.6: at most one PLTE, must precede IDAT,
                     # length a multiple of 3, <= 768. Capture the span (bytes
-                    # processed by the AL.P0d color pass, not here).
+                    # processed by the color pass, not here).
                     if (seen_plte == 1)      { store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK)); return 0; }
                     if (seen_idat == 1)      { store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK)); return 0; }
                     if (chunk_len > 768)     { store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK)); return 0; }
@@ -1136,7 +1136,7 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
 
 # --- png_color.cyr ---
 
-# @internal — canonical-RGBA8 color-normalization pass (AL.P0d).
+# @internal — canonical-RGBA8 color-normalization pass.
 # png_color.cyr — turn a ChitraPngRaw (parsed IHDR + unfiltered raw
 # scanlines + captured PLTE/tRNS spans) into an owned RGBA8 pixel
 # buffer (width*height*4). This is the genuinely new code over kii:
@@ -1167,7 +1167,7 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
 # ================================================================
 
 # ================================================================
-# chitra_png_color_to_rgba8 — the AL.P0d color pass.
+# chitra_png_color_to_rgba8 — the color pass.
 #
 # Inputs:
 #   raw  — a ChitraPngRaw with scanlines populated (parse_raw output).
@@ -1178,7 +1178,7 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
 # Returns an owned RGBA8 buffer (width*height*4 bytes) on success, or 0
 # with *err_out set. *err_out is left 0 on the success path.
 #
-# New reject paths over AL.P0b:
+# New reject paths over the parse stage:
 #   - palette index >= PLTE entry count        -> CHITRA_ERR_BAD_CHUNK
 #   - color_type 3 with no/short PLTE          -> CHITRA_ERR_BAD_CHUNK
 #   - tRNS span out of (src, len) bounds       -> CHITRA_ERR_BAD_CHUNK
@@ -1545,8 +1545,8 @@ fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
 
 # @public — chitra PNG decoder: PNG bytes -> canonical RGBA8.
 #
-# png.cyr — the public decode API. Wires the AL.P0b parse driver
-# (chitra_png_parse_raw: framing + inflate + unfilter) to the AL.P0d
+# png.cyr — the public decode API. Wires the parse driver
+# (chitra_png_parse_raw: framing + inflate + unfilter) to the
 # color pass (chitra_png_color_to_rgba8: canonical-RGBA8 + tRNS) and
 # wraps the result in a ChitraImage.
 #
@@ -1651,11 +1651,11 @@ fn chitra_image_source_depth(img): i64 { return load64(img + IMAGE_SRC_DEPTH_OFF
 fn chitra_png_decode(src, len, err_out): i64 {
     store64(err_out, 0);
 
-    # ---- parse: framing + inflate + unfilter (AL.P0b) ----
+    # ---- parse: framing + inflate + unfilter ----
     var raw = chitra_png_parse_raw(src, len, err_out);
     if (raw == 0) { return 0; }      # *err_out already set by parse_raw
 
-    # ---- color pass: canonical RGBA8 + tRNS (AL.P0d) ----
+    # ---- color pass: canonical RGBA8 + tRNS ----
     var rgba = chitra_png_color_to_rgba8(raw, src, len, err_out);
     if (rgba == 0) { return 0; }     # *err_out already set by the color pass
 
@@ -1804,10 +1804,11 @@ fn _jpeg_huff_build(table, bits): i64 {
 # pull over the entropy-coded segment after SOS. A 0xFF in the stream is either
 # followed by 0x00 (a stuffing byte to discard, the 0xFF is real data) or by a
 # marker code (RSTn / EOI / ...), at which point the reader stops and records
-# the marker; subsequent bit reads pad with zeros. The 24-byte... actually
-# 48-byte record:
+# the marker; subsequent bit reads pad with zeros. The 56-byte record:
 #   +0 base  +8 pos  +16 end  +24 buf (current byte)  +32 cnt (bits left in buf)
 #   +40 marker (the marker byte after a 0xFF, or 0)
+#   +48 eod — set when the reader needs a byte its span does not contain, which
+#             is what distinguishes "ran out of scan" from a real EOI (0.7.0)
 # ================================================================
 var BR_BASE   = 0;
 var BR_POS    = 8;
@@ -2351,8 +2352,9 @@ var CHITRA_MAX_JPEG_RATIO     = 4096;
 #   +80  sos_offset       (i64 — byte offset of the SOS length field)
 #   +88  huff             (ptr — 8 HuffTable records: slots 0..3 DC, 4..7 AC)
 #   +96  huff_present     (i64 — bitmask of Huffman tables seen, bit Tc*4+Th)
-#   +104 components       (4 × 48-byte specs: +0 id, +8 H, +16 V, +24 Tq,
-#                          +32 Td, +40 Ta [Td/Ta filled at SOS])
+#   +104 components       (4 × 32-byte specs: +0 id, +8 H, +16 V, +24 Tq.
+#                          Td/Ta are NOT here — 0.8.0 moved the Huffman
+#                          selectors to the per-scan block; see JF_SCAN)
 # ================================================================
 var JF_WIDTH            = 0;
 var JF_HEIGHT           = 8;
@@ -2367,7 +2369,7 @@ var JF_QUANT_PRESENT    = 72;
 var JF_SOS_OFFSET       = 80;    # byte offset of the SOS length field (set at SOS)
 var JF_HUFF             = 88;    # ptr to 8 HuffTable records (slots 0..3 DC, 4..7 AC)
 var JF_HUFF_PRESENT     = 96;    # bitmask of Huffman tables seen (bit = class*4 + id)
-var JF_COMP             = 104;   # 4 × 48-byte component specs
+var JF_COMP             = 104;   # 4 × JF_COMP_STRIDE component specs
 var JF_COMP_STRIDE      = 32;
 var JF_COMP_ID          = 0;     # SOF fields
 var JF_COMP_H           = 8;
@@ -2378,8 +2380,9 @@ var JF_COMP_TQ          = 24;
 # retained scan 1's selectors here, which is a silent wrong-table decode the
 # moment more than one scan exists. They live in JF_SCAN now, and deleting them
 # shrinks the component stride from 48 to 32.
-# +296 adobe_transform — the APP14 Adobe colour-transform code, or -1 when no
-# Adobe marker was seen. Sits after the 4 x 48-byte component specs (104 + 192).
+# +232 adobe_transform — the APP14 Adobe colour-transform code, or -1 when no
+# Adobe marker was seen. Sits after the 4 x 32-byte component specs
+# (104 + 128 = 232); it was +296 while the stride was 48.
 var JF_ADOBE_TRANSFORM  = 232;
 # ---- per-SCAN state (0.8.0, multi-scan) ------------------------------------
 # A baseline file may carry several scans, each naming a subset of the frame's
@@ -4151,10 +4154,12 @@ fn chitra_image_decode_budget(src, len, max_bytes, err_out): i64 {
 }
 
 # ================================================================
-# chitra_image_decode — format-sniffing top-level decode. Routes to the PNG or
-# JPEG decoder by signature (PNG 8-byte magic, or JPEG SOI 0xFFD8) — the
-# format-agnostic entry the "chitra" name was chosen for. Returns a ChitraImage
-# ptr, or 0 with *err_out set (CHITRA_ERR_SIGNATURE for an unrecognized format).
+# chitra_image_decode — format-sniffing top-level decode. Routes by signature,
+# in order: the 8-byte PNG magic, then JPEG SOI (0xFFD8), then BMP 'BM', then
+# GIF 'GIF87a'/'GIF89a' — the format-agnostic entry the "chitra" name was
+# chosen for. Unrecognised bytes are REJECTED here; there is deliberately no
+# fall-through to a default decoder. Returns a ChitraImage ptr, or 0 with
+# *err_out set (CHITRA_ERR_SIGNATURE for an unrecognized format).
 # ================================================================
 # @public
 fn chitra_image_decode(src, len, err_out): i64 {

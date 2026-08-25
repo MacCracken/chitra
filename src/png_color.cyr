@@ -1,4 +1,4 @@
-# @internal — canonical-RGBA8 color-normalization pass (AL.P0d).
+# @internal — canonical-RGBA8 color-normalization pass.
 # png_color.cyr — turn a ChitraPngRaw (parsed IHDR + unfiltered raw
 # scanlines + captured PLTE/tRNS spans) into an owned RGBA8 pixel
 # buffer (width*height*4). This is the genuinely new code over kii:
@@ -29,7 +29,7 @@
 # ================================================================
 
 # ================================================================
-# chitra_png_color_to_rgba8 — the AL.P0d color pass.
+# chitra_png_color_to_rgba8 — the color pass.
 #
 # Inputs:
 #   raw  — a ChitraPngRaw with scanlines populated (parse_raw output).
@@ -40,7 +40,7 @@
 # Returns an owned RGBA8 buffer (width*height*4 bytes) on success, or 0
 # with *err_out set. *err_out is left 0 on the success path.
 #
-# New reject paths over AL.P0b:
+# New reject paths over the parse stage:
 #   - palette index >= PLTE entry count        -> CHITRA_ERR_BAD_CHUNK
 #   - color_type 3 with no/short PLTE          -> CHITRA_ERR_BAD_CHUNK
 #   - tRNS span out of (src, len) bounds       -> CHITRA_ERR_BAD_CHUNK
