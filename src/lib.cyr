@@ -12,6 +12,16 @@
 # which is what makes `cyrius distlib` (strip-include concatenation)
 # produce a compile-clean `dist/chitra.cyr`. Don't add stdlib includes
 # in individual src/*.cyr files.
+#
+# ⛔⛔ THIS LIST IS A BILL EVERY CONSUMER PAYS, AND IT IS THE ONE THAT MATTERS — NOT `[deps].stdlib`.
+# `cyrius distlib` derives `dist/chitra.deps` from the `include "lib/*.cyr"` lines RIGHT HERE, and
+# `cyrius deps` then treats that sidecar as authoritative: a consumer links every leaf named below
+# and cannot decline one it knows it does not need.
+# ⚠ TRIMMED 1.0.1 — `args`, `flags` and `vec` were included here and referenced NOWHERE in the repo
+# (0 hits across src/, programs/, tests/ and fuzz/). Measured by crab: `flags` alone cost **+8,320 B**
+# in a consumer binary, and `CYRIUS_DCE=1` reclaims none of it — it NOPs, and the byte count does
+# not move at all.
+# ⇒ **An unused include here is not free and is not local.** Add one only when a symbol needs it.
 
 # ================================================================
 # Standard library
@@ -19,12 +29,9 @@
 include "lib/string.cyr"
 include "lib/fmt.cyr"
 include "lib/alloc.cyr"
-include "lib/vec.cyr"
 include "lib/str.cyr"
 include "lib/io.cyr"
-include "lib/args.cyr"
 include "lib/syscalls.cyr"
-include "lib/flags.cyr"
 include "lib/assert.cyr"
 include "lib/bench.cyr"
 

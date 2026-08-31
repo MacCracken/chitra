@@ -614,6 +614,29 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
         return 0;
     }
 
+    # ⛔ ORDER IS LOAD-BEARING: THIS SITS AFTER THE BOMB CAPS, NOT BEFORE THEM. A tiny IDAT claiming
+    # a 3000x3000 image is a decompression BOMB and must keep being reported as one
+    # (`CHITRA_ERR_DIMENSIONS`); only a stream whose ratio is plausible — a real photograph — reaches
+    # here and earns the "too large for this decompressor" answer. A first draft checked first and
+    # silently reclassified every bomb.
+    # ⛔⛔ REFUSE BEFORE ALLOCATING WHAT THE DECOMPRESSOR WILL NOT FILL (1.0.1).
+    # `CHITRA_MAX_RAW_BYTES` is 256 MB — **sixteen times** what `sankoch` will actually emit. So a
+    # 4096x2160 RGB PNG (26.5 MB inflated) passed every check above, chitra allocated the IDAT
+    # concatenation AND the 26.5 MB inflate buffer, called `zlib_decompress`, and got
+    # `ERR_OUTPUT_LIMIT` back — which was reported as a bare `CHITRA_ERR_INFLATE`.
+    # ⚠ MEASURED by crab, 2026-08-31: **26,617,512 bytes spent to return 0.** On a bump allocator
+    # with no `free()` — which is what cyrius ships — those bytes never come back. A consumer
+    # thumbnailing a photo directory exhausted memory learning nothing.
+    # ⭐ THE CEILING IS READ FROM sankoch, NOT COPIED. `DECOMPRESS_MAX_OUTPUT` is the value the
+    # decoder itself enforces; hardcoding 16777216 here would be a second number meaning the same
+    # thing, free to drift the moment sankoch raises its backstop.
+    # ⛔ AND IT IS ITS OWN ERROR CODE. `CHITRA_ERR_INFLATE` cannot distinguish a corrupt stream from
+    # a valid image too large for this build, and those two want opposite things from a caller.
+    if (inflated_size > DECOMPRESS_MAX_OUTPUT) {
+        store64(err_out, chitra_err(CHITRA_ERR_INFLATE_LIMIT));
+        return 0;
+    }
+
     # ---- pass 2: concatenate IDAT payloads ----
     var idat_buf = alloc(idat_total);
     if (idat_buf == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }

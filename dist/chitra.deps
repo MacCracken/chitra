@@ -3,12 +3,9 @@
 string
 fmt
 alloc
-vec
 str
 io
-args
 syscalls
-flags
 assert
 bench
 thread

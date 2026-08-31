@@ -3860,6 +3860,120 @@ fn test_consecutive_idats_still_decode() {
     return 0;
 }
 
+# ================================================================
+# 1.0.1 — an image too large for the linked decompressor is REFUSED BEFORE
+# ALLOCATING, with its own error code.
+# ================================================================
+# ⛔⛔ WHAT THIS EXISTS TO PIN, AND WHY IT IS NOT A COSMETIC ERROR-CODE CHANGE.
+# `CHITRA_MAX_RAW_BYTES` is 256 MB — **sixteen times** what the linked `sankoch` will emit
+# (`DECOMPRESS_MAX_OUTPUT`, 16 MiB, enforced identically by its one-shot and streaming decoders, so
+# no entry point exceeds it). So a 4096x2160 RGB PNG passed every guard, chitra allocated the IDAT
+# concatenation AND a 26.5 MB inflate buffer, and `zlib_decompress` then refused.
+# ⚠ MEASURED BY crab, 2026-08-31: **26,617,512 bytes spent to return 0** — and cyrius's allocator is
+# a bump allocator with no `free()`, so those bytes never came back. A consumer thumbnailing a photo
+# directory ran itself out of memory learning nothing.
+#
+# The fixture declares 3000x3000 RGB: inflated = 3000 * (1 + 3000*3) = 27,003,000 bytes, past the
+# ceiling. ⚠ Its IDAT is 25,000 bytes of filler — never inflated, because the refusal happens first
+# — sized only to keep `inflated/idat` under `CHITRA_MAX_INFLATE_RATIO` so this reaches the new
+# check rather than the bomb cap. That sizing is the whole point of the second test below.
+fn fx_oversize_rgb(len_out, idat_len): i64 {
+    var total = 8 + 25 + (12 + idat_len) + 12;
+    var b = alloc(total);
+    var o = 0;
+    # signature
+    store8(b + 0, 137); store8(b + 1, 80); store8(b + 2, 78); store8(b + 3, 71);
+    store8(b + 4, 13); store8(b + 5, 10); store8(b + 6, 26); store8(b + 7, 10);
+    o = 8;
+    # IHDR: length 13, "IHDR", w=3000, h=3000, depth 8, colour 2 (RGB), 0,0,0
+    store8(b + o, 0); store8(b + o + 1, 0); store8(b + o + 2, 0); store8(b + o + 3, 13);
+    o = o + 4;
+    var tstart = o;
+    store8(b + o, 73); store8(b + o + 1, 72); store8(b + o + 2, 68); store8(b + o + 3, 82);
+    o = o + 4;
+    store8(b + o, 0); store8(b + o + 1, 0); store8(b + o + 2, 11); store8(b + o + 3, 184);   # 3000
+    o = o + 4;
+    store8(b + o, 0); store8(b + o + 1, 0); store8(b + o + 2, 11); store8(b + o + 3, 184);   # 3000
+    o = o + 4;
+    store8(b + o, 8); store8(b + o + 1, 2); store8(b + o + 2, 0);
+    store8(b + o + 3, 0); store8(b + o + 4, 0);
+    o = o + 5;
+    crc32_init_table();
+    var c1 = crc32(b + tstart, 17);
+    store8(b + o, (c1 >> 24) & 255); store8(b + o + 1, (c1 >> 16) & 255);
+    store8(b + o + 2, (c1 >> 8) & 255); store8(b + o + 3, c1 & 255);
+    o = o + 4;
+    # IDAT: filler bytes. Never read — the refusal happens before any inflate.
+    store8(b + o, (idat_len >> 24) & 255); store8(b + o + 1, (idat_len >> 16) & 255);
+    store8(b + o + 2, (idat_len >> 8) & 255); store8(b + o + 3, idat_len & 255);
+    o = o + 4;
+    var istart = o;
+    store8(b + o, 73); store8(b + o + 1, 68); store8(b + o + 2, 65); store8(b + o + 3, 84);
+    o = o + 4;
+    var i = 0;
+    while (i < idat_len) { store8(b + o + i, (i * 7) & 255); i = i + 1; }
+    o = o + idat_len;
+    var c2 = crc32(b + istart, 4 + idat_len);
+    store8(b + o, (c2 >> 24) & 255); store8(b + o + 1, (c2 >> 16) & 255);
+    store8(b + o + 2, (c2 >> 8) & 255); store8(b + o + 3, c2 & 255);
+    o = o + 4;
+    # IEND
+    store8(b + o, 0); store8(b + o + 1, 0); store8(b + o + 2, 0); store8(b + o + 3, 0);
+    o = o + 4;
+    var estart = o;
+    store8(b + o, 73); store8(b + o + 1, 69); store8(b + o + 2, 78); store8(b + o + 3, 68);
+    o = o + 4;
+    var c3 = crc32(b + estart, 4);
+    store8(b + o, (c3 >> 24) & 255); store8(b + o + 1, (c3 >> 16) & 255);
+    store8(b + o + 2, (c3 >> 8) & 255); store8(b + o + 3, c3 & 255);
+    o = o + 4;
+    store64(len_out, o);
+    return b;
+}
+
+fn test_inflate_limit_is_its_own_error() {
+    var lo = 0;
+    var bytes = fx_oversize_rgb(&lo, 25000);
+    var err = 0;
+    # ⭐ THE COST IS THE HEADLINE. Before 1.0.1 this call allocated ~26.6 MB before failing; the
+    # refusal is now a comparison against a number already computed.
+    var before = alloc_used();
+    var raw = chitra_png_parse_raw(bytes, lo, &err);
+    var spent = alloc_used() - before;
+    assert_eq(raw, 0, "an image past the decompressor ceiling is refused");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_INFLATE_LIMIT,
+      "...with its OWN code, not a bare CHITRA_ERR_INFLATE");
+    # ⛔ THE WHOLE POINT: refused CHEAPLY. A generous bound rather than an exact one, because the
+    # allocator's alignment and the err record are not this test's business — but it is three orders
+    # of magnitude below the 26,617,512 bytes the old path spent.
+    assert(spent < 65536, "...and BEFORE allocating the inflate buffer (< 64 KiB spent)");
+    return 0;
+}
+
+# ⛔ A DECOMPRESSION BOMB MUST STILL REPORT AS A BOMB. The new check sits AFTER the ratio cap
+# precisely so that a tiny IDAT claiming an enormous image keeps its `CHITRA_ERR_DIMENSIONS`
+# classification — a first draft checked first and silently reclassified every bomb as "too large
+# for this decompressor", which tells a caller the file is fine when it is hostile.
+fn test_bomb_still_reports_as_a_bomb() {
+    var lo = 0;
+    # ⛔ A REAL BOMB, BUILT AS ONE — same 3000x3000 IHDR, but only 8 bytes of IDAT, so
+    # inflated/idat = 3,375,375 against a `CHITRA_MAX_INFLATE_RATIO` of 1100.
+    # ⚠ A FIRST DRAFT BUILT THIS BY OVERWRITING THE 25,000-BYTE FIXTURE'S LENGTH FIELD IN PLACE, and
+    # that made the test VACUOUS: the chunk CRC no longer matched, so `CHITRA_ERR_CRC` fired before
+    # either cap and the assertion below passed without the bomb path ever running. It was caught by
+    # a mutation — moving the ceiling check before the bomb caps — that the test failed to detect.
+    # ⇒ Build the fixture you mean to test; do not corrupt another one into it.
+    var bytes = fx_oversize_rgb(&lo, 8);
+    var err = 0;
+    var raw = chitra_png_parse_raw(bytes, lo, &err);
+    assert_eq(raw, 0, "a bomb is still refused");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_DIMENSIONS,
+      "...as CHITRA_ERR_DIMENSIONS — a bomb is a hostile file, not merely a large one");
+    assert(chitra_err_code(err) != CHITRA_ERR_INFLATE_LIMIT,
+      "...and specifically NOT as a decompressor-ceiling refusal");
+    return 0;
+}
+
 fn main() {
     test_cursor_bounds();
     test_signature();
@@ -3907,6 +4021,8 @@ fn main() {
     test_reject_trns_on_rgba();
     test_reject_chunk_between_idats();
     test_consecutive_idats_still_decode();
+    test_inflate_limit_is_its_own_error();
+    test_bomb_still_reports_as_a_bomb();
     return assert_summary();
 }
 

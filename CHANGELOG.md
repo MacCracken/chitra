@@ -106,6 +106,67 @@ sweep had not:
   `test-all` lists `dist` **before** `test`, so under serial make a symlinked
   `lib/` is not caught until after the bundle has been regenerated.
 
+## [1.0.1] - 2026-08-31 — a valid PNG too large for the linked decompressor is refused for free, and named
+
+### Fixed — a 26.6 MB failure that told the caller nothing
+
+⛔⛔ **`CHITRA_MAX_RAW_BYTES` is 256 MB — sixteen times what `sankoch` will actually emit.**
+`DECOMPRESS_MAX_OUTPUT` is sankoch's absolute **16 MiB** anti-bomb backstop, enforced identically by
+its one-shot *and* streaming decoders, so no sankoch entry point can exceed it. chitra's own ceiling
+never knew that. So a perfectly valid 4096×2160 RGB PNG (26.5 MB inflated) passed every guard,
+chitra allocated the IDAT concatenation **and** a 26.5 MB inflate buffer, called `zlib_decompress`,
+and got `ERR_OUTPUT_LIMIT` — reported as a bare `CHITRA_ERR_INFLATE`.
+
+⚠ **Measured by crab, 2026-08-31: 26,617,512 bytes spent to return 0.** cyrius's allocator is a bump
+allocator with no `free()`, so those bytes never came back. A consumer thumbnailing a photo
+directory ran itself out of memory learning nothing.
+
+⭐ The size is now checked against the decompressor's own ceiling **before any allocation**. Measured
+after: **under 64 KiB** to reach the same answer, three orders of magnitude cheaper.
+⭐ **The ceiling is read from sankoch, not copied.** `DECOMPRESS_MAX_OUTPUT` is the value the decoder
+enforces; hardcoding `16777216` here would be a second number meaning the same thing, free to drift
+the moment sankoch raises its backstop.
+
+⚠ **The threshold, bracketed exactly**: 2200×2200 RGB (14,522,200 B inflated) decodes; 2370×2370
+(16,853,070 B) does not. That is ~5.6 megapixels of RGB — an ordinary phone photo saved as PNG.
+⛔ **This release does not make those images decode.** The ceiling is sankoch's and only sankoch can
+raise or parameterise it; filed separately. What changes is that chitra now *says so*, cheaply,
+instead of spending 26 MB to say something else.
+
+### Added — `CHITRA_ERR_INFLATE_LIMIT` (35)
+
+⛔ **Its own code, because `CHITRA_ERR_INFLATE` could not distinguish a corrupt stream from a valid
+image too large for this build — and those want opposite things from a caller.** A corrupt file can
+be retried, re-fetched, or reported to a user as damaged; an oversized one can only ever be refused,
+and the caller may want to say why. Reported by crab, whose thumbnailer needed to tell the operator
+which kind of nothing it was showing.
+⚠ Additive: no existing code path returns 35, so every current consumer is unaffected.
+
+### Changed — `[deps].stdlib` drops `args`, `flags` and `vec`
+
+They were declared and referenced **nowhere** in the repo — 0 hits across `src/`, `dist/` and
+`programs/`. `cyrius distlib` copies this list verbatim into `dist/chitra.deps`, and `cyrius deps`
+treats that sidecar as **authoritative**, so every consumer linked them and a consumer that knew
+better could not decline. ⚠ Measured by crab: `flags` alone cost **+8,320 B** in a consumer binary,
+and `CYRIUS_DCE=1` reclaims none of it — it NOPs, and the byte count does not move.
+
+⚠ **`sankoch` and `thread` stay, and are not the same kind of thing.** PNG's IDAT is DEFLATE, so
+`zlib_decompress` and `crc32` are load-bearing, and `thread` is required transitively by sankoch's
+internal lock. Together they are ~407 KB of a consumer's cost and no manifest change touches them —
+that is PNG's price, not an over-declaration.
+
+### Tests
+
+`tests/tcyr/png.tcyr` gains the refusal, its **cost**, and the ordering that keeps a decompression
+bomb classified as a bomb. Both mutations produce named failures: removing the check (wrong code,
+expensive), and moving it *before* the bomb caps (a bomb reclassified as merely large).
+
+⚠ **One of those tests was vacuous in its first draft, and only the second mutation said so.** The
+bomb fixture was built by overwriting the oversize fixture's IDAT length field in place — which
+invalidated the chunk CRC, so `CHITRA_ERR_CRC` fired before either cap and the assertion passed
+without the bomb path ever running. ⇒ **Build the fixture you mean to test; do not corrupt another
+one into it.**
+
 ## [1.0.0] - 2026-08-24
 
 **The public API and ABI are frozen.**

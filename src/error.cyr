@@ -71,6 +71,18 @@ enum ChitraErrCode {
     # Not a validity failure and not an OOM: the FILE is fine and the heap is
     # fine, but the caller asked chitra not to spend this much on it.
     CHITRA_ERR_BUDGET           = 34;  # decode refused by the caller's max_bytes
+    # ---- decompressor capability (chitra 1.0.1) ----
+    # ⛔⛔ NOT A VALIDITY FAILURE, NOT AN OOM, AND NOT A BOMB. The file is a correct PNG, the heap is
+    # fine, and the caller asked for it — but its inflated scanline data is larger than the linked
+    # `sankoch` will EMIT. `DECOMPRESS_MAX_OUTPUT` is sankoch's absolute 16 MiB anti-bomb backstop,
+    # enforced identically by the one-shot and the streaming decoders, so no sankoch entry point can
+    # exceed it and chitra cannot work around it.
+    # ⚠ THIS USED TO SURFACE AS `CHITRA_ERR_INFLATE` — "the decompressor reported a failure" — which
+    # is true and useless: it does not distinguish a corrupt stream from a perfectly good image that
+    # is simply too large for this build. A caller can retry a corrupt file, or ask the user; it can
+    # only ever refuse this one. ⇒ Reported by crab 2026-08-31, whose thumbnailer needed to tell the
+    # operator WHICH kind of nothing it was showing.
+    CHITRA_ERR_INFLATE_LIMIT    = 35;  # inflated size exceeds sankoch's DECOMPRESS_MAX_OUTPUT
     CHITRA_ERR_OTHER      = 99;  # catch-all
 }
 
@@ -156,6 +168,7 @@ fn chitra_err_name(code): i64 {
     if (code == CHITRA_ERR_BMP_RLE)          { return "corrupt BMP RLE stream"; }
     if (code == CHITRA_ERR_BMP_MASK)         { return "invalid BMP channel mask"; }
     if (code == CHITRA_ERR_BUDGET)           { return "decode exceeds caller byte budget"; }
+    if (code == CHITRA_ERR_INFLATE_LIMIT)    { return "inflated size exceeds decompressor ceiling"; }
     if (code == CHITRA_ERR_OTHER)      { return "other error"; }
     return "unknown error";
 }
