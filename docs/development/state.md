@@ -7,6 +7,16 @@
 
 ## Version
 
+**1.0.1** — cut 2026-08-31. ⭐ **ABI-additive over 1.0.0**: no name added or removed, no offset
+moved, one new **error code** (`CHITRA_ERR_INFLATE_LIMIT`, 35). A valid PNG past sankoch's 16 MiB
+inflate ceiling is now refused **from the header, in under 64 KiB** — it used to spend
+**26,617,512 bytes** to return a bare `CHITRA_ERR_INFLATE`. And `src/lib.cyr` drops three stdlib
+includes (`args`, `flags`, `vec`) referenced nowhere in the repo, so the sidecar goes 13 leaves → 10
+and every consumer stops linking them. Reported by **crab**.
+⛔ **The ceiling is sankoch's and this release does not raise it** — no sankoch entry point emits
+past 16 MiB, the streaming decoder included. Filed there. What changed is that the failure is now
+cheap and correctly named.
+
 **1.0.0** — cut 2026-08-24. **The freeze.** The 29 names in
 [`public-surface.md`](public-surface.md), plus the `ChitraImage` and `ChitraErr`
 record layouts, are now covered by a compatibility promise: changing a
@@ -412,9 +422,16 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
   (`chitra_image_decode_budget` and the internal
   `chitra_jpeg_frame_adobe_transform`) and one error code (`CHITRA_ERR_BUDGET`,
   34); 0.9.0 added exactly one (`chitra_image_source_depth`) and moved no
-  offset; 1.0.0 added none — its bundle is name-identical to 0.9.0's. Consumers
-  re-pin mechanically.
-- `dist/chitra.deps` — the 13-leaf stdlib sidecar consumers resolve against.
+  offset; 1.0.0 added none — its bundle is name-identical to 0.9.0's; **1.0.1
+  adds none either, and one error code** (`CHITRA_ERR_INFLATE_LIMIT`, 35).
+  Consumers re-pin mechanically.
+- `dist/chitra.deps` — the **10**-leaf stdlib sidecar consumers resolve against.
+  ⚠ **Was 13 until 1.0.1.** `args`, `flags` and `vec` were `include`d in
+  `src/lib.cyr` and referenced nowhere in the repo — and since `cyrius deps`
+  treats this sidecar as **authoritative**, every consumer linked them and could
+  not decline. Measured by crab: `flags` alone cost **+8,320 B**, and
+  `CYRIUS_DCE=1` reclaims none of it. ⛔ **An unused include in `src/lib.cyr` is
+  not free and is not local.**
 - `build/chitra_smoke` — **~587 KB** (601,408 bytes), built from
   `programs/smoke.cyr` (19 L) via `make build`. It only proves the include
   chain compiles and links clean — chitra is a library, there is no real CLI

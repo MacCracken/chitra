@@ -252,7 +252,15 @@ the pixels. A *malformed* IEND (e.g. non-zero length) is a hard error.
 | `CHITRA_ERR_BMP_RLE` | 32 | Corrupt BMP run-length stream: a run or delta leaving the bitmap, or a truncated opcode |
 | `CHITRA_ERR_BMP_MASK` | 33 | BMP channel mask non-contiguous, overlapping, wider than the pixel, or leaving no color channel |
 | `CHITRA_ERR_BUDGET` | 34 | `chitra_image_decode_budget` refused: the image's RGBA8 output would exceed the caller's `max_bytes`. **The file is fine** — this is the only code that reports a caller policy rather than anything about the input |
+| `CHITRA_ERR_INFLATE_LIMIT` | 35 | The PNG is valid and the caller allowed it, but its inflated scanline data exceeds what the linked `sankoch` will emit (`DECOMPRESS_MAX_OUTPUT`, 16 MiB) — about **5.6 megapixels of RGB**. Refused from the header, before allocating. **Distinct from `CHITRA_ERR_INFLATE`**, which means the decompressor reported a *failure*: a corrupt stream can be retried or reported as damaged, this one can only be refused |
 | `CHITRA_ERR_OTHER` | 99 | Anything else |
+
+⛔ **`CHITRA_ERR_INFLATE_LIMIT` (1.0.1) is a capability limit, not a verdict on the file.** Before
+1.0.1 this surfaced as `CHITRA_ERR_INFLATE` — and expensively: chitra's own ceiling is 256 MB,
+sixteen times what sankoch emits, so it allocated the IDAT concatenation *and* a full-size inflate
+buffer before the decompressor refused. Measured at **26,617,512 bytes spent to return 0**, on an
+allocator with no `free()`. It is now under 64 KiB. The ceiling itself is sankoch's and only sankoch
+can raise it.
 
 Note that `CHITRA_ERR_INTERLACE` and `CHITRA_ERR_BIT_DEPTH` are narrower
 than their names suggest: Adam7 *and* every spec-legal bit depth decode,
