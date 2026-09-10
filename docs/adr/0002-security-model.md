@@ -116,14 +116,14 @@ the audit ([`../audit/2026-06-26-audit.md`](../audit/2026-06-26-audit.md)).
 | Derived inflated/pixel-size caps (Adam7-aware) | `src/png_filter.cyr:593`-`600` | `CHITRA_ERR_DIMENSIONS` |
 | Zero-IDAT structural reject | `src/png_filter.cyr:605`-`606` | `CHITRA_ERR_NO_IDAT` |
 | Decompression-bomb ratio cap (1100:1) | `src/png_filter.cyr:612`-`615` | `CHITRA_ERR_DIMENSIONS` |
-| Inflate failure + exact-size second line | `src/png_filter.cyr:648`-`649` | `CHITRA_ERR_INFLATE` |
-| Per-row filter-byte allow-list `{0..4}` | `_chitra_unfilter_row` (`src/png_filter.cyr:39`) → `:665` / deinterlace `:312` | `CHITRA_ERR_FILTER` |
+| Inflate failure + exact-size second line | `src/png_filter.cyr:671`-`672` | `CHITRA_ERR_INFLATE` |
+| Per-row filter-byte allow-list `{0..4}` | `_chitra_unfilter_row` (`src/png_filter.cyr:39`) → non-interlaced `:688` / deinterlace `:312` | `CHITRA_ERR_FILTER` |
 | Color-pass re-assert of dimension caps | `src/png_color.cyr:95`-`101` | `CHITRA_ERR_DIMENSIONS` |
 | Scanline-buffer sufficiency check | `src/png_color.cyr:108`-`112` | `CHITRA_ERR_DIMENSIONS` |
 | tRNS span re-validated within `(src, len)` | `src/png_color.cyr:125`-`128` | `CHITRA_ERR_BAD_CHUNK` |
 | tRNS length per color-type (gray 2 / RGB 6 / palette ≤ entries) | `src/png_color.cyr:143`,`:228` (gray) / `:265` (RGB) / `:186`,`:326` (palette) | `CHITRA_ERR_BAD_CHUNK` |
-| Palette index OOB hard-reject | `src/png_color.cyr:198`, `:328` | `CHITRA_ERR_BAD_CHUNK` |
-| Palette images require non-empty, in-bounds PLTE | `src/png_color.cyr:157`,`:272`-`280` | `CHITRA_ERR_BAD_CHUNK` |
+| Palette index OOB hard-reject | `src/png_color.cyr:197`, `:335` | `CHITRA_ERR_BAD_CHUNK` |
+| Palette images require non-empty, in-bounds PLTE | `src/png_color.cyr:181`-`185` (sub-byte path), `:315` (8-bit path) | `CHITRA_ERR_BAD_CHUNK` |
 | Allocation-failure check on every alloc | throughout `src/png_filter.cyr`, `src/png_color.cyr`, `src/png.cyr` | `CHITRA_ERR_OOM` |
 
 **Added in 0.3.3** (see [`../audit/2026-08-23-audit.md`](../audit/2026-08-23-audit.md)).

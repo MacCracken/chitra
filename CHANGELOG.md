@@ -7,7 +7,130 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [1.0.2] - 2026-09-10 — the toolchain catches up, and the `alloc_reset()` hazard arrives fixed
+
+⛔ **No decode code changed.** `git diff dist/chitra.cyr` against the 1.0.1 bundle is **exactly two
+lines** — the header stamp and the `chitra_version()` literal — so the decode source every consumer
+links is byte-identical to 1.0.1's, and `scripts/check-surface.sh` still reports **74 exports, 29
+frozen**. What changed is underneath: the pin, and what the pin vendors.
+
+### Fixed — `alloc_reset()` between PNG decodes is safe again, and chitra did not fix it
+
+⭐⭐ **This is the release's substance, and none of it is chitra's code.** Through 1.0.1 a consumer
+that called the stdlib's `alloc_reset()` between PNG decodes corrupted the **next** decode:
+`sankoch` memoizes `crc32_table` as a raw pointer into the bump arena, the reset rewinds the arena
+underneath it, and the lazy-init guard (`crc32_table != 0`) then keeps the dangling pointer. chitra
+calls `crc32_init_table()` on every PNG decode, so the next decode read its CRC table out of memory
+the allocator had since handed to something else. Recorded as
+[architecture/005](docs/architecture/005-alloc-reset-sankoch-hazard.md).
+
+⭐ **The 6.6.2 snapshot vendors sankoch 2.7.14**, past the 2.7.10 arena canary. `_sankoch_arena_guard()`
+runs before any memoized global is touched: the reset zeroes the span it rewinds, so an
+arena-allocated magic word reads back zero, and `_sankoch_reset_tables()` drops `crc32_table`, the
+nine `_huff_*` pointers and `_sankoch_mtx` together. Both memoization shapes architecture/005 names
+are covered, not just the CRC table.
+
+⚠ **Re-run, not assumed — architecture/005 says a pin bump is not by itself evidence that the
+bundled copy moved.** Measured at this cut: **200,000** decode + `alloc_reset()` cycles (kii's
+`fuzz_png_iter` pattern), **0** decode failures and **0** of 16 RGBA8 bytes differing from the
+fresh-arena baseline on any iteration.
+
+⚠ **Reachability proven both ways.** With `_sankoch_arena_guard()` neutered in a scratch copy — one
+copy linked, since two makes the result meaningless — the documented failure returns exactly as
+architecture/005 records it: `CHITRA_ERR_CRC` (7) on the first decode after the reset, and the new
+suite fails **8 of its 15** assertions. A guard that cannot fire is worse than no guard; this one
+fires.
+
+⛔ **AGNOS keeps one residual, and it does not reach chitra.** `_sankoch_lock`'s copy of the guard is
+compiled out under `CYRIUS_TARGET_AGNOS`, so only `crc32_init_table`'s copy fires there. chitra's PNG
+path calls `crc32_init_table()` well before `zlib_decompress()`, so the covering call happens first.
+
+⭐ Incidental, measured: 2.7.14's `crc32_init_table()` gained an early return. Before, the
+`crc32_table == 0` guard covered only the **allocation** — the 16 KB slice-by-8 table was rebuilt on
+every call, and chitra calls it once per PNG decode. **~9 µs per decode**, now not spent, and the
+in-tree benchmark agrees: `png_rgba8_16x16_fixed_cost` **63,977 ns → 52,297 ns** (−11.7 µs), the row
+built to isolate exactly this kind of per-decode overhead. ⚠ Quote the **absolute** figure, not a
+percentage — the percentage is entirely a function of fixture size (it is ~83 % on a 2×2 and ~19 % on
+an 8×8), so a percentage here is a property of the harness, not of chitra.
+
+### Changed — cyrius pin `6.5.35` → `6.6.2`, `lib/` re-vendored
+
+`lib/` goes **108 `.cyr` files → 110** (101 + 7 under `lib/unicode` → 103 + 7). New in 6.6.2:
+`boxed.cyr`, `hashseed.cyr`. Nothing removed; **40** of the carried-over files differ.
+
+⚠ **`cyrius deps` alone was not enough, and that is why the warning survived 1.0.1.** It refreshes
+only the declared-leaf closure — **32 files** — leaving the rest of the vendored snapshot at 6.5.35
+and the build reporting `./lib/ shadows version-pinned .../6.6.2/lib — 11 bundled lib(s) differ`
+(bayan 1.5.2 → 1.5.5, ganita 1.1.4 → 1.2.4, sakshi 2.4.11 → 2.5.1, niyama 1.0.7 → 1.0.10,
+sigil 3.12.9 → 3.12.16, sandhi 1.9.10 → 1.9.16, yukti 2.3.8 → 2.3.10, patra 1.13.10 → 1.14.1,
+vani 1.2.2 → 1.2.4, mabda 4.1.0 → 4.1.1, yantra 1.0.3 → 1.0.4). `cyrius lib sync --full` clears it.
+⇒ **Two commands populate `lib/` and they do not leave the same tree.** CI's
+`rm -rf lib && mkdir lib && cyrius deps` produces the 32-file closure, which builds a byte-identical
+binary; the 110-file snapshot is the local convention.
+
+`build/chitra_smoke` **601,408 B → 597,248 B** on the new toolchain. The include chain, the
+`[lib].modules` order and every guard are untouched.
+
+⚠ **The old pin carried a toolchain Critical, and chitra was not exposed to it.** 6.6.2 refuses to
+run a 6.5.35-pinned project without warning that *"6.5.35 carries the v6.5.36 enum Critical
+(constants >= 2^62 read back as -1)"*. chitra has exactly one `enum` — `ChitraErrCode`, values 0..35
+— and its largest literal anywhere in `src/` is `4294967296` (2³²), eight orders of magnitude below
+the threshold. ⇒ **Moving off it is hygiene, not a repair**; nothing that shipped through 1.0.1 was
+wrong because of it. Said explicitly so the next reader does not go looking for a bug that was never
+there.
+
+⚠ **`CYRIUS_DCE=1` now actually eliminates**, which it did not on 6.5.35 — smoke goes
+**597,248 B → 44,288 B** (551,281 bytes of dead code), where 6.5.35 NOPed without moving the byte
+count. `src/lib.cyr`'s 1.0.1 trim rationale said so and is corrected. ⇒ **The trim still stands, and
+for the other reason it gave**: `cyrius distlib` copies `[deps].stdlib` verbatim into
+`dist/chitra.deps`, `cyrius deps` treats that sidecar as authoritative, and a default build has DCE
+**off** — so an over-declared leaf is still a bill every consumer pays and cannot decline.
+
+### Added — `tests/tcyr/alloc_reset.tcyr`
+
+⛔ **Because the thing that changed is not in this repo.** The fix lives in vendored `lib/`, which is
+gitignored and re-resolved from whatever the pin says — so a future pin bump can take it away again
+with no diff anywhere in the tree to show for it. **15 assertions**: the architecture/005
+reproduction as an assertion, pixel-exactness across the reset (a decode that "succeeds" with wrong
+pixels is the failure mode fuzzing cannot see), 2,000 decode + reset cycles, and a check that
+`alloc_reset()` genuinely reclaims — otherwise the suite would pass just as well against a no-op.
+
+⚠ BMP, JPEG and GIF are deliberately **not** covered: none of them touch sankoch, so none ever had
+the hazard, and asserting they survive would grow a guard that cannot fail into something a reader
+mistakes for coverage.
+
+### Verification
+
+Re-verified against external oracles on 6.6.2, because a toolchain bump changes codegen and
+**fuzzing does not find wrong output**:
+
+- **89-cell decode matrix, 12,922,780 RGBA8 bytes compared** — `djpeg -nosmooth` for JPEG,
+  ImageMagick for PNG/BMP/GIF, ffmpeg as an independent third oracle. **All 36 PNG cells byte-exact**
+  (every spec-legal depth × colour type, Adam7 twinned against its non-interlaced twin, tRNS, all
+  five § 9 predictors). The 11 divergences are all documented deliberate policy, each proved
+  compiler-independent: JPEG's `_jpeg_descale` rounding, BMP's sub-8-bit **bit replication** (ffmpeg
+  agrees byte-for-byte; ImageMagick is the outlier), and GIF's uncovered-canvas rule (0 of 1,200
+  in-rect pixels differ).
+- A harness linking `src/lib.cyr` and one linking `dist/chitra.cyr` agreed on **89/89** cells.
+- **3,035 assertions across 13 suites**, **10,732,113 fuzz assertions** across 4 harnesses, lint /
+  fmt / vet clean, 0 failures throughout.
+
+### Not in this release
+
+⛔ **sankoch's 16 MiB ceiling is not raised.** `DECOMPRESS_MAX_OUTPUT` is still `16777216` at 2.7.14,
+so 1.0.1's `CHITRA_ERR_INFLATE_LIMIT` story is unchanged and the roadmap item stays open. ⚠ 2.7.13
+did add `zlib_decompress_capped`, which would let a caller that has independently bounded its output
+name its own ceiling; chitra still calls plain `zlib_decompress`. Adopting it retires files that
+currently answer `CHITRA_ERR_INFLATE_LIMIT`, so it is a release with an entry, not a swap.
+
+⛔ **The downstream pins are not bumped** — that happens after the tag lands, per the closeout.
+
 ### Documentation
+
+⚠ **The block below shipped inside the `1.0.1` tag's tree but was never entered against `1.0.1`** —
+recorded here rather than back-dated, because a released entry is a historical record.
 
 **A tree-wide staleness sweep — 158 verified corrections across 36 files.** No
 decode behaviour changed and the bundle's exported names are **byte-for-byte

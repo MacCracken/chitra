@@ -1,0 +1,247 @@
+# tests/tcyr/alloc_reset.tcyr — `alloc_reset()` between PNG decodes is safe.
+#
+# ⛔ THIS SUITE EXISTS BECAUSE THE ANSWER USED TO BE "NO", AND THE THING THAT
+# CHANGED IS NOT IN THIS REPO. Through 1.0.1 (cyrius 6.5.35) a consumer that
+# called `alloc_reset()` between PNG decodes corrupted the NEXT decode:
+# sankoch memoizes `crc32_table` into a raw bump-arena pointer, the reset
+# rewinds the arena underneath it, and the lazy-init guard (`crc32_table != 0`)
+# then keeps the dangling pointer. chitra calls `crc32_init_table()` on every
+# PNG decode, so the very next decode read its CRC table out of memory the
+# allocator had since handed to something else. Recorded in
+# docs/architecture/005-alloc-reset-sankoch-hazard.md.
+#
+# ⭐ sankoch 2.7.10's arena canary fixes it, and chitra picked it up at 1.0.2
+# by bumping `[package].cyrius` to 6.6.2 (sankoch 2.7.14). Nothing in `src/`
+# changed. That is exactly why this suite is here: the fix lives in vendored
+# `lib/`, which is gitignored and re-resolved from whatever the pin says, so a
+# future pin bump can take it away again with no diff anywhere in this repo to
+# show for it.
+#
+# ⚠ REACHABILITY PROVEN, not assumed. With the canary neutered in a scratch
+# copy of sankoch (a single copy — linking two makes the result meaningless),
+# `test_decode_after_alloc_reset` fails exactly as architecture/005 records it:
+# CHITRA_ERR_CRC (7) on the first decode after the reset.
+#
+# ⛔ BMP / JPEG / GIF are deliberately NOT covered here. None of them touch
+# sankoch, so they never had the hazard, and asserting they survive would grow
+# a guard that cannot fail into something a reader mistakes for coverage.
+include "src/lib.cyr"
+include "lib/assert.cyr"
+
+# Returns an alloc'd buffer of the 77-byte fixture; sets *len_out.
+fn fx_rgba8_2x2(len_out): i64 {
+    var b = alloc(77);
+    store64(len_out, 77);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 2);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 2);
+    store8(b + 24, 8);
+    store8(b + 25, 6);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 114);
+    store8(b + 30, 182);
+    store8(b + 31, 13);
+    store8(b + 32, 36);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 20);
+    store8(b + 37, 73);
+    store8(b + 38, 68);
+    store8(b + 39, 65);
+    store8(b + 40, 84);
+    store8(b + 41, 120);
+    store8(b + 42, 218);
+    store8(b + 43, 99);
+    store8(b + 44, 248);
+    store8(b + 45, 207);
+    store8(b + 46, 192);
+    store8(b + 47, 240);
+    store8(b + 48, 31);
+    store8(b + 49, 12);
+    store8(b + 50, 129);
+    store8(b + 51, 52);
+    store8(b + 52, 16);
+    store8(b + 53, 48);
+    store8(b + 54, 52);
+    store8(b + 55, 0);
+    store8(b + 56, 0);
+    store8(b + 57, 71);
+    store8(b + 58, 75);
+    store8(b + 59, 8);
+    store8(b + 60, 121);
+    store8(b + 61, 195);
+    store8(b + 62, 37);
+    store8(b + 63, 135);
+    store8(b + 64, 235);
+    store8(b + 65, 0);
+    store8(b + 66, 0);
+    store8(b + 67, 0);
+    store8(b + 68, 0);
+    store8(b + 69, 73);
+    store8(b + 70, 69);
+    store8(b + 71, 78);
+    store8(b + 72, 68);
+    store8(b + 73, 174);
+    store8(b + 74, 66);
+    store8(b + 75, 96);
+    store8(b + 76, 130);
+    return b;
+}
+
+# ================================================================
+# Decode the fixture into a caller-supplied 16-byte buffer.
+# Returns 1 on success, or the NEGATED ChitraErr code on failure, so a
+# caller can name which failure it got rather than only that it got one.
+# The pixels are COPIED OUT because the ChitraImage itself lives in the
+# arena that the next alloc_reset() rewinds.
+# ================================================================
+fn ar_decode_into(out16): i64 {
+    var lo = 0;
+    var bytes = fx_rgba8_2x2(&lo);
+    var err = 0;
+    var img = chitra_png_decode(bytes, lo, &err);
+    if (img == 0) { return 0 - chitra_err_code(err); }
+    if (chitra_image_width(img) != 2) { return 0 - 900; }
+    if (chitra_image_height(img) != 2) { return 0 - 901; }
+    if (chitra_image_channels(img) != 4) { return 0 - 902; }
+    var px = chitra_image_pixels(img);
+    var i = 0;
+    while (i < 16) {
+        store8(out16 + i, load8(px + i));
+        i = i + 1;
+    }
+    return 1;
+}
+
+# ================================================================
+# The reproduction from architecture/005, as an assertion.
+# ================================================================
+fn test_decode_after_alloc_reset() {
+    var base[16];
+    var after[16];
+    assert_eq(ar_decode_into(&base), 1, "baseline PNG decode succeeds on a fresh arena");
+    # The fixture is 2x2 RGBA8: red, green, blue, yellow@alpha 128. Pin the
+    # first and last bytes so a decode that "succeeds" with wrong pixels --
+    # the failure mode fuzzing cannot see -- is still caught here.
+    assert_eq(load8(&base + 0), 255, "baseline pixel 0 red channel = 255");
+    assert_eq(load8(&base + 15), 128, "baseline pixel 3 alpha = 128");
+
+    alloc_reset();
+
+    var r = ar_decode_into(&after);
+    # ⚠ Do NOT pin the pre-fix error code: architecture/005 observed BOTH
+    # CHITRA_ERR_CRC (7) and CHITRA_ERR_SIGNATURE (1) from the same bytes on
+    # one run, because a wild write's symptom depends on what now occupies the
+    # re-issued addresses. Assert the decode SUCCEEDS; that is the invariant.
+    assert_eq(r, 1, "PNG decode after alloc_reset() succeeds (arch/005 retired)");
+    assert_neq(r, 0 - CHITRA_ERR_CRC, "...and specifically not as a CRC failure");
+    assert_neq(r, 0 - CHITRA_ERR_SIGNATURE, "...nor with the fixture's own bytes overwritten");
+    return 0;
+}
+
+# ================================================================
+# Pixel-exactness across the reset, not merely a non-zero return.
+# A corrupted decode that still returns an image is the whole reason
+# architecture/005 says the error code is "only its most benign symptom".
+# ================================================================
+fn test_pixels_identical_across_reset() {
+    var base[16];
+    var after[16];
+    assert_eq(ar_decode_into(&base), 1, "baseline decode for the pixel comparison");
+    alloc_reset();
+    assert_eq(ar_decode_into(&after), 1, "post-reset decode for the pixel comparison");
+    var i = 0;
+    var diffs = 0;
+    while (i < 16) {
+        if (load8(&after + i) != load8(&base + i)) { diffs = diffs + 1; }
+        i = i + 1;
+    }
+    assert_eq(diffs, 0, "all 16 RGBA8 bytes identical across alloc_reset()");
+    return 0;
+}
+
+# ================================================================
+# kii's fuzz harness pattern (tests/kii.fcyr, fuzz_png_iter): decode then
+# alloc_reset() on EVERY iteration. That harness runs 10^6 of these and
+# could not see the hazard -- its contract is "returns PNG_OK or any
+# PNG_ERR_* cleanly", which a corrupted decode satisfies. Bounded here to
+# keep the suite fast; the 200,000-iteration form was run by hand at the
+# 1.0.2 cut with 0 failures and 0 pixel mismatches.
+# ================================================================
+fn test_repeated_decode_reset_cycles() {
+    var base[16];
+    var cur[16];
+    assert_eq(ar_decode_into(&base), 1, "baseline decode for the cycle loop");
+    var iters = 2000;
+    var n = 0;
+    var fails = 0;
+    var mismatches = 0;
+    var i = 0;
+    while (n < iters) {
+        alloc_reset();
+        var r = ar_decode_into(&cur);
+        if (r != 1) {
+            fails = fails + 1;
+        } else {
+            i = 0;
+            while (i < 16) {
+                if (load8(&cur + i) != load8(&base + i)) { mismatches = mismatches + 1; }
+                i = i + 1;
+            }
+        }
+        n = n + 1;
+    }
+    assert_eq(fails, 0, "2000 decode+alloc_reset cycles: no decode failed");
+    assert_eq(mismatches, 0, "2000 decode+alloc_reset cycles: no pixel byte differed");
+    return 0;
+}
+
+# ================================================================
+# The arena is genuinely being reclaimed -- otherwise this suite would
+# pass just as well against a no-op alloc_reset(), which is the "guard
+# that cannot fire" failure mode. alloc_used() must drop at the reset.
+# ================================================================
+fn test_alloc_reset_actually_reclaims() {
+    var scratch[16];
+    assert_eq(ar_decode_into(&scratch), 1, "decode to put bytes in the arena");
+    var used_before = alloc_used();
+    assert_gt(used_before, 0, "the decode consumed arena bytes");
+    alloc_reset();
+    assert_lt(alloc_used(), used_before, "alloc_reset() actually rewound the arena");
+    return 0;
+}
+
+fn main() {
+    test_decode_after_alloc_reset();
+    test_pixels_identical_across_reset();
+    test_repeated_decode_reset_cycles();
+    test_alloc_reset_actually_reclaims();
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

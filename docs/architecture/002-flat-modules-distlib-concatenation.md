@@ -23,12 +23,12 @@ source tree obeys one rule:
 `src/lib.cyr` is the single include chain ([`../../src/lib.cyr`](../../src/lib.cyr)):
 it pulls the stdlib (`string`, `fmt`, `alloc`, `vec`, `str`, `io`, `args`,
 `syscalls`, `flags`, `assert`, `bench`, then `thread`, then `sankoch`) and then
-the nine domain modules (five PNG + four JPEG) in dependency order. That file is what the smoke build
+the twelve domain modules (five PNG + four JPEG + BMP + two GIF) in dependency order. That file is what the smoke build
 (`programs/smoke.cyr` → `build/chitra_smoke`, `make build`) compiles to prove the
 whole chain parses; it is **not** itself part of the distributed bundle.
 
 A `grep -n include src/*.cyr` shows every `include` living in `lib.cyr` and none
-in the nine domain modules. That is the invariant, made visible.
+in the twelve domain modules. That is the invariant, made visible.
 
 ## How `cyrius distlib` uses it
 

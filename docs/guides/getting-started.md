@@ -23,13 +23,13 @@ and GIF in 0.5.0, with room for more without a rename.
 ## Build & verify locally
 
 You need the Cyrius toolchain pinned in
-[`cyrius.cyml`](../../cyrius.cyml) (`cyrius = "6.5.35"`). If `cyrius`
+[`cyrius.cyml`](../../cyrius.cyml) (`cyrius = "6.6.2"`). If `cyrius`
 isn't on your PATH yet, see the agnosticos bootstrap.
 
 ```bash
 cyrius deps        # resolve stdlib + sankoch + thread into lib/
 make build         # link-check: builds build/chitra_smoke from programs/smoke.cyr
-make test          # 3014 assertions across tests/tcyr/
+make test          # 3035 assertions across tests/tcyr/
 make fuzz          # ~2.6 M adversarial decode cases across fuzz/*.fcyr
 make bench         # 17 decode benchmarks (tests/bcyr/chitra.bcyr)
 make dist          # = cyrius distlib → dist/chitra.cyr
@@ -46,12 +46,12 @@ A few notes on what each step proves:
   only to prove the full include chain (stdlib + sankoch + thread +
   domain modules) parses and links clean; it writes a one-line banner
   and exits 0.
-- **`make test`** runs the twelve suites under `tests/tcyr/` — each is a
-  standalone `main()`: `bmp.tcyr` (1062), `budget.tcyr` (23), `error.tcyr` (20),
-  `gif.tcyr` (643), `interlace.tcyr` (35), `jpeg.tcyr` (284),
-  `jpeg_multiscan.tcyr` (75), `jpeg_noninterleaved.tcyr` (238), `png.tcyr` (393),
-  `stream_end.tcyr` (22), `subbyte.tcyr` (143), `surface.tcyr` (76) — 3,014
-  assertions in total.
+- **`make test`** runs the thirteen suites under `tests/tcyr/` — each is a
+  standalone `main()`: `alloc_reset.tcyr` (15), `bmp.tcyr` (1062),
+  `budget.tcyr` (23), `error.tcyr` (20), `gif.tcyr` (643), `interlace.tcyr` (35),
+  `jpeg.tcyr` (284), `jpeg_multiscan.tcyr` (75),
+  `jpeg_noninterleaved.tcyr` (238), `png.tcyr` (399), `stream_end.tcyr` (22),
+  `subbyte.tcyr` (143), `surface.tcyr` (76) — 3,035 assertions in total.
 - **`make fuzz`** drives all four public decode entries over random,
   signature-prefixed, bit-flipped, truncated and entropy-mutated input —
   ~2.6 M cases, 10,732,113 assertions. It asserts **both** that the decoder survives and that
@@ -77,7 +77,7 @@ released tag and pulling that one module:
 ```toml
 [deps.chitra]
 git     = "https://github.com/MacCracken/chitra"
-tag     = "1.0.0"
+tag     = "1.0.2"
 modules = ["dist/chitra.cyr"]
 ```
 
@@ -188,7 +188,7 @@ no-op: the stdlib `alloc` is a bump allocator with no per-block free —
 see [architecture note 003](../architecture/003-bump-allocator-no-free.md).
 
 You can probe the linked version at runtime with `chitra_version()`,
-which returns `10000` for 1.0.0 (`major*10000 + minor*100 + patch`).
+which returns `10002` for 1.0.2 (`major*10000 + minor*100 + patch`).
 `make version-check` gates that literal against `VERSION`, so it cannot
 drift silently again.
 

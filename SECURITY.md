@@ -183,8 +183,9 @@ conformance, resource and defence-in-depth rather than exploit fixes:
   case and 0.8.0 the rest, so **`Ns < Nf` is no longer a rejection at all**.
   What replaced the gate as the bound is the **per-component coverage
   bitmask** — a component may be decoded exactly once, so a file gets at most
-  `Nf` scans and every scan must name something new
-  ([`src/jpeg.cyr:738`](src/jpeg.cyr)). That is what makes the scan walk
+  `Nf` scans and every scan must name something new (refused in
+  `_jpeg_parse_sos`, [`src/jpeg.cyr:163`](src/jpeg.cyr), set at `:169`; the
+  driver `_jpeg_decode_scans` at `:763` reads the mask at `:805`). That is what makes the scan walk
   terminate; no scan counter and no resume tripwire were added, because neither
   could fire before coverage does. The measured reason it was not relaxed
   earlier still stands as the reason it needed its own cut: a naive relaxation

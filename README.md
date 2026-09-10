@@ -1,6 +1,6 @@
 # chitra
 
-Version: 1.0.1
+Version: 1.0.2
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder, a sibling AGNOS package in the mould of `sakshi` /
@@ -18,7 +18,7 @@ always 4 channels, always at the source dimensions, whatever went in.
 | Format | Coverage |
 |---|---|
 | **PNG** | Every spec-legal bit depth × color type: 1/2/4/8/16 across types 0/2/3/4/6 (§ 11.2.2 Table 11.1), plus **Adam7 interlace** for every cell. PLTE palettes, tRNS transparency (keyed and per-entry). IDAT inflate via `sankoch`. |
-| **JPEG** | JFIF **baseline** (SOF0 sequential Huffman, 8-bit): grayscale + YCbCr, chroma subsampling 4:4:4 / 4:2:2 / 4:2:0 and general `Hi,Vi` box upsampling, DRI / RST0–7 restart markers, RGB components via the Adobe APP14 transform, and the full T.81 § A.2 scan model — interleaved, **non-interleaved and partially interleaved**, single- or multi-scan (0.8.0). Verified **byte-identical to `djpeg -nosmooth`** across the sampling matrix. |
+| **JPEG** | JFIF **baseline** (SOF0 sequential Huffman, 8-bit): grayscale + YCbCr, chroma subsampling 4:4:4 / 4:2:2 / 4:2:0 and general `Hi,Vi` box upsampling, DRI / RST0–7 restart markers, RGB components via the Adobe APP14 transform, and the full T.81 § A.2 scan model — interleaved, **non-interleaved and partially interleaved**, single- or multi-scan (0.8.0). Verified against **`djpeg -nosmooth`**: exact on most files, and never more than 1 LSB per IDCT output apart — `_jpeg_descale` rounds half away from zero where libjpeg's arithmetic-shift DESCALE rounds half up, which is inside IEEE 1180 tolerance. |
 | **BMP** | `BI_RGB` at 1 / 4 / 8 bpp (palette), 16 / 24 / 32 bpp, plus **`BI_RLE8` / `BI_RLE4`** run-length and **`BI_BITFIELDS`** channel masks; CORE / **OS/2 2.x CORE2** / INFO / V2 / V3 / **V4** / **V5** headers (accepted DIB sizes 12/40/52/56/64/108/124); bottom-up **and** top-down. Verified **identical to ImageMagick**. |
 | **GIF** | GIF87a/89a, LZW, global **and** local color tables, 4-pass row interlace, transparency from a Graphic Control Extension. **First frame only** — see [ADR 0005](docs/adr/0005-gif-first-frame-only.md). Verified against two independent decoders. |
 
@@ -151,20 +151,21 @@ is a bug fix — the § 13.13 depth-16 rescaling change in 0.7.x changed every
 
 ## Dependencies
 
-- **Cyrius stdlib** — `string`, `fmt`, `alloc`, `io`, `vec`, `str`,
-  `syscalls`, `assert`, `bench`, `args`, `flags`, plus **`sankoch`**
-  (zlib inflate + CRC32) and **`thread`** (sankoch's mutex pair).
-  Resolved by `cyrius deps` into `lib/`.
+- **Cyrius stdlib** (10 leaves) — `string`, `fmt`, `alloc`, `io`, `str`,
+  `syscalls`, `assert`, `bench`, plus **`sankoch`** (zlib inflate + CRC32)
+  and **`thread`** (sankoch's mutex pair). Resolved by `cyrius deps` into
+  `lib/`. `args`, `flags` and `vec` were dropped at 1.0.1 — unused, and
+  billed to every consumer.
 
 All deps are pinned in `cyrius.cyml`; the toolchain pin is
-`cyrius = "6.5.35"`.
+`cyrius = "6.6.2"`.
 
 ## Quick Start
 
 ```bash
 cyrius deps          # resolve stdlib + sankoch + thread into lib/
 make build           # link-check the include chain (→ build/chitra_smoke)
-make test            # 3014 assertions across tests/tcyr/
+make test            # 3035 assertions across tests/tcyr/
 make fuzz            # ~2.6 M adversarial decode cases (fuzz/*.fcyr)
 make bench           # 17 decode benchmarks (tests/bcyr/chitra.bcyr)
 make dist            # regenerate dist/chitra.cyr — the artifact consumers link

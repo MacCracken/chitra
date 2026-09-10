@@ -18,9 +18,12 @@
 # `cyrius deps` then treats that sidecar as authoritative: a consumer links every leaf named below
 # and cannot decline one it knows it does not need.
 # ⚠ TRIMMED 1.0.1 — `args`, `flags` and `vec` were included here and referenced NOWHERE in the repo
-# (0 hits across src/, programs/, tests/ and fuzz/). Measured by crab: `flags` alone cost **+8,320 B**
-# in a consumer binary, and `CYRIUS_DCE=1` reclaims none of it — it NOPs, and the byte count does
-# not move at all.
+# (0 hits across src/, programs/, tests/ and fuzz/). Measured by crab on cyrius 6.5.35: `flags` alone
+# cost **+8,320 B** in a consumer binary, and `CYRIUS_DCE=1` reclaimed none of it — it NOPed without
+# moving the byte count.
+# ⚠ THAT HALF CHANGED AT THE 6.6.2 PIN: DCE now actually eliminates (smoke 597,248 B -> 44,288 B).
+# The trim still stands, and for the reason above rather than that measurement — the sidecar is
+# authoritative, a default build has DCE OFF, and a consumer that knows better cannot decline.
 # ⇒ **An unused include here is not free and is not local.** Add one only when a symbol needs it.
 
 # ================================================================

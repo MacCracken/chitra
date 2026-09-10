@@ -1,10 +1,10 @@
 # chitra — Roadmap
 
-> **Last Updated**: 2026-08-24 (1.0.0)
+> **Last Updated**: 2026-09-10 (1.0.2)
 >
 > Sequencing — what ships, in what order, against what gates. Volatile state
 > (current version, sizes, assertion counts, in-flight work) lives in
-> [`state.md`](state.md), not here. **chitra is at 1.0.0 and the public surface
+> [`state.md`](state.md), not here. **chitra is at 1.0.2 and the public surface
 > is frozen** — the 29 names in [`public-surface.md`](public-surface.md) plus
 > both record layouts, gated by `scripts/check-surface.sh` on every
 > `make lint`. All four decode paths are **feature-complete for their scope**:
@@ -13,11 +13,12 @@
 > deferral list, and GIF's first frame. Hardening infrastructure landed in
 > 0.3.3; four audits have reviewed every format line by line.
 >
-> **What the roadmap is for now**: the two tracking items below that 1.0.0 did
-> not close (the sankoch pin bump and the downstream consumer pins), and the
-> post-1.0 possibilities in *Out of scope* — most of which now need a **major**
-> bump or a new entry point rather than a minor, which is exactly what the
-> freeze was for.
+> **What the roadmap is for now**: the tracking items below that 1.0.0 did not
+> close, and the post-1.0 possibilities in *Out of scope* — most of which now
+> need a **major** bump or a new entry point rather than a minor, which is
+> exactly what the freeze was for. ⭐ **1.0.2 closed the sankoch pin bump**
+> (`6.5.35` → `6.6.2`, vendoring sankoch 2.7.14). **The downstream consumer
+> pins remain open**, and there are five of them, not two.
 
 The roadmap is **smallest-first** per AGNOS bite-discipline: each release is a
 single coherent cycle that decodes demonstrably more (or hardens demonstrably
@@ -32,6 +33,8 @@ Per-release detail, per-bite provenance, and deferrals live in
 
 | Release | Headline |
 |---|---|
+| [1.0.2](../../CHANGELOG.md#102---2026-09-10--the-toolchain-catches-up-and-the-alloc_reset-hazard-arrives-fixed) | **Toolchain catch-up — cyrius pin 6.5.35 → 6.6.2, `lib/` re-vendored 108 → 110 files** (101+7 → 103+7; `boxed.cyr` and `hashseed.cyr` new, none removed, 40 carried over byte-different). ⚠ `cyrius deps` alone refreshes only the **32-file declared-leaf closure**, which is why the shadow-lib warning survived 1.0.1 with **11 bundled libraries stale**; `cyrius lib sync --full` clears it. ⛔ **No decode code changed**: `git diff dist/chitra.cyr` is exactly two lines (header stamp + `chitra_version()`), so the bundle's decode source is byte-identical to 1.0.1's and `check-surface` still reports 74 exports / 29 frozen. ⭐ Closes the **sankoch pin** item — 6.6.2 vendors **sankoch 2.7.14**, past the 2.7.10 arena canary, so `alloc_reset()` between PNG decodes is safe again and [architecture/005](../architecture/005-alloc-reset-sankoch-hazard.md) retires. Re-run **and** negative-controlled before retiring it; pinned in-tree by the new `tests/tcyr/alloc_reset.tcyr` (15 assertions), since the fix lives in gitignored `lib/`. Re-verified on the new toolchain against external oracles: **89 decode-matrix cells, 12,922,780 RGBA8 bytes**, all 36 PNG cells byte-exact. ⛔ Does **not** raise sankoch's 16 MiB `DECOMPRESS_MAX_OUTPUT`, and does **not** re-pin the downstream consumers. |
+| [1.0.1](../../CHANGELOG.md#101---2026-08-31--a-valid-png-too-large-for-the-linked-decompressor-is-refused-for-free-and-named) | **A valid PNG too large for the linked decompressor is refused for free, and named.** `CHITRA_MAX_RAW_BYTES` was 256 MB against sankoch's 16 MiB `DECOMPRESS_MAX_OUTPUT`, so an ordinary 4096×2160 RGB PNG spent **26,617,512 bytes** to return a bare `CHITRA_ERR_INFLATE` — now refused from the header in **under 64 KiB**, with its own code `CHITRA_ERR_INFLATE_LIMIT` (35), read from sankoch rather than copied. Also drops `args`, `flags` and `vec` from `[deps].stdlib` — referenced nowhere, and `cyrius deps` treats the dist sidecar as authoritative, so every consumer linked them and could not decline. ABI-additive: no name added or removed, no offset moved. |
 | [1.0.0](../../CHANGELOG.md#100---2026-08-24) | **The public API and ABI are frozen.** The **29 names** in [`public-surface.md`](public-surface.md) — ten decode entry points, four signature predicates, eight `ChitraImage` accessors, six error-API functions and `chitra_version` — plus the 56-byte `ChitraImage` and 16-byte `ChitraErr` layouts and the `ChitraErrCode` numeric values now require a **major bump and an ADR** to change. The other **45** `chitra_*` names the bundle exports are listed in that same file as internal and are explicitly not covered. **No code changed in this cut except the version literal**, which is the point: 0.9.0 spent every prerequisite, so the release promising stability does not itself churn the thing it promises about. The promise's *edges* are stated as deliberately as its contents — the internal names, `chitra_err_name`'s human-readable strings (the **codes** are frozen; match on those), bit-exact output across releases (the contract is *correct* RGBA8 held to external oracles — 0.7.1's § 13.13 rescaling changed every 16-bit PNG's output and was a fix), and memory behaviour are all outside it. Coverage at the freeze: full PNG matrix + Adam7, JFIF baseline JPEG including the complete T.81 § A.2 scan model, BMP with an empty deferral list, GIF first frame. Four audits, every format line-by-line reviewed. |
 | [0.9.0](../../CHANGELOG.md#090---2026-08-24) | **Freeze prep** — every prerequisite the roadmap had listed, spent in one cut so 1.0.0 could be code-churn-free. Two measured facts drove it: **mabda calls two names, kii calls nine**, so a rename is cheap in the abstract and expensive against that list. Adds **`chitra_image_source_depth`** at +48 (`ChitraImage` 48 → 56 bytes, append-only) because the output is always 8 bits per channel and a consumer could not otherwise tell that § 13.13 rescaling had discarded precision — added *now* because adding it after the freeze is an ABI event. Adds **`public-surface.md` + `scripts/check-surface.sh`** to `make lint`: the bundle is a strip-concatenation, so all **74** exported `chitra_*` names are callable and **45 are internal**, and until this gate existed "the surface is frozen" was an assertion with nothing behind it — it fails in both directions and both were proven to fire. **Two `chitra_err_name` strings changed** (`INTERLACE`, `BIT_DEPTH`) because both read as capability limits when both are validity rejections. Two things deliberately *not* done: `seen_iend` keeps its odd name (kii calls it), and the 45 internal names are classified rather than renamed. ABI diff vs 0.8.0: one name added, none removed, no offset moved. +76 assertions, a 12th suite. [ADR 0010](../adr/0010-the-v1-surface.md). |
 | [0.8.0](../../CHANGELOG.md#080---2026-08-24) | **T.81 § A.2 multi-scan and partially-interleaved JPEG** — the last deferred decode class. A baseline file whose scans carry fewer components than the frame (what `cjpeg -scans` emits) was refused from 0.6.0 through 0.7.3; it now decodes. **The oracle is external in both directions**: at each sampling ratio the same image encoded interleaved, as three `Ns=1` scans, and as `Ns=1` then `Ns=2` decodes to identical bytes under `djpeg -nosmooth`, and since chitra already got the interleaved one right the others are held to its exact bytes — **all nine byte-identical**. Two design results: **one § A.2 rule covers both layouts** (0.6.0's effective-geometry collapse was *deleted*, not extended — it was valid only because a lone component IS the maximum, and `Nf = 1` now falls out of the general formula, so **ADR 0006's claim that this cut could build on that collapse was false** and is amended along with five other omissions); and **coverage is the loop bound**, since a component decodes exactly once, so the driver terminates on a bitmask rather than a counter standing in for it. Also fixes `seen_iend` still lying for a file truncated mid-entropy with a real `FF D9` appended — bounding the reader to the scan's own span makes "ran out of scan" and "ran out of data" the same event. `ΣHj·Vj ≤ 10` moves to the scan header conditioned on `Ns > 1` per § B.2.3; Huffman selectors move from the component to the scan, shrinking the component stride 48 → 32 so the whole cut costs **zero allocation growth**. +75 assertions, an 11th suite. |
@@ -115,23 +118,25 @@ the downstream consumer re-pins.
   JPEG grayscale 43 ns/px, 4:2:0 91 ns/px. Numbers are host- and
   load-dependent, so the CSV is a within-host series, not a cross-host
   comparison.
-- [ ] **Waiting on a toolchain pin bump for the sankoch repair.** The
-  `alloc_reset()` hazard recorded in
+- [x] **Waiting on a toolchain pin bump for the sankoch repair — closed in 1.0.2.**
+  The `alloc_reset()` hazard recorded in
   [architecture/005](../architecture/005-alloc-reset-sankoch-hazard.md) — where
   a reset left sankoch's memoized CRC table dangling and chitra's per-decode
-  `crc32_init_table()` wrote 16 KB through it — **is fixed upstream in sankoch
-  2.7.10** (released). chitra cannot pick it up on its own: `lib/` is vendored
-  by `cyrius deps` from the toolchain, so the fix arrives with the next cyrius
-  release and a bump of `[package].cyrius` (currently `6.5.35`).
+  `crc32_init_table()` wrote 16 KB through it — was fixed upstream in sankoch
+  **2.7.10**, and 1.0.2's bump of `[package].cyrius` to **`6.6.2`** vendored
+  **2.7.14**.
 
-  **On that bump, and not before**, three things become stale and should be
-  cleared in the same cut: architecture/005 moves from a live hazard to a
-  historical note, `architecture/003`'s ⚠ block stops warning against the
-  arena-reset pattern it currently forbids, and state.md's "Known upstream
-  issue" entry goes. Verify rather than assume — re-run the reproduction from
-  005 against the new `lib/sankoch.cyr` before deleting anything, because the
-  fix ships in the toolchain's bundled copy and a pin bump is not by itself
-  evidence that the copy moved.
+  All three dependent cleanups landed in that same cut, as this item required:
+  architecture/005 is retired to a historical note, `architecture/003`'s ⚠ block
+  no longer forbids the arena-reset pattern, and state.md's "Known upstream
+  issue" entry is gone. ⭐ **Verified, not assumed** — the 005 reproduction was
+  re-run (200,000 decode + `alloc_reset()` cycles, 0 failures, 0 differing
+  pixel bytes) *and* the negative control was run (canary neutered in a scratch
+  copy → `CHITRA_ERR_CRC` returns), because the fix ships in the toolchain's
+  bundled copy and a pin bump is not by itself evidence that the copy moved.
+  ⚠ The guard now has an in-tree assertion, `tests/tcyr/alloc_reset.tcyr`,
+  because gitignored `lib/` can withdraw it on a future pin bump with no diff
+  here to show for it.
 
   **A consumer is exercising it today**: kii's fuzz harness
   (`tests/kii.fcyr`, `fuzz_png_iter`) calls `kii_decode_png` then
@@ -210,16 +215,27 @@ the downstream consumer re-pins.
 - [ ] **Downstream consumers green** — mabda's `gpu_texture_load_png` and
   kii's PNG re-fold (its v1.2.0 deleted its own decoder and adopted
   `dist/chitra.cyr`; ADR 0006 on kii's side) both build and pass against the
-  frozen surface. Track until both consumers re-pin to 1.0.0. **Both pins are currently
-  behind**: mabda at `0.3.1`, kii at `0.3.0`, against a released `1.0.0`.
+  frozen surface. Track until the consumers re-pin. **Every pin is behind** the
+  released tag: mabda at `0.3.1`, kii at `1.0.0` (re-pinned at kii v1.5.0).
+  ⚠ **And it is not two consumers.** Five repos in this tree carry a
+  `[deps.chitra]`: mabda, kii, jalwa, aethersafha and crab — the last two also
+  call `chitra_image_free`, and crab calls `chitra_image_decode_budget`. Every
+  name any of them calls is inside the frozen 29.
   Every cut since 0.3.1 has been ABI-additive — nothing removed, no offset
-  moved, `ChitraImage` grown only on the end (40 → 48 → 56 bytes) — so both
-  bumps are mechanical, but until they land neither consumer has BMP, GIF, the
+  moved, `ChitraImage` grown only on the end (40 → 48 → 56 bytes) — so the
+  bumps are mechanical, but until they land mabda has neither BMP, GIF, the
   0.3.3 decode repairs, the nine 0.5.3 ones, 0.6.0's § A.2 support, 0.7.x's
-  depth-16 fidelity and byte budget, or 0.8.0's multi-scan JPEG. kii is the
-  one that matters: it is ten cuts behind on a path it uses in anger, and its
-  nine-name call set is the evidence base ADR 0010 used to decide what the
-  freeze may not rename.
+  depth-16 fidelity and byte budget, nor 0.8.0's multi-scan JPEG. kii is the
+  one that matters most: it uses the PNG path in anger, and its call set is the
+  evidence base ADR 0010 used to decide what the freeze may not rename.
+  ⛔ **kii and aethersafha both carry `path = "../chitra"` alongside the tag**,
+  which wins locally — so their tag is inert for a local build and only a fresh
+  clone or CI sees it. Bumping the tag alone changes nothing for them.
+  ⚠ **1.0.1 added error code 35 (`CHITRA_ERR_INFLATE_LIMIT`) and no consumer
+  maps it.** kii's `_kii_map_chitra_err` falls through to `PNG_ERR_HEADER`, and
+  crab falls through to `CRAB_TH_BAD` — both reporting an ordinary valid PNG as
+  malformed, which is the exact confusion code 35 exists to remove. Route it
+  where each already routes `CHITRA_ERR_BUDGET` when re-pinning.
 - [x] **Root docs + doc tree complete** — CLAUDE.md, README, CHANGELOG,
   CONTRIBUTING, SECURITY, ADRs ([`../adr/README.md`](../adr/README.md)),
   architecture notes ([`../architecture/README.md`](../architecture/README.md)),

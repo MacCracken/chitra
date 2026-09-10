@@ -59,7 +59,7 @@ fn test_chitra_err_name() {
 fn test_chitra_version() {
     # ⚠ THIS PIN FIRED at the 1.0.1 cut, which is what it is for — a version constant that is not
     # asserted drifts from `VERSION` silently, and it is the only thing a consumer can probe.
-    assert_eq(chitra_version(), 10001, "version 1.0.1 packs to 10001");
+    assert_eq(chitra_version(), 10002, "version 1.0.2 packs to 10002");
     return 0;
 }
 

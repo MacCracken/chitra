@@ -116,15 +116,18 @@ per-image free:
   process should drive the lifetime at the arena boundary rather than expecting
   `chitra_image_free` to give memory back.
 
-> ⚠️ **This note used to say "reset the region between batches", and that advice
-> is currently unsafe for PNG.** Calling the stdlib's global `alloc_reset()`
-> corrupts memory and breaks the next PNG decode, because sankoch memoizes its
-> CRC-32 table as a raw pointer into the arena and cannot see the reset — so
-> chitra's per-decode `crc32_init_table()` call writes 16 KB through a dangling
-> pointer. BMP and JPEG are unaffected. The mechanism, the reproduction and the
-> scope are in
-> [`005-alloc-reset-sankoch-hazard.md`](005-alloc-reset-sankoch-hazard.md); it
-> is an upstream defect, not something chitra can work around.
+> ⭐ **"Reset the region between batches" is safe advice again as of 1.0.2.**
+> It was **unsafe for PNG through 1.0.1**: calling the stdlib's global
+> `alloc_reset()` corrupted memory and broke the next PNG decode, because
+> sankoch memoized its CRC-32 table as a raw pointer into the arena and could
+> not see the reset — so chitra's per-decode `crc32_init_table()` call wrote
+> 16 KB through a dangling pointer. BMP and JPEG were never affected. Fixed
+> upstream by sankoch 2.7.10's arena canary and vendored here at the `6.6.2`
+> pin (sankoch **2.7.14**); the reproduction was re-run, and both it and the
+> negative control are recorded in
+> [`005-alloc-reset-sankoch-hazard.md`](005-alloc-reset-sankoch-hazard.md).
+> ⚠ The fix lives in gitignored `lib/`, so `tests/tcyr/alloc_reset.tcyr` pins
+> it — a future pin bump could withdraw it with no diff in this repo.
 
 Do **not** treat `chitra_image_free` / `chitra_raw_free` / `chitra_jpeg_frame_free`
 as memory-pressure relief. They are markers, not collectors.

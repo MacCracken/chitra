@@ -1,11 +1,30 @@
 # chitra — Current State
 
-> **Last refresh**: 2026-08-24 (1.0.0) | **Refresh cadence**: every release.
+> **Last refresh**: 2026-09-10 (1.0.2) | **Refresh cadence**: every release.
 > [`CLAUDE.md`](../../CLAUDE.md) is preferences / process / architecture
 > (durable); this file is **state** (volatile) — it is the home for the
 > version, sizes, and counts `CLAUDE.md` must not inline.
 
 ## Version
+
+**1.0.2** — cut 2026-09-10. ⭐ **A toolchain cut that turned out to carry a fix.** The pin goes
+`6.5.35` → **`6.6.2`** and `lib/` is re-vendored (108 → **110** `.cyr` files; `boxed.cyr` and
+`hashseed.cyr` are new, 40 carried-over files differ). ⛔ **No decode code changed** — `git diff
+dist/chitra.cyr` against 1.0.1 is exactly two lines, the header stamp and the `chitra_version()`
+literal, so the bundle's decode source is byte-identical and `check-surface` still reports 74
+exports / 29 frozen.
+⭐⭐ **What the pin actually bought**: sankoch **2.7.14**, past the 2.7.10 arena canary, which
+retires [architecture/005](../architecture/005-alloc-reset-sankoch-hazard.md) — `alloc_reset()`
+between PNG decodes is safe again. Measured before retiring the note: **200,000** decode + reset
+cycles, 0 failures, 0 differing pixel bytes; and the negative control (canary neutered in a scratch
+copy) returns `CHITRA_ERR_CRC` exactly as 005 records. Pinned in-tree by the new
+`tests/tcyr/alloc_reset.tcyr` (**15** assertions), because the fix lives in gitignored `lib/` and a
+future pin bump could withdraw it with no diff here.
+⚠ **`cyrius deps` alone was not enough** — it refreshes only the 32-file declared-leaf closure, which
+is why the shadow-lib warning survived 1.0.1 with 11 bundled libraries stale. `cyrius lib sync
+--full` clears it.
+⛔ **The 16 MiB ceiling is not raised** — `DECOMPRESS_MAX_OUTPUT` is still `16777216` at 2.7.14, so
+1.0.1's `CHITRA_ERR_INFLATE_LIMIT` story is unchanged and that roadmap item stays open.
 
 **1.0.1** — cut 2026-08-31. ⭐ **ABI-additive over 1.0.0**: no name added or removed, no offset
 moved, one new **error code** (`CHITRA_ERR_INFLATE_LIMIT`, 35). A valid PNG past sankoch's 16 MiB
@@ -53,35 +72,70 @@ Adam7; **JPEG** JFIF baseline including the full T.81 § A.2 scan model;
 **BMP** with an empty deferral list; **GIF** first frame ([ADR 0005](../adr/0005-gif-first-frame-only.md)).
 Four security audits, every format line-by-line reviewed.
 
-`chitra_version()` → **10000**. **3,014 test assertions** across **12 suites**,
+`chitra_version()` → **10002**. **3,035 test assertions** across **13 suites**,
 **10,732,113 fuzz assertions**, 17 benchmarks — 0 failures throughout.
 
 Released tags: 0.1.0, 0.2.0, 0.2.1, 0.3.0, 0.3.1, 0.3.2, 0.3.3, 0.4.0, 0.5.0,
-0.5.1, 0.5.2, 0.5.3, 0.6.0, 0.6.1, 0.7.0, 0.7.1, 0.7.2, 0.7.3, 0.8.0, 0.9.0, 1.0.0
+0.5.1, 0.5.2, 0.5.3, 0.6.0, 0.6.1, 0.7.0, 0.7.1, 0.7.2, 0.7.3, 0.8.0, 0.9.0,
+1.0.0, 1.0.1 (1.0.2 is cut but not yet tagged)
 (SemVer; **the public surface is frozen as of 1.0.0** — see
 [`public-surface.md`](public-surface.md) for what that covers and
 [ADR 0010](../adr/0010-the-v1-surface.md) for the calls made to get there).
 
 ## Toolchain
 
-- **Cyrius pin**: `6.5.35` (in [`cyrius.cyml`](../../cyrius.cyml)
+- **Cyrius pin**: `6.6.2` (in [`cyrius.cyml`](../../cyrius.cyml)
   `[package].cyrius`). This pin is the **only** source of truth — CI and the
   release workflow both read it; no toolchain version is hardcoded in YAML.
-- **`lib/`**: vendored by `cyrius lib sync --full` / `cyrius deps` from the
-  6.5.35 stdlib snapshot — **108 `.cyr` files** (101 top-level + 7 under
-  `lib/unicode`). It is a **real directory, never a symlink** — distlib
-  concatenation depends on it (see
+  Bumped from `6.5.35` at 1.0.2.
+- **`lib/`**: vendored by `cyrius lib sync --full` from the 6.6.2 stdlib
+  snapshot — **110 `.cyr` files** (103 top-level + 7 under `lib/unicode`);
+  `boxed.cyr` and `hashseed.cyr` are new in 6.6.2, nothing was removed, and 40
+  carried-over files differ. It is a **real directory, never a symlink** —
+  distlib concatenation depends on it (see
   [architecture/001](../architecture/001-lib-must-not-be-symlink.md)).
   `lib/` is gitignored: it is a build artifact, not source.
-- **6.5.35 notes**:
-  - `cyrfmt` now indents wrapped continuation lines **+2** relative to the
-    statement. This reflowed `src/png_chunks.cyr`, `src/png_filter.cyr`, and
-    `tests/tcyr/error.tcyr` at the 0.3.2 cut — whitespace only
-    (`git diff --ignore-all-space` over those files is empty).
+  ⚠ **`cyrius deps` and `cyrius lib sync --full` do not leave the same tree.**
+  `deps` resolves only the declared-leaf transitive closure — a fresh
+  `rm -rf lib && mkdir lib && cyrius deps` yields **32 files**, none under
+  `lib/unicode` — which is what CI does, and it builds a byte-identical binary.
+  The 110-file snapshot is the local convention. The difference is not cosmetic:
+  refreshing only the closure at a pin bump leaves the rest of the snapshot at
+  the old version, which is exactly the `./lib/ shadows version-pinned …` build
+  warning 1.0.2 had to clear.
+  ⛔ **Do not hand-edit anything under `lib/`** — `cyrius build` re-vendors it
+  mid-invocation and the edit is gone with no diagnostic. Verified at 1.0.2: a
+  marker written into `lib/sankoch.cyr` was absent after the next build. To test
+  a modified stdlib file, copy it *outside* `lib/` and include it from there,
+  and drop the leaf from `[deps].stdlib` so only one copy links (linking two
+  leaves which definition wins ambiguous, and the experiment meaningless).
+- **Toolchain notes (re-verified on 6.6.2 at the 1.0.2 cut)**:
+  - Canonical continuation indent is **2 spaces per open paren**, not a flat
+    +2. Almost every wrapped line in the tree is at depth 1, which is why "+2"
+    described it; the exception is `src/jpeg.cyr:801`, a depth-2 continuation
+    at +4 that the flat wording could not explain. This is what reflowed
+    `src/png_chunks.cyr`, `src/png_filter.cyr` and `tests/tcyr/error.tcyr` at
+    the 0.3.2 cut — whitespace only.
+    ⚠ `--check` is **looser than the writer**: it accepts a file that is
+    *consistently* 4-per-paren and rejects only one that **mixes** the two. A
+    hand-written 4-space file passes `make fmt-check` and would still be
+    rewritten by `cyrius fmt`.
   - Since 6.5.28 `cyrius fmt` **rewrites in place** (it was stdout-only
     before). The `make fmt-check` target relies on the exit code with the
-    file argument *before* `--check`, and redirects stdout — verify that
-    contract holds on any future pin bump.
+    file argument *before* `--check`, and redirects stdout. ⭐ **Contract
+    re-verified on 6.6.2**: `--check` still reports through the exit code, still
+    does not rewrite, and still fires on real drift — the gate is not silently
+    passing. Re-verify on any future pin bump.
+  - ⚠ **`cyrlint` has a second diagnostic class neither gate catches.**
+    Alongside `warn` lines it emits `deferral line N: untracked '<word>'`,
+    summarised as "N untracked deferrals". Both the Makefile's `^\s*warn ` and
+    ci.yml's `^[[:space:]]*warn ` miss them, and 11 are live in the tree — all
+    **false positives** on prose keywords (most starkly `tests/tcyr/bmp.tcyr`'s
+    `# PERMANENTLY, not deferred: …`). ⛔ Do not switch the gate to
+    `--strict-deferrals` without first clearing those eleven: it would fail the
+    build on eleven non-deferrals. And note the flag is **argument-order
+    sensitive** — `cyrius lint <file> --strict-deferrals` silently drops it and
+    exits 0, so a maintainer can believe the strict gate ran when it did not.
 - **Cyrius note**: `>>` is a **logical** shift. The JPEG IDCT and the
   YCbCr→RGB color pass need signed round-to-nearest division, so they use the
   in-tree `_jpeg_descale` helper rather than `>>` (see
@@ -157,7 +211,7 @@ Shared:
 - The full frozen list — 29 names of the 74 the bundle exports — is
   [`public-surface.md`](public-surface.md), checked against `dist/chitra.cyr`
   by `scripts/check-surface.sh` on every `make lint`.
-- `chitra_version()` → **`10000`** (`major*10000 + minor*100 + patch`).
+- `chitra_version()` → **`10002`** (`major*10000 + minor*100 + patch`).
 - Error API: `chitra_err_new` / `chitra_err` / `chitra_err_code` /
   `chitra_err_detail` / `chitra_err_name` / `chitra_err_print_name` + enum
   `ChitraErrCode`.
@@ -406,13 +460,13 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
 `error.cyr` → `png_chunks.cyr` → `png_filter.cyr` → `png_color.cyr` →
 `png.cyr` → `jpeg_huffman.cyr` → `jpeg_idct.cyr` → `jpeg_markers.cyr` →
 `jpeg.cyr` → `bmp.cyr` → `gif_lzw.cyr` → `gif.cyr` (the order in
-`[lib].modules`). Domain-module total: **6,041 L** across 12 files, plus
-`lib.cyr` (74 L).
+`[lib].modules`). Domain-module total: **6,103 L** across 12 files, plus
+`lib.cyr` (84 L).
 
 ## Sizes
 
-- `dist/chitra.cyr` — **~269 KB** (275,120 bytes / 6,081 lines; `cyrius
-  distlib` reports 6,041 code lines), regenerated by `cyrius distlib`
+- `dist/chitra.cyr` — **~273 KB** (279,868 bytes / 6,143 lines; `cyrius
+  distlib` reports 6,103 code lines), regenerated by `cyrius distlib`
   (= `make dist`). This is the artifact consumers link, and it **exports 74
   `chitra_*` names, of which 29 are frozen** — the split is
   [`public-surface.md`](public-surface.md), gated by `scripts/check-surface.sh`
@@ -423,24 +477,38 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
   `chitra_jpeg_frame_adobe_transform`) and one error code (`CHITRA_ERR_BUDGET`,
   34); 0.9.0 added exactly one (`chitra_image_source_depth`) and moved no
   offset; 1.0.0 added none — its bundle is name-identical to 0.9.0's; **1.0.1
-  adds none either, and one error code** (`CHITRA_ERR_INFLATE_LIMIT`, 35).
+  adds none either, and one error code** (`CHITRA_ERR_INFLATE_LIMIT`, 35);
+  **1.0.2 adds neither** — its bundle differs from 1.0.1's by two lines, the
+  header stamp and the `chitra_version()` literal.
   Consumers re-pin mechanically.
 - `dist/chitra.deps` — the **10**-leaf stdlib sidecar consumers resolve against.
   ⚠ **Was 13 until 1.0.1.** `args`, `flags` and `vec` were `include`d in
   `src/lib.cyr` and referenced nowhere in the repo — and since `cyrius deps`
   treats this sidecar as **authoritative**, every consumer linked them and could
   not decline. Measured by crab: `flags` alone cost **+8,320 B**, and
-  `CYRIUS_DCE=1` reclaims none of it. ⛔ **An unused include in `src/lib.cyr` is
-  not free and is not local.**
-- `build/chitra_smoke` — **~587 KB** (601,408 bytes), built from
-  `programs/smoke.cyr` (19 L) via `make build`. It only proves the include
+  `CYRIUS_DCE=1` reclaimed none of it **on 6.5.35** — that changed later in the
+  6.5.x line, and at the `6.6.2` pin DCE does reclaim most of `flags`. ⚠ The
+  trim still stands regardless: the sidecar is authoritative, a default build
+  has DCE off, and a consumer that knew better could not decline.
+  ⛔ **An unused include in `src/lib.cyr` is not free and is not local.**
+- `build/chitra_smoke` — **~583 KB** (597,248 bytes on cyrius 6.6.2; was
+  601,408 on 6.5.35), built from `programs/smoke.cyr` (19 L) via `make build`. It only proves the include
   chain compiles and links clean — chitra is a library, there is no real CLI
   behind it.
 
 ## Tests + bench
 
 - `make test` (globs `tests/tcyr/*.tcyr`; each is a standalone `main()`) →
-  **3,014 assertions, all pass** across 12 suites:
+  **3,035 assertions, all pass** across 13 suites:
+  - `alloc_reset.tcyr` — **15** (1.0.2). The
+    [architecture/005](../architecture/005-alloc-reset-sankoch-hazard.md)
+    reproduction as an assertion: decode → `alloc_reset()` → decode succeeds,
+    all 16 RGBA8 bytes identical across the reset, 2,000 decode+reset cycles,
+    and a check that `alloc_reset()` genuinely reclaims — without which the
+    suite would pass just as well against a no-op. ⚠ Standalone precisely
+    because it calls `alloc_reset()`: run inside another suite it would rewind
+    an arena that suite's fixtures live in. BMP/JPEG/GIF are deliberately not
+    covered — none touch sankoch, so none ever had the hazard.
   - `gif.tcyr` — **643** (signature, plain / interlaced 4×4 and 8×8 /
     transparent / animated-first-frame fixtures with **every pixel asserted**,
     the no-image and bad-min-code-size rejections, a truncation sweep, the
@@ -472,7 +540,7 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
     wrong returns the right *set* of pixels in the wrong places, and only
     position-sensitive expectations catch that.
   - `error.tcyr` — **20** (error codes, `chitra_err_*` accessors, name
-    round-trips, `chitra_version` → 10000).
+    round-trips, `chitra_version` → 10002).
   - `interlace.tcyr` — **35** (Adam7 cross-checked against the trusted
     non-interlaced decode for 7 color/depth/odd-dimension cases).
   - `jpeg.tcyr` — **284** (marker scan + non-baseline rejection, SOF0
@@ -486,7 +554,7 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
     corrected grid asks for three, so the reader zero-pads and it proves the
     guard is gone rather than proving conformance; the conformance weight lives
     in `jpeg_noninterleaved.tcyr` on real encoder output).
-  - `png.tcyr` — **393** (cursor bounds, all five unfilter predictors, one
+  - `png.tcyr` — **399** (cursor bounds, all five unfilter predictors, one
     embedded fixture per color type at depth 8/16, palette+tRNS / keyed-color
     fixtures, `_rgba8` wrapper, adversarial rejections, and the 0.3.3
     chunk-ordering / § 5.4 regressions incl. the unknown-ancillary control;
@@ -517,7 +585,7 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
     the error-name strings, the four signature predicates accepting their own
     format and rejecting the other three, and `source_depth` across all four
     formats.
-  - `jpeg_noninterleaved.tcyr` — **237** (0.6.0; T.81 § A.2). Built on real
+  - `jpeg_noninterleaved.tcyr` — **238** (0.6.0; T.81 § A.2). Built on real
     libjpeg-turbo 3.2.0 files, with the regeneration recipe in the suite header
     so the corpus is reproducible. Its source pattern varies in **both** axes
     and gives each 8×8 block a distinct DC level, so a block placed in the wrong
@@ -599,7 +667,11 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
 | `png_palette8_256` | 164 | 10.75 ms |
 
 Fixed cost at 16×16 (throughput-irrelevant — the icon case):
-`png_rgba8` **64 µs**, `jpeg_gray` **17 µs**.
+`png_rgba8` **52 µs**, `jpeg_gray` **17 µs**. ⭐ The PNG figure was **64 µs**
+through 1.0.1; the 6.6.2 pin's sankoch 2.7.14 gave `crc32_init_table()` an
+early return, so the 16 KB slice-by-8 table is no longer rebuilt on every
+decode. This row exists to isolate exactly that kind of per-decode overhead,
+and it is the only benchmark the 1.0.2 bump moved.
 
 These are **host- and load-dependent**, and the per-pixel figure includes
 inflate, whose cost depends on how the generated fixture compresses — compare
@@ -609,12 +681,12 @@ path in the library (no chroma planes, no upsample, no color convert).
 
 ## Quality gates
 
-All green at 1.0.0 on cyrius 6.5.35:
+All green at 1.0.2 on cyrius 6.6.2:
 
 | gate | command | result |
 |---|---|---|
-| link check | `make build` | OK, 601,408 bytes, no warnings |
-| tests | `make test` | 3,014/3,014, 0 failures |
+| link check | `make build` | OK, 597,248 bytes, no warnings |
+| tests | `make test` | 3,035/3,035, 0 failures, 13 suites |
 | fuzz | `make fuzz` | 10,732,113/10,732,113, 0 failures (~2.6 M cases) |
 | bench | `make bench` | 17 benchmarks, fixtures self-verified, ~2 s |
 | lint | `make lint` | 0 warnings (incl. `fuzz/*.fcyr` + `tests/bcyr/*.bcyr`) |
@@ -622,7 +694,7 @@ All green at 1.0.0 on cyrius 6.5.35:
 | vet | `make vet` | 1 dep, 0 untrusted, 0 missing |
 | version | `make version-check` | consistent across VERSION, cyrius.cyml, CHANGELOG.md, README.md, `chitra_version()` |
 | dist | `make dist` + `cyrius check --with-deps dist/chitra.cyr` | compiles clean |
-| anchors | `./scripts/check-anchors.sh --suspect` | 58 anchors, 0 suspicious |
+| anchors | `./scripts/check-anchors.sh --suspect` | 63 anchors, 0 suspicious. ⚠ **Weaker than it reads** — the script matches only citations that repeat the filename (`grep -rnoE "[a-z_]+\.cyr:[0-9]+"`), so every bare `:NNN` continuation anchor the ADRs use is invisible to it, and it cannot see an anchor that lands on a real line that simply says something else |
 | surface | `./scripts/check-surface.sh` | 74 exports, 29 frozen — bundle and manifest agree |
 
 `make version-check` gained a fifth check at 0.3.2: it now packs `VERSION`
@@ -632,31 +704,38 @@ and it is exactly what drifted in 0.3.1.
 
 ## Dependencies
 
-- **stdlib**: `string`, `fmt`, `alloc`, `io`, `vec`, `str`, `syscalls`,
-  `assert`, `bench`, `args`, `flags`, `sankoch`, `thread` (unchanged across
-  0.3.0–0.4.0). `sankoch` = RFC 1950/1951 `zlib_decompress` + `crc32` +
+- **stdlib** (**10** leaves): `string`, `fmt`, `alloc`, `io`, `str`,
+  `syscalls`, `assert`, `bench`, `sankoch`, `thread`. ⚠ **Was 13 until 1.0.1**,
+  which dropped `args`, `flags` and `vec` — declared and referenced nowhere,
+  and billed to every consumer because `cyrius deps` treats the dist sidecar as
+  authoritative. `sankoch` = RFC 1950/1951 `zlib_decompress` + `crc32` +
   `adler32` (DEFLATE is sankoch's, not chitra's — it backs PNG IDAT inflate
   + chunk CRC); `thread` is the mutex pair sankoch's public-API lock wraps.
   The JPEG path takes **no** sankoch — its entropy (Huffman) decode is
   chitra's own. Resolved by `cyrius deps` into `lib/`.
-- **Consumers** (external): **mabda** (`gpu_texture_load_png` — a plain dist
-  dep `[deps.chitra]`, no C shim; `ChitraErr` ⇒ `GpuErr`), and **kii** —
-  which consumes chitra back: its v1.2.0 PNG re-fold deleted its own
-  decoder and adopted `dist/chitra.cyr` (see kii's ADR 0006). Lineage is a
-  one-time fork of kii's `src/png.cyr` with **no live dependency** —
-  bugfixes are manual backports in both directions.
-- **Downstream pins are behind, and further behind than at 0.5.2** — the
-  0.4.0–0.5.3 arc landed two formats and nine decode repairs while both pins
-  stood still (chitra does not push, and neither pin auto-follows):
-  - mabda `[deps.chitra] tag = "0.3.1"` → 1.0.0
-  - kii `[deps.chitra] tag = "0.3.0"` → 1.0.0 (kii also carries
-    `path = "../chitra"`, so a local kii build already resolves against this
-    working tree)
+- **Consumers** (external): ⚠ **five repos carry a `[deps.chitra]`**, not two —
+  **mabda** (`gpu_texture_load_png` — a plain dist dep, no C shim;
+  `ChitraErr` ⇒ `GpuErr`), **kii**, **jalwa**, **aethersafha** and **crab**.
+  kii consumes chitra back: its v1.2.0 PNG re-fold deleted its own decoder and
+  adopted `dist/chitra.cyr` (see kii's ADR 0006). Lineage is a one-time fork of
+  kii's `src/png.cyr` with **no live dependency** — bugfixes are manual
+  backports in both directions. Every name any of the five calls is inside the
+  frozen 29.
+- **Downstream pins are behind** (chitra does not push, and no pin
+  auto-follows):
+  - mabda `[deps.chitra] tag = "0.3.1"` → 1.0.2
+  - kii `[deps.chitra] tag = "1.0.0"` → 1.0.2 (re-pinned at kii v1.5.0)
+  - ⛔ **kii and aethersafha also carry `path = "../chitra"`, which wins
+    locally** — so their `tag` is inert for a local build and only a fresh
+    clone or CI ever sees it. Bumping the tag alone changes nothing for them.
 
   Every cut since 0.3.1 has been ABI-additive — nothing removed, no offset
-  moved — so both bumps are mechanical. 0.5.3 raises the value of making them:
-  the consumers gain BMP, GIF, the 0.3.3 decode repairs **and** the nine 0.5.3
-  ones with no code change.
+  moved — so the bumps are mechanical.
+  ⚠ **But 1.0.1's error code 35 (`CHITRA_ERR_INFLATE_LIMIT`) is unmapped
+  everywhere.** kii's `_kii_map_chitra_err` falls through to `PNG_ERR_HEADER`
+  and crab falls through to `CRAB_TH_BAD`, so both report an ordinary valid PNG
+  as malformed — the exact confusion code 35 exists to remove. Route it where
+  each already routes `CHITRA_ERR_BUDGET` when re-pinning.
 
 ## Next
 
@@ -692,32 +771,30 @@ Per [`docs/development/roadmap.md`](roadmap.md):
   name rather than a minor: multi-frame GIF ([ADR 0005](../adr/0005-gif-first-frame-only.md)),
   progressive JPEG, and encoding — which chitra does not do, in both directions
   of that sentence.
-- **Known upstream issue — fixed upstream, not yet vendored here.** Calling the
-  stdlib's `alloc_reset()` between decodes corrupts memory and breaks the next
-  **PNG** decode, because sankoch memoizes its CRC-32 table as a raw pointer
-  into the arena and cannot see the reset — chitra's per-decode
-  `crc32_init_table()` then writes 16 KB through a dangling pointer. BMP and
-  JPEG are unaffected. Reproduced and characterised in
-  [architecture/005](../architecture/005-alloc-reset-sankoch-hazard.md).
+- ⭐ **Closed in 1.0.2 — `alloc_reset()` between PNG decodes is safe.** Through
+  1.0.1 it corrupted memory and broke the next **PNG** decode: sankoch memoized
+  its CRC-32 table as a raw pointer into the arena and could not see the reset,
+  so chitra's per-decode `crc32_init_table()` wrote 16 KB through a dangling
+  pointer. BMP and JPEG were never affected. sankoch **2.7.10**'s arena canary
+  fixes it, and the `6.6.2` pin vendored **2.7.14**.
 
-  **sankoch 2.7.10 fixes it** (an arena canary checked in `_sankoch_lock()`
-  before the mutex pointer is touched, and again in `crc32_init_table()`, which
-  consumers reach without the lock). chitra still carries the hazard, because
-  `lib/` is vendored by `cyrius deps` from the toolchain snapshot — the fix
-  arrives with the next cyrius release and a bump of `[package].cyrius` (now
-  `6.5.35`), not by anything chitra can do. The roadmap tracks the three docs
-  that go stale together on that bump, and says to **re-run the 005
-  reproduction before deleting any of them**: a pin bump is not by itself
-  evidence that the bundled copy moved.
+  ⚠ **Verified before the note was retired**, per architecture/005's own
+  instruction that a pin bump is not evidence the bundled copy moved: 200,000
+  decode + `alloc_reset()` cycles with 0 failures and 0 differing pixel bytes,
+  **and** a negative control — canary neutered in a scratch copy, one copy
+  linked — that returns `CHITRA_ERR_CRC` exactly as 005 records.
+  `tests/tcyr/alloc_reset.tcyr` now pins it in-tree, because the fix lives in
+  gitignored `lib/` and a future pin bump could withdraw it silently.
+  Full record: [architecture/005](../architecture/005-alloc-reset-sankoch-hazard.md).
 
-  **A consumer is exercising it today.** kii's fuzz harness
-  (`tests/kii.fcyr`, `fuzz_png_iter`) calls `kii_decode_png` then
-  `alloc_reset()` on every one of 10⁶ iterations — the exact pattern, and
-  correctly so: without the rewind the never-free arena grows unbounded. Its
-  contract ("never crashes; returns `PNG_OK` or any `PNG_ERR_*` cleanly") is
-  satisfied by a *corrupted* decode returning `CHITRA_ERR_CRC`, and the inputs
-  are random bytes expected to fail anyway — so the harness passes whether or
-  not the hazard fires. Fuzzing does not find wrong output.
+  **kii's fuzz harness was the consumer exercising it** — `tests/kii.fcyr`,
+  `fuzz_png_iter`, calling `kii_decode_png` then `alloc_reset()` on every one of
+  10⁶ iterations, correctly so: without the rewind the never-free arena grows
+  unbounded. Its contract ("never crashes; returns `PNG_OK` or any `PNG_ERR_*`
+  cleanly") was satisfied by a *corrupted* decode returning `CHITRA_ERR_CRC`,
+  and the inputs are random bytes expected to fail anyway — so the harness
+  passed whether or not the hazard fired. **Fuzzing does not find wrong
+  output**, and this is the cleanest example of it in the tree.
 
   Not a v1.0 blocker — chitra's own decode path never calls `alloc_reset()`.
   It matters because the arena boundary is a consumer's *only*

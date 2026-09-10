@@ -149,8 +149,10 @@ the full suite and the fuzz harnesses behind it.
 - The roadmap item is answered with a decision and a schedule, not an entry
   point. A consumer wanting a memory ceiling today still has only the arena
   boundary — and per [architecture/005](../architecture/005-alloc-reset-sankoch-hazard.md)
-  that boundary is currently unsafe for PNG, which is a second reason 0.6.1
-  matters.
+  that boundary was, **when this decision was taken**, unsafe for PNG, which is
+  a second reason 0.6.1 matters. ⭐ *Amended 1.0.2*: the arena boundary is safe
+  again — sankoch 2.7.10's fix arrived with the `6.6.2` pin. The budget entry
+  point is now the complement to a reset rather than the only option.
 
 **Neutral**
 

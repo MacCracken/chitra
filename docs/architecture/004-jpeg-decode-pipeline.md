@@ -379,7 +379,7 @@ The 284 assertions in `jpeg.tcyr`, the 238 in `jpeg_noninterleaved.tcyr` and the
 harness is the generated coverage that complements it.
 
 **Which reference decoder, and when.** `djpeg -nosmooth` is the primary oracle
-for every JPEG cell and matches chitra byte-for-byte across the sampling matrix.
+for every JPEG cell. chitra matches it exactly on most files and can differ by at most 1 LSB per IDCT output on any file — `_jpeg_descale` rounds half away from zero where libjpeg's arithmetic-shift DESCALE rounds half up, which is inside IEEE 1180 tolerance.
 ImageMagick is a valid *independent second* oracle only for grayscale and 4:4:4:
 it upsamples chroma with a fancy (triangle) filter where chitra and
 `djpeg -nosmooth` use box, so on a 4:2:0 file it differs in 937 of 1536 bytes at

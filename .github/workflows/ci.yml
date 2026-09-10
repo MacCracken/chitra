@@ -36,8 +36,9 @@ jobs:
 
       - name: Resolve dependencies
         # `cyrius deps` reads [deps].stdlib from cyrius.cyml and copies the
-        # declared modules (string/fmt/alloc/io/vec/str/syscalls/assert/
-        # bench/args/flags/sankoch/thread) from the installed toolchain into
+        # declared modules (string/fmt/alloc/io/str/syscalls/assert/
+        # bench/sankoch/thread — 10 leaves; args/flags/vec were dropped at
+        # 1.0.1) from the installed toolchain into
         # `lib/`. chitra is pure-Cyrius — no external C libs to fetch. Do NOT
         # replace lib/ with a symlink to a cyrius checkout (cross-repo writes).
         run: |

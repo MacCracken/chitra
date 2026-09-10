@@ -5,7 +5,7 @@ description = "chitra (चित्र — image / picture) — pure-Cyrius CPU 
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/chitra"
 language = "cyrius"
-cyrius = "6.5.35"
+cyrius = "6.6.2"
 
 # chitra is a library — no CLI binary. `cyrius build` targets a smoke
 # program that links the full include chain to prove lib.cyr parses clean.
@@ -36,21 +36,6 @@ modules = [
 ]
 
 [deps]
-# ⛔ TRIMMED 1.0.1 — `args`, `flags` and `vec` were declared here and referenced NOWHERE in the
-# repo (0 hits across `src/`, `dist/`, `programs/`). `cyrius distlib` copies this list verbatim into
-# `dist/chitra.deps`, and `cyrius deps` treats that sidecar as AUTHORITATIVE — so every consumer
-# linked them and a consumer that knew better could not decline. Measured by crab: `flags` alone
-# cost **+8,320 B** in a consumer binary, and `CYRIUS_DCE=1` reclaims none of it (it NOPs; the byte
-# count does not move). Reported 2026-08-31.
-# ⚠ `sankoch` and `thread` STAY and are not the same kind of thing: PNG's IDAT is DEFLATE, so
-# `zlib_decompress` and `crc32` are load-bearing, and `thread` is required transitively by
-# sankoch's internal lock. Together they are ~407 KB of a consumer's cost and no manifest change
-# touches them — that is PNG's price, not an over-declaration.
-# Stdlib base set mirrors mabda's foundation, plus "sankoch" (RFC 1950/1951
-# zlib_decompress + crc32/adler32 for PNG IDAT inflate — same dep kii uses)
-# and "thread" (sankoch's _sankoch_lock/_unlock wrap mutex_lock/mutex_unlock).
-# Both are load-bearing: sankoch for PNG IDAT inflate + chunk CRC, thread for
-# sankoch's internal lock.
 stdlib = [
     "string",
     "fmt",

@@ -106,7 +106,7 @@ RLE and masks), `budget.tcyr` (byte-budget refusals and their allocation cost),
 (`seen_iend` on all four formats), `subbyte.tcyr` (1/2/4-bit
 grayscale/palette), or `surface.tcyr` (record offsets, error names, the frozen
 accessors). The suites are globbed by `make test`; each is a standalone
-`main()`. The current baseline is **3,014 assertions across 12 suites** — PRs that
+`main()`. The current baseline is **3,035 assertions across 13 suites** — PRs that
 lower coverage will be asked to add it.
 Confirm the count with `make count-assertions`.
 
@@ -140,12 +140,21 @@ send a decode change:
 > and open an issue first to agree on shape.
 >
 > **Reference decoders, and which one to trust for JPEG.** The house rule is
-> "validate against ImageMagick", and it holds unqualified for PNG, BMP and
-> GIF. For JPEG the primary oracle is **`djpeg -nosmooth`**, which chitra
-> matches byte-for-byte across the sampling matrix; ImageMagick is a valid
-> second oracle only for grayscale and 4:4:4, because it upsamples chroma with
-> a fancy (triangle) filter where chitra uses box. On a 4:2:0 file that is 937
-> of 1536 bytes different — a filter difference, not a bug.
+> "validate against ImageMagick". It holds unqualified for PNG. ⚠ It has two
+> known, deliberate exceptions elsewhere, both verified at the 1.0.2 cut
+> against ffmpeg as a third oracle, which agrees with chitra in both:
+> **BMP sub-8-bit channels** (chitra widens by bit replication, per MS; a 6-bit
+> 48 is 195, not 194 — ImageMagick is the outlier), and **GIF's uncovered
+> canvas** (a frame rect smaller than the logical screen leaves the remainder
+> transparent; every in-rect pixel matches).
+> For JPEG the primary oracle is **`djpeg -nosmooth`**. chitra matches it
+> exactly on most files and can differ by at most **1 LSB per IDCT output** on
+> any file, because `_jpeg_descale` rounds half away from zero where libjpeg's
+> arithmetic-shift DESCALE rounds half up — inside IEEE 1180 tolerance, not a
+> decode bug. ImageMagick is a valid second oracle only for grayscale and
+> 4:4:4, because it upsamples chroma with a fancy (triangle) filter where
+> chitra uses box. On a 4:2:0 file that is 937 of 1536 bytes different — a
+> filter difference, not a bug.
 
 ## Modules and the dist bundle
 

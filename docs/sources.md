@@ -1,6 +1,6 @@
 # chitra — Sources
 
-> Last Updated: 2026-08-24 (1.0.0)
+> Last Updated: 2026-09-10 (1.0.2)
 
 The citation index for chitra's algorithmic and domain content. AGNOS
 math/domain crates carry a sources file so every nontrivial algorithm is

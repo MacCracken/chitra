@@ -1,17 +1,23 @@
-# 005 — `alloc_reset()` breaks the next PNG decode (sankoch memoizes into the arena)
+# 005 — `alloc_reset()` broke the next PNG decode (sankoch memoized into the arena)
+
+> ⭐ **RETIRED as of 1.0.2.** The 6.6.2 pin vendors sankoch **2.7.14**, past the
+> 2.7.10 arena canary, and the reproduction below was re-run before this note
+> was retired — see [Status](#status). The mechanism is kept because it is the
+> reason `tests/tcyr/alloc_reset.tcyr` exists and the reason the guard must not
+> be lost on a future pin bump.
 
 Non-obvious constraint a reader cannot derive from either library's API:
 [`003-bump-allocator-no-free.md`](003-bump-allocator-no-free.md) tells a
 long-running consumer to drive memory at the arena boundary — *"reset the
-region between batches"* — and for PNG that advice is **currently unsafe**.
+region between batches"* — and for PNG that advice was **unsafe through 1.0.1**.
 This note records the fact, its mechanism, and its exact scope. It is not a
 decision (nothing here is chitra's to decide) and not a how-to.
 
-## The fact
+## The fact (as it stood through 1.0.1)
 
-Calling the stdlib's `alloc_reset()` between decodes corrupts memory and breaks
-**the next PNG decode**. Reproduced on this tree, decoding the same valid 8×8
-PNG four times:
+Calling the stdlib's `alloc_reset()` between decodes corrupted memory and broke
+**the next PNG decode**. Reproduced on the 1.0.1 tree, decoding the same valid
+8×8 PNG four times:
 
 ```
 decode #1 (fresh arena)        DECODE ok
@@ -66,7 +72,9 @@ hook — and is reported as such.
 
 ## Consequence for consumers
 
-Until it is fixed upstream:
+⭐ **On chitra ≥ 1.0.2 there is no consequence: reset freely.** What follows
+described the state through 1.0.1, and still describes any consumer that links
+an older chitra or vendors an older sankoch:
 
 - A consumer that decodes **PNG** must not call `alloc_reset()` between
   decodes. The memory it reclaims is real, but the next PNG decode writes
@@ -84,11 +92,13 @@ This is one of two reasons the byte-budget entry point mattered — and it
 at 1.0.0 ([`../adr/0008-byte-budget-as-shipped.md`](../adr/0008-byte-budget-as-shipped.md)
 is the as-shipped record; 0007 decided the shape). But note precisely what it
 does and does not solve: it bounds the **declared RGBA output of one decode**,
-not cumulative arena growth. A caller decoding untrusted input in a loop still
-has no way to reclaim, so the hazard this note documents is unresolved for PNG
-regardless.
+not cumulative arena growth. Through 1.0.1 a caller decoding untrusted input in
+a loop therefore had no way to reclaim at all — the budget bounded one decode,
+and the reset that would have bounded the loop was the thing that was unsafe.
+⭐ As of 1.0.2 the reset is the answer again, and the budget is the complement
+to it rather than a substitute for it.
 
-## Who is exercising this today
+## Who was exercising this
 
 Not hypothetical. **kii's fuzz harness** (`tests/kii.fcyr`, `fuzz_png_iter`)
 calls `kii_decode_png(...)` and then `alloc_reset()` on every iteration, at
@@ -105,23 +115,50 @@ this note documents is indistinguishable, from inside that harness, from the
 harness working. It is the house rule in its purest form: **fuzzing does not
 find wrong output.**
 
-That is what makes the sankoch 2.7.10 pin bump a fix rather than housekeeping.
+That is what made the sankoch 2.7.10 pin bump a fix rather than housekeeping —
+and it is why 1.0.2 re-ran the reproduction instead of trusting the version
+number. ⭐ kii's harness is doing the right thing and, as of chitra 1.0.2, it is
+now getting the right answer a million times a run.
 
 ## Status
 
-**Fixed upstream in sankoch 2.7.10; not yet vendored here.** The fix is an
-arena canary — the reset zeroes the span it rewinds, so a magic-stamped
-arena-allocated word reads back zero afterwards, which makes the detection
-exact rather than heuristic. It is checked in `_sankoch_lock()` *before*
-`_sankoch_mtx` is touched (the mutex pointer is itself a candidate for being
-dangling) and again in `crc32_init_table()`, which consumers reach without the
-lock — as chitra does, per PNG decode.
+⭐ **Fixed upstream in sankoch 2.7.10, and vendored here as of 1.0.2** — the
+6.6.2 snapshot carries sankoch **2.7.14**. The fix is an arena canary: the reset
+zeroes the span it rewinds, so a magic-stamped arena-allocated word reads back
+zero afterwards, which makes the detection exact rather than heuristic. It is
+checked in `_sankoch_lock()` *before* `_sankoch_mtx` is touched (the mutex
+pointer is itself a candidate for being dangling) and again in
+`crc32_init_table()`, which consumers reach without the lock — as chitra does,
+per PNG decode. `_sankoch_reset_tables()` drops `crc32_table`, the nine
+`_huff_*` pointers and the mutex together, so **both** memoization shapes named
+above are covered, not only the CRC table.
 
-chitra cannot pick it up on its own: `lib/` is vendored by `cyrius deps` from
-the toolchain snapshot, so it arrives with the next cyrius release and a bump
-of `[package].cyrius` (`6.5.35` as of 1.0.0). **Re-run the reproduction above
-against the new `lib/sankoch.cyr` before retiring this note** — a pin bump is
-not by itself evidence that the bundled copy moved.
+chitra could not pick it up on its own: `lib/` is vendored from the toolchain
+snapshot, so it arrived with a bump of `[package].cyrius` (`6.6.2` as of 1.0.2),
+not with anything chitra did.
+
+**The reproduction above was re-run before this note was retired**, because a
+pin bump is not by itself evidence that the bundled copy moved:
+
+- **200,000** decode + `alloc_reset()` cycles — kii's `fuzz_png_iter` pattern —
+  with **0** decode failures and **0** of 16 RGBA8 bytes differing from the
+  fresh-arena baseline on any iteration.
+- ⚠ **And the negative control**, per CLAUDE.md's *prove reachability* rule:
+  with `_sankoch_arena_guard()` neutered in a scratch copy (one copy linked —
+  linking two leaves which definition wins ambiguous, and the result
+  meaningless), the failure returns exactly as recorded above:
+  `CHITRA_ERR_CRC` (7) on the first decode after the reset.
+
+⛔ **One residual, which does not reach chitra.** `_sankoch_lock`'s copy of the
+guard is compiled out under `CYRIUS_TARGET_AGNOS`, so on AGNOS only
+`crc32_init_table`'s copy fires. chitra's PNG path calls `crc32_init_table()`
+(`src/png_filter.cyr:365`) well before `zlib_decompress()` (`:670`), so the
+covering call always happens first.
+
+⚠ **This note is retired, not deleted, and the guard is now asserted in-tree.**
+`tests/tcyr/alloc_reset.tcyr` (15 assertions) pins the behaviour, because the
+fix lives in gitignored `lib/` and a future pin bump could withdraw it with no
+diff anywhere in this repo to show for it.
 
 ## See also
 

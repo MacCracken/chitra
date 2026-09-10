@@ -132,9 +132,11 @@ Not functions, but part of the same promise:
 
 - **`ChitraImage`** — 56 bytes. Fields are **append-only**: `width`@0,
   `height`@8, `pixels`@16, `channels`@24, `seen_iend`@32, `src_ctype`@40,
-  `src_depth`@48. mabda's accessors were compiled against the 0.1.x offsets and
-  every field added since has gone on the end. `tests/tcyr/surface.tcyr` pins
-  each offset.
+  `src_depth`@48. Four consumers read the record through the accessors — kii,
+  jalwa, aethersafha and crab — and mabda reaches the pixels through
+  `chitra_png_decode_rgba8` without touching the record at all, so every field
+  added since 0.1.x has gone on the end. `tests/tcyr/surface.tcyr` pins each
+  offset.
 - **`ChitraErr`** — 16 bytes, `+0` code, `+8` detail ptr, layout-compatible
   with mabda's `GpuErr` (ADR 0003). This is the one record that cannot be
   widened at all.
@@ -143,12 +145,23 @@ Not functions, but part of the same promise:
 
 Recorded because they decide what a rename actually costs:
 
+⚠ **There are five, not two.** Counted by **call site** at the 1.0.2 cut:
+
 - **mabda** — `chitra_png_decode_rgba8`, `chitra_jpeg_decode_rgba8`. Two names.
-- **kii** — nine names: `chitra_image_decode`,
-  `chitra_image_{width,height,pixels,seen_iend,source_color_type}`,
-  `chitra_png_check_signature`, `chitra_jpeg_check_signature`,
-  `chitra_err_code`. Counted by **call site**: `chitra_err` appears in kii only
+  It never touches `ChitraImage` or `ChitraErr`.
+- **kii** — **eleven** names: `chitra_image_decode`,
+  `chitra_image_{width,height,pixels,seen_iend,source_color_type}`, and all
+  four signature predicates
+  (`chitra_{png,jpeg,bmp,gif}_check_signature` — the BMP and GIF two arrived
+  with kii v1.5.0), plus `chitra_err_code`. `chitra_err` appears in kii only
   inside its own `_kii_map_chitra_err`, which is a kii function, not a call
   into chitra.
+- **crab** — six names: `chitra_image_decode_budget`, `chitra_err_code`,
+  `chitra_image_{width,height,pixels}`, `chitra_image_free`, plus the enum
+  value `CHITRA_ERR_BUDGET`.
+- **aethersafha** — five: `chitra_image_decode`,
+  `chitra_image_{width,height,pixels}`, `chitra_image_free`.
+- **jalwa** — four: `chitra_image_decode`,
+  `chitra_image_{width,height,pixels}`.
 
-Both stay inside the FROZEN block.
+All five stay inside the FROZEN block.

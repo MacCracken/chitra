@@ -112,9 +112,14 @@ Every name is permanent, and this is the last patch before the v1.0 freeze.
   signature predicates the caller already has.
 
 And not zero names, because the alternative on offer — telling callers to
-reclaim at the arena boundary — is currently unsafe for PNG
-([architecture/005](../architecture/005-alloc-reset-sankoch-hazard.md)), so
-without this there is no way at all to bound decode memory.
+reclaim at the arena boundary — was, **at the time of this decision**, unsafe
+for PNG ([architecture/005](../architecture/005-alloc-reset-sankoch-hazard.md)),
+so without this there was no way at all to bound decode memory.
+
+⭐ *Amended 1.0.2*: the arena boundary is safe again (sankoch 2.7.10's arena
+canary, vendored at the `6.6.2` pin). That does **not** weaken this decision —
+a reset bounds a loop, the budget bounds a single decode, and a caller
+thumbnailing untrusted input wants both.
 
 ## Consequences
 
