@@ -29,7 +29,7 @@ isn't on your PATH yet, see the agnosticos bootstrap.
 ```bash
 cyrius deps        # resolve stdlib + sankoch + thread into lib/
 make build         # link-check: builds build/chitra_smoke from programs/smoke.cyr
-make test          # 3035 assertions across tests/tcyr/
+make test          # 3084 assertions across tests/tcyr/
 make fuzz          # ~2.6 M adversarial decode cases across fuzz/*.fcyr
 make bench         # 17 decode benchmarks (tests/bcyr/chitra.bcyr)
 make dist          # = cyrius distlib → dist/chitra.cyr
@@ -47,11 +47,11 @@ A few notes on what each step proves:
   domain modules) parses and links clean; it writes a one-line banner
   and exits 0.
 - **`make test`** runs the thirteen suites under `tests/tcyr/` — each is a
-  standalone `main()`: `alloc_reset.tcyr` (15), `bmp.tcyr` (1062),
-  `budget.tcyr` (23), `error.tcyr` (20), `gif.tcyr` (643), `interlace.tcyr` (35),
-  `jpeg.tcyr` (284), `jpeg_multiscan.tcyr` (75),
-  `jpeg_noninterleaved.tcyr` (238), `png.tcyr` (399), `stream_end.tcyr` (22),
-  `subbyte.tcyr` (143), `surface.tcyr` (76) — 3,035 assertions in total.
+  standalone `main()`: `alloc_reset.tcyr` (15), `bmp.tcyr` (1080),
+  `budget.tcyr` (23), `error.tcyr` (20), `gif.tcyr` (649), `interlace.tcyr` (35),
+  `jpeg.tcyr` (295), `jpeg_multiscan.tcyr` (75),
+  `jpeg_noninterleaved.tcyr` (238), `png.tcyr` (408), `stream_end.tcyr` (27),
+  `subbyte.tcyr` (143), `surface.tcyr` (76) — 3,084 assertions in total.
 - **`make fuzz`** drives all four public decode entries over random,
   signature-prefixed, bit-flipped, truncated and entropy-mutated input —
   ~2.6 M cases, 10,732,113 assertions. It asserts **both** that the decoder survives and that

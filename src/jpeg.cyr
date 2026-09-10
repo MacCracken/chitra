@@ -652,14 +652,29 @@ fn _jpeg_build_image(frame, planes, comppw, closed, err_out): i64 {
     #      the space outright. This is the fallback libjpeg uses, and it is what
     #      catches an RGB file whose APP14 was stripped by a metadata tool.
     #   3. Otherwise YCbCr — the JFIF default, and what component ids 1,2,3 mean.
+    #   0. BEFORE ALL OF THEM (B-2, 1.0.3): a JFIF APP0. JFIF § 4.1 DEFINES the
+    #      sample space — three components are Y/Cb/Cr — so a file that declares
+    #      itself JFIF has already answered this, and neither of the weaker
+    #      rules below may overturn it.
+    #      ⛔ Rule 2 used to apply to JFIF files, and six edited bytes
+    #      (component ids 1,2,3 -> 'R','G','B') therefore turned an ordinary
+    #      cjpeg image into a whole-image colour error with NO error code, while
+    #      `source_color_type` reported 0x113 and actively told the consumer the
+    #      samples were RGB. Every colour byte of a 64x64 fixture came back
+    #      wrong; djpeg and ImageMagick both decode the same bytes correctly.
+    #      libjpeg has never had the hole: `default_decompress_parms` tests
+    #      `saw_JFIF_marker` first, then the Adobe marker, then the ids. This is
+    #      that order.
     var is_rgb = 0;
     var adobe = chitra_jpeg_frame_adobe_transform(frame);
     if (ncomp == 3) {
-        if (adobe == 0) { is_rgb = 1; }
-        if (adobe < 0) {
-            if (chitra_jpeg_frame_comp_id(frame, 0) == 0x52) {
-                if (chitra_jpeg_frame_comp_id(frame, 1) == 0x47) {
-                    if (chitra_jpeg_frame_comp_id(frame, 2) == 0x42) { is_rgb = 1; }
+        if (chitra_jpeg_frame_saw_jfif(frame) == 0) {
+            if (adobe == 0) { is_rgb = 1; }
+            if (adobe < 0) {
+                if (chitra_jpeg_frame_comp_id(frame, 0) == 0x52) {
+                    if (chitra_jpeg_frame_comp_id(frame, 1) == 0x47) {
+                        if (chitra_jpeg_frame_comp_id(frame, 2) == 0x42) { is_rgb = 1; }
+                    }
                 }
             }
         }
@@ -765,6 +780,28 @@ fn _jpeg_decode_scans(frame, src, len, err_out): i64 {
     var ncomp = chitra_jpeg_frame_num_components(frame);
     var w = chitra_jpeg_frame_width(frame);
     var h = chitra_jpeg_frame_height(frame);
+
+    # ⛔⛔ GATE 0 (B-3, 1.0.3) — REFUSE BEFORE THE PLANES, NOT AFTER THEM.
+    # GATE 2 below is the honest whole-image bound, but it can only run once
+    # every scan has been decoded — which means every plane has already been
+    # allocated. A 4,250-byte file declaring 4096x4096 Nf=3 therefore spent
+    # 50,354,832 bytes to return CHITRA_ERR_DIMENSIONS, 11,848:1 on the REFUSAL
+    # path, and the bump allocator never gives it back: ~40 such files exhaust
+    # the stdlib's 2 GiB ALLOC_MAX.
+    #
+    # ⚠ STRICTLY WEAKER THAN GATE 2, WHICH IS WHY IT IS SAFE HERE.
+    # `total_espan` is a sum of spans inside the file, so it can never exceed
+    # `len`. Anything this refuses, GATE 2 would refuse too — no accept/reject
+    # outcome moves, and the code returned is the same. It just costs ~400
+    # bytes instead of 50 MB.
+    # ⇒ It does NOT replace GATE 2. `len` counts bytes no scan ever reads
+    # (skipped APPn padding is the 0.6.1 lesson), so only the summed entropy
+    # spans can see through a padded file.
+    if (w * h * 4 > len * CHITRA_MAX_JPEG_RATIO) {
+        store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
+        return 0;
+    }
+
     var planes[32];      # by FRAME component index; CHITRA_MAX_COMPONENTS is 4
     var comppw[32];
     var i = 0;

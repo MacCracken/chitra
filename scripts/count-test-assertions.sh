@@ -16,8 +16,16 @@ cd "$(dirname "$0")/.."
 total=0
 files=0
 for f in tests/tcyr/*.tcyr; do
+  # B-16 (1.0.3): capture the status instead of letting `set -e` eat it. With
+  # `pipefail` on, a failing suite made this very assignment abort the script —
+  # so the diagnostic below could never print, and a red suite exited 1 with no
+  # indication of WHICH suite or why. The branch that exists to explain the
+  # failure was unreachable in exactly the case it was written for.
+  set +e
   out="$(cyrius test "$f" 2>&1 | tr -d '\0')"
-  if echo "$out" | grep -qE '[0-9]+ failed' && ! echo "$out" | grep -qE ' 0 failed'; then
+  rc=$?
+  set -e
+  if [ $rc -ne 0 ] || { echo "$out" | grep -qE '[0-9]+ failed' && ! echo "$out" | grep -qE ' 0 failed'; }; then
     echo "FAIL: $f"
     echo "$out" | grep -E 'passed|failed' || true
     exit 1

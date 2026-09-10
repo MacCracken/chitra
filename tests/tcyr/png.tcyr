@@ -3974,7 +3974,339 @@ fn test_bomb_still_reports_as_a_bomb() {
     return 0;
 }
 
+# ================================================================
+# B-1 (1.0.3) — sankoch's CRC-table allocation can fail, and its return
+# is load-bearing.
+#
+# ⛔⛔ THIS TEST MUST RUN FIRST, and it detects for itself when it does not.
+# `crc32_init_table()` builds a 16 KB slice-by-8 table once per process and
+# early-returns forever after, so the failure path is reachable ONLY on the
+# first PNG decode. If this is moved below any other decode the table is
+# already built, the injected failure never fires, the decode SUCCEEDS, and
+# the first assertion below fails loudly rather than passing vacuously.
+#
+# ⚠ Injection index 1, not 0: on the first call `_sankoch_arena_guard()` arms
+# the arena canary with `_sankoch_alloc(8)` (alloc #0) BEFORE the table
+# allocation (alloc #1). Failing #0 only skips the canary; the table still
+# builds and the decode succeeds.
+#
+# ⚠ MUTATION-CHECKED. Against the pre-repair line (`crc32_init_table();`,
+# return discarded) this does not fail — it SIGSEGVs, exit 139, reading
+# through a NULL table base from _chitra_parse_ihdr's crc32() call.
+# ================================================================
+fn test_crc_table_oom_is_reported_not_dereferenced() {
+    var lo = 0;
+    var bytes = fx_rgba8_2x2(&lo);
+    # Fail the SECOND sankoch allocation of this process: the CRC table.
+    _sankoch_alloc_set_fail_at(1);
+    var err = 0;
+    var img = chitra_png_decode(bytes, lo, &err);
+    assert_eq(img, 0,
+      "CRC-table OOM refuses the decode (if this fails, the test is no longer first in main())");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_OOM,
+      "...as CHITRA_ERR_OOM, the documented allocation-failure contract");
+    # Leave the injector disarmed so the rest of the suite is unaffected.
+    _sankoch_alloc_set_fail_at(0 - 1);
+    # And prove the arena is still usable: the very next decode succeeds.
+    var err2 = 0;
+    var img2 = chitra_png_decode(bytes, lo, &err2);
+    assert_neq(img2, 0, "a refused CRC-table alloc does not poison the next decode");
+    return 0;
+}
+
+# ================================================================
+# B-12 (1.0.3) — the four frozen `_rgba8` wrappers had no test that could tell
+# width from height.
+#
+# ⛔ NOT A LIVE DEFECT — A BLIND SPOT IN THE GATE STACK. Every wrapper test in
+# the tree used a SQUARE fixture (PNG 2x2, BMP 2x2, GIF 4x4, JPEG 16x16), so
+# swapping the two stores in `chitra_png_decode_rgba8` — transposing the
+# dimensions a caller gets back — passed all 13 suites, all 3,035 assertions and
+# all 10.7 M fuzz assertions with nothing red. Verified by doing exactly that.
+# `chitra_png_decode_rgba8` is mabda's primary entry point, and a transposed
+# w/h uploads a garbled texture with no ChitraErr to show for it.
+#
+# ⚠ Only `jpeg_noninterleaved.tcyr`'s 24x16 cell could see it, and only for
+# JPEG. These fixtures close the other three, and the assertions below compare
+# the wrapper's w/h against the FULL decoder's accessors on the same bytes —
+# so the two entry points cannot disagree either.
+# ================================================================
+# 3x2 RGB8 PNG — 3x2, deliberately NON-SQUARE (B-12, 1.0.3).
+fn fx_png_3x2_nonsquare(len_out): i64 {
+    var b = alloc(305);
+    store64(len_out, 305);
+    var i = 0;
+    while (i < 305) {
+        store8(b + i, 0);
+        i = i + 1;
+    }
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 19, 3);
+    store8(b + 23, 2);
+    store8(b + 24, 8);
+    store8(b + 25, 2);
+    store8(b + 29, 18);
+    store8(b + 30, 22);
+    store8(b + 31, 241);
+    store8(b + 32, 77);
+    store8(b + 36, 32);
+    store8(b + 37, 99);
+    store8(b + 38, 72);
+    store8(b + 39, 82);
+    store8(b + 40, 77);
+    store8(b + 43, 122);
+    store8(b + 44, 38);
+    store8(b + 47, 128);
+    store8(b + 48, 132);
+    store8(b + 51, 250);
+    store8(b + 55, 128);
+    store8(b + 56, 232);
+    store8(b + 59, 117);
+    store8(b + 60, 48);
+    store8(b + 63, 234);
+    store8(b + 64, 96);
+    store8(b + 67, 58);
+    store8(b + 68, 152);
+    store8(b + 71, 23);
+    store8(b + 72, 112);
+    store8(b + 73, 156);
+    store8(b + 74, 186);
+    store8(b + 75, 81);
+    store8(b + 76, 60);
+    store8(b + 80, 6);
+    store8(b + 81, 98);
+    store8(b + 82, 75);
+    store8(b + 83, 71);
+    store8(b + 84, 68);
+    store8(b + 86, 255);
+    store8(b + 88, 255);
+    store8(b + 90, 255);
+    store8(b + 91, 160);
+    store8(b + 92, 189);
+    store8(b + 93, 167);
+    store8(b + 94, 147);
+    store8(b + 98, 7);
+    store8(b + 99, 116);
+    store8(b + 100, 73);
+    store8(b + 101, 77);
+    store8(b + 102, 69);
+    store8(b + 103, 7);
+    store8(b + 104, 234);
+    store8(b + 105, 9);
+    store8(b + 106, 10);
+    store8(b + 107, 9);
+    store8(b + 108, 47);
+    store8(b + 110, 4);
+    store8(b + 111, 107);
+    store8(b + 112, 19);
+    store8(b + 113, 179);
+    store8(b + 117, 37);
+    store8(b + 118, 116);
+    store8(b + 119, 69);
+    store8(b + 120, 88);
+    store8(b + 121, 116);
+    store8(b + 122, 100);
+    store8(b + 123, 97);
+    store8(b + 124, 116);
+    store8(b + 125, 101);
+    store8(b + 126, 58);
+    store8(b + 127, 99);
+    store8(b + 128, 114);
+    store8(b + 129, 101);
+    store8(b + 130, 97);
+    store8(b + 131, 116);
+    store8(b + 132, 101);
+    store8(b + 134, 50);
+    store8(b + 135, 48);
+    store8(b + 136, 50);
+    store8(b + 137, 54);
+    store8(b + 138, 45);
+    store8(b + 139, 48);
+    store8(b + 140, 57);
+    store8(b + 141, 45);
+    store8(b + 142, 49);
+    store8(b + 143, 48);
+    store8(b + 144, 84);
+    store8(b + 145, 48);
+    store8(b + 146, 57);
+    store8(b + 147, 58);
+    store8(b + 148, 52);
+    store8(b + 149, 55);
+    store8(b + 150, 58);
+    store8(b + 151, 48);
+    store8(b + 152, 48);
+    store8(b + 153, 43);
+    store8(b + 154, 48);
+    store8(b + 155, 48);
+    store8(b + 156, 58);
+    store8(b + 157, 48);
+    store8(b + 158, 48);
+    store8(b + 159, 242);
+    store8(b + 160, 24);
+    store8(b + 161, 8);
+    store8(b + 162, 255);
+    store8(b + 166, 37);
+    store8(b + 167, 116);
+    store8(b + 168, 69);
+    store8(b + 169, 88);
+    store8(b + 170, 116);
+    store8(b + 171, 100);
+    store8(b + 172, 97);
+    store8(b + 173, 116);
+    store8(b + 174, 101);
+    store8(b + 175, 58);
+    store8(b + 176, 109);
+    store8(b + 177, 111);
+    store8(b + 178, 100);
+    store8(b + 179, 105);
+    store8(b + 180, 102);
+    store8(b + 181, 121);
+    store8(b + 183, 50);
+    store8(b + 184, 48);
+    store8(b + 185, 50);
+    store8(b + 186, 54);
+    store8(b + 187, 45);
+    store8(b + 188, 48);
+    store8(b + 189, 57);
+    store8(b + 190, 45);
+    store8(b + 191, 49);
+    store8(b + 192, 48);
+    store8(b + 193, 84);
+    store8(b + 194, 48);
+    store8(b + 195, 57);
+    store8(b + 196, 58);
+    store8(b + 197, 52);
+    store8(b + 198, 55);
+    store8(b + 199, 58);
+    store8(b + 200, 48);
+    store8(b + 201, 48);
+    store8(b + 202, 43);
+    store8(b + 203, 48);
+    store8(b + 204, 48);
+    store8(b + 205, 58);
+    store8(b + 206, 48);
+    store8(b + 207, 48);
+    store8(b + 208, 131);
+    store8(b + 209, 69);
+    store8(b + 210, 176);
+    store8(b + 211, 67);
+    store8(b + 215, 40);
+    store8(b + 216, 116);
+    store8(b + 217, 69);
+    store8(b + 218, 88);
+    store8(b + 219, 116);
+    store8(b + 220, 100);
+    store8(b + 221, 97);
+    store8(b + 222, 116);
+    store8(b + 223, 101);
+    store8(b + 224, 58);
+    store8(b + 225, 116);
+    store8(b + 226, 105);
+    store8(b + 227, 109);
+    store8(b + 228, 101);
+    store8(b + 229, 115);
+    store8(b + 230, 116);
+    store8(b + 231, 97);
+    store8(b + 232, 109);
+    store8(b + 233, 112);
+    store8(b + 235, 50);
+    store8(b + 236, 48);
+    store8(b + 237, 50);
+    store8(b + 238, 54);
+    store8(b + 239, 45);
+    store8(b + 240, 48);
+    store8(b + 241, 57);
+    store8(b + 242, 45);
+    store8(b + 243, 49);
+    store8(b + 244, 48);
+    store8(b + 245, 84);
+    store8(b + 246, 48);
+    store8(b + 247, 57);
+    store8(b + 248, 58);
+    store8(b + 249, 52);
+    store8(b + 250, 55);
+    store8(b + 251, 58);
+    store8(b + 252, 48);
+    store8(b + 253, 48);
+    store8(b + 254, 43);
+    store8(b + 255, 48);
+    store8(b + 256, 48);
+    store8(b + 257, 58);
+    store8(b + 258, 48);
+    store8(b + 259, 48);
+    store8(b + 260, 212);
+    store8(b + 261, 80);
+    store8(b + 262, 145);
+    store8(b + 263, 156);
+    store8(b + 267, 17);
+    store8(b + 268, 73);
+    store8(b + 269, 68);
+    store8(b + 270, 65);
+    store8(b + 271, 84);
+    store8(b + 272, 8);
+    store8(b + 273, 215);
+    store8(b + 274, 99);
+    store8(b + 275, 252);
+    store8(b + 276, 207);
+    store8(b + 278, 5);
+    store8(b + 279, 140);
+    store8(b + 280, 12);
+    store8(b + 281, 12);
+    store8(b + 282, 80);
+    store8(b + 283, 54);
+    store8(b + 285, 26);
+    store8(b + 286, 24);
+    store8(b + 287, 2);
+    store8(b + 288, 1);
+    store8(b + 289, 113);
+    store8(b + 290, 103);
+    store8(b + 291, 118);
+    store8(b + 292, 135);
+    store8(b + 297, 73);
+    store8(b + 298, 69);
+    store8(b + 299, 78);
+    store8(b + 300, 68);
+    store8(b + 301, 174);
+    store8(b + 302, 66);
+    store8(b + 303, 96);
+    store8(b + 304, 130);
+    return b;
+}
+
+fn test_png_rgba8_wrapper_distinguishes_w_from_h() {
+    var lo = 0;
+    var b = fx_png_3x2_nonsquare(&lo);
+    var w = 0;
+    var h = 0;
+    var px = chitra_png_decode_rgba8(b, lo, &w, &h);
+    assert(px != 0, "the non-square PNG decodes through the wrapper");
+    assert_eq(w, 3, "wrapper w = 3 (not the height)");
+    assert_eq(h, 2, "wrapper h = 2 (not the width)");
+    assert_neq(w, h, "the fixture really is non-square, or this cell proves nothing");
+    var err = 0;
+    var img = chitra_png_decode(b, lo, &err);
+    assert_eq(w, chitra_image_width(img), "wrapper w agrees with chitra_image_width");
+    assert_eq(h, chitra_image_height(img), "wrapper h agrees with chitra_image_height");
+    return 0;
+}
+
 fn main() {
+    # ⛔ MUST STAY FIRST — see the comment on this test. It detects displacement
+    # itself, which is how the B-12 additions were caught when they landed above it.
+    test_crc_table_oom_is_reported_not_dereferenced();
+    test_png_rgba8_wrapper_distinguishes_w_from_h();
     test_cursor_bounds();
     test_signature();
     test_color_channels();

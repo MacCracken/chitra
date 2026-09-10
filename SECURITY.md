@@ -77,7 +77,7 @@ decode. Each maps to a `ChitraErrCode`
 - ✅ **Decompression-bomb ratio cap** — the ratio of inflated output to
   compressed IDAT input is bounded by `CHITRA_MAX_INFLATE_RATIO = 1100`
   (constant in [`src/png_chunks.cyr:43`](src/png_chunks.cyr); checked at
-  [`src/png_filter.cyr:612`](src/png_filter.cyr)), just above DEFLATE's
+  [`src/png_filter.cyr:622`](src/png_filter.cyr)), just above DEFLATE's
   theoretical 1032:1 maximum (RFC 1951 § 3.2.5), so a zip-bomb-style input is
   rejected instead of expanded. Failure → `CHITRA_ERR_DIMENSIONS`.
   ⚠️ **Accepted risk, stated rather than quietly fixed**: this ratio bounds
@@ -89,16 +89,27 @@ decode. Each maps to a `ChitraErrCode`
   output-ratio cap would reject valid PNGs. What distinguished the BMP and GIF
   cases capped in that cut is that those bombs supplied *nothing* — 2 and 4
   bytes for 16.7 M pixels. **The operative bound for PNG is
-  `CHITRA_MAX_PIXELS`**: a caller decoding untrusted PNGs should budget 64 MB
-  per decode as the worst case, not the file size, and remember that the bump
-  allocator makes that cumulative.
+  `CHITRA_MAX_PIXELS`**: a caller decoding untrusted PNGs should budget
+  **~100 MB** per decode as the worst case, not the file size, and remember that
+  the bump allocator makes that cumulative.
+  ⚠ **This figure was 64 MB here until 1.0.3 and it was 1.57x low.** 64 MB
+  counts only the RGBA8 output; a decode also holds the fused IDAT
+  accumulation, the inflated scanline buffer and the unfilter scratch at the
+  same time. Measured at the 1.0.3 sweep: a **16,373-byte valid PNG** spends
+  **100,704,816 bytes**. A caller sizing a budget from the old number would have
+  under-provisioned by a third.
 - ✅ **Raw-buffer ceiling** — every derived buffer size is bounded by
   `CHITRA_MAX_RAW_BYTES = 268435456` (256 MB)
   ([`src/png_chunks.cyr:38`](src/png_chunks.cyr)), and every allocation is
-  null-checked. The IHDR-derived inflated/pixel buffer sizes over the ceiling
-  fail as `CHITRA_ERR_DIMENSIONS` ([`src/png_filter.cyr:593-597`](src/png_filter.cyr));
+  null-checked — **including the allocating `sankoch` entry points chitra
+  invokes**. ⚠ That last clause is new in 1.0.3 and it was not true before:
+  `crc32_init_table()`'s OOM return was discarded, so under memory pressure the
+  next `crc32()` read through a NULL table and the process died with SIGSEGV on
+  an ordinary valid PNG (B-1). The contract has always been
+  `(0, *err_out = CHITRA_ERR_OOM)`; now the code keeps it. The IHDR-derived inflated/pixel buffer sizes over the ceiling
+  fail as `CHITRA_ERR_DIMENSIONS` ([`src/png_filter.cyr:603-607`](src/png_filter.cyr));
   the IDAT-accumulator over the ceiling and any allocation that returns null
-  fail as `CHITRA_ERR_OOM` ([`src/png_filter.cyr:459`](src/png_filter.cyr)).
+  fail as `CHITRA_ERR_OOM` ([`src/png_filter.cyr:469`](src/png_filter.cyr)).
 - ✅ **Inflate exact-size second line of defense** — the inflated stream size
   must match exactly the size derived from IHDR (`height × (1 + row_bytes)`);
   any mismatch from `sankoch` aborts the decode. Failure →
@@ -445,6 +456,18 @@ implementing the PNG, JPEG, BMP or GIF spec, the fix may involve hardening
 chitra's parser beyond spec.
 
 ## Audit history
+
+**2026-09-10** — [P-1 sweep of all four formats and the gate stack](docs/audit/2026-09-10-audit.md),
+gating 1.0.3. Eleven adversarial lenses, every candidate put to two independent
+skeptics with opposing jobs: 41 confirmed, 5 split, 2 refuted → **19 distinct
+defects**, all repaired with mutation-checked regression tests. **No
+memory-safety defect and no wrong-output defect on well-formed input.** What it
+found instead: a null dereference on a valid PNG under memory pressure; a JFIF
+file whose colour space was overridable by its component ids; a truncated JPEG
+scan reporting a clean close; every RLE BMP whose width is not a multiple of 4
+refused; four refusal paths that allocated what they were refusing; and seven
+gates that could not fire — including the frozen-surface check, which ran in no
+CI workflow at all.
 
 - [`docs/audit/2026-06-26-audit.md`](docs/audit/2026-06-26-audit.md) — the PNG
   decode-path audit

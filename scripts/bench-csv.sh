@@ -27,7 +27,19 @@ TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "nogit")
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "nogit")
 
+# B-17 (1.0.3): capture the status rather than letting `set -euo pipefail` abort
+# at the substitution. A harness that aborted killed this script HERE, so both
+# "refusing to record numbers" guards below — the ones that exist to keep a
+# failed run out of the committed series — could never run.
+set +e
 out=$(cyrius bench tests/bcyr/chitra.bcyr 2>&1)
+bench_rc=$?
+set -e
+if [ $bench_rc -ne 0 ]; then
+    echo "bench-csv: harness exited $bench_rc; refusing to record numbers." >&2
+    echo "$out" >&2
+    exit 1
+fi
 if ! echo "$out" | grep -q '^CSV:'; then
     echo "bench-csv: harness produced no CSV rows — did it abort?" >&2
     echo "$out" >&2

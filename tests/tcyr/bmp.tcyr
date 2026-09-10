@@ -6629,6 +6629,45 @@ fn test_bmp_rle_bomb_resists_padding() {
     return 0;
 }
 
+# ================================================================
+# B-4 (1.0.3) — the cap refused the bomb, but only AFTER allocating the plane
+# it exists to prevent.
+#
+# ⛔ A CAP THAT FIRES AFTER ITS OWN ALLOCATION IS DECORATION on an allocator
+# that never frees. `test_bmp_rle_amplification_bomb` above passed throughout
+# 1.0.0-1.0.2 while every run of it spent 16,777,344 bytes reaching the verdict
+# — 4096x4096 index plane, allocated and then zeroed one byte at a time, before
+# `consumed` could be known. Refusal cost, not the verdict, is the defect, so
+# the verdict alone cannot be the test.
+#
+# ⚠ MUTATION-CHECKED, and it has to be measured this way: against the
+# pre-repair code every OTHER assertion in this suite is unchanged and only the
+# byte count moves — 16,777,344 -> 128 for the same file and the same error
+# code. Delete the pre-gate and this cell fails; nothing else does.
+#
+# ⚠ THE PRE-GATE MUST NOT REPLACE THE EXACT CHECK, and
+# `test_bmp_rle_bomb_resists_padding` above is what holds that line: its
+# half-megabyte of padding raises the pre-gate's own bound past the output
+# size, so only the `consumed` denominator can still see it. Both cells have to
+# pass, and they fail to different edits.
+# ================================================================
+fn test_bmp_rle_bomb_refused_before_it_is_paid_for() {
+    var lo = 0;
+    var b = fx_rle_bomb(&lo);
+    var err = 0;
+    var before = alloc_used();
+    var img = chitra_bmp_decode(b, lo, &err);
+    var spent = alloc_used() - before;
+    assert_eq(img, 0, "the RLE bomb is still refused");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_DIMENSIONS, "...still as CHITRA_ERR_DIMENSIONS");
+    # The plane it used to allocate is w*h = 16,777,216 bytes. Anything in that
+    # neighbourhood means the pre-gate is gone. A few hundred bytes of header
+    # scratch is the whole legitimate cost of reaching this verdict.
+    assert_lt(spent, 65536,
+      "refusing the bomb costs well under 64 KiB, not the 16 MB index plane");
+    return 0;
+}
+
 # Microsoft: the V4/V5 mask fields are "valid only if compression is
 # BI_BITFIELDS". Real writers populate them anyway under BI_RGB. Honouring a
 # stale alpha mask there rendered the ENTIRE IMAGE transparent — this file's
@@ -8518,7 +8557,177 @@ fn test_bmp_rle_single_trailing_end_of_line_decodes() {
     return 0;
 }
 
+# ================================================================
+# B-6 (1.0.3) — an RLE row is `w` pixels of image inside a DWORD-aligned row,
+# and real encoders fill the padding.
+#
+# ⛔ 3x2 BI_RLE8. The row is 3 pixels wide; the uncompressed row would be 4
+# bytes, so each encoded row here covers FOUR pixel positions — three of image
+# and one of padding — exactly as ImageMagick writes them. Through 1.0.2 the
+# write bound was `x >= w`, so the padding pixel was a hard CHITRA_ERR_BMP_RLE
+# and **every RLE BMP whose width is not a multiple of 4 failed to load**.
+# Measured before the repair: 30 of 30 files from `magick -compress RLE`
+# refused, all of which ffmpeg and ImageMagick itself read without complaint;
+# after, 52 of 52 decode byte-identically to ImageMagick.
+#
+# ⚠ The padding is DISCARDED, not stored and not clamped into the row — the
+# per-write bound that stops a run painting a different image than the file
+# encodes is intact, and `test_bmp_rle_run_past_the_padded_row_still_rejected`
+# below is the other half of that pair.
+# ================================================================
+fn fx_bmp_rle8_padded_row(len_out): i64 {
+    var b = alloc(92);
+    store64(len_out, 92);
+    var i = 0;
+    while (i < 92) {
+        store8(b + i, 0);
+        i = i + 1;
+    }
+    store8(b + 0, 66);
+    store8(b + 1, 77);
+    store8(b + 2, 92);
+    store8(b + 10, 70);
+    store8(b + 14, 40);
+    store8(b + 18, 3);
+    store8(b + 22, 2);
+    store8(b + 26, 1);
+    store8(b + 28, 8);
+    store8(b + 30, 1);
+    store8(b + 34, 22);
+    store8(b + 46, 4);
+    store8(b + 50, 4);
+    store8(b + 60, 255);
+    store8(b + 63, 255);
+    store8(b + 66, 255);
+    store8(b + 70, 1);
+    store8(b + 72, 1);
+    store8(b + 73, 1);
+    store8(b + 74, 1);
+    store8(b + 75, 2);
+    store8(b + 76, 1);
+    store8(b + 80, 1);
+    store8(b + 81, 3);
+    store8(b + 82, 1);
+    store8(b + 83, 2);
+    store8(b + 84, 1);
+    store8(b + 85, 1);
+    store8(b + 86, 1);
+    store8(b + 91, 1);
+    return b;
+}
+
+# ================================================================
+# B-6's guard on the guard: past the PADDED row is still malformed.
+#
+# Same fixture with the padding run widened from 1 to 3, so the row describes
+# six pixel positions where the DWORD-aligned row has four. Tolerating the
+# padding must not become tolerating any overrun — without this cell the repair
+# could be "raise the bound and stop checking" and nothing would notice.
+# ================================================================
+fn fx_bmp_rle8_past_padded_row(len_out): i64 {
+    var b = alloc(92);
+    store64(len_out, 92);
+    var i = 0;
+    while (i < 92) {
+        store8(b + i, 0);
+        i = i + 1;
+    }
+    store8(b + 0, 66);
+    store8(b + 1, 77);
+    store8(b + 2, 92);
+    store8(b + 10, 70);
+    store8(b + 14, 40);
+    store8(b + 18, 3);
+    store8(b + 22, 2);
+    store8(b + 26, 1);
+    store8(b + 28, 8);
+    store8(b + 30, 1);
+    store8(b + 34, 22);
+    store8(b + 46, 4);
+    store8(b + 50, 4);
+    store8(b + 60, 255);
+    store8(b + 63, 255);
+    store8(b + 66, 255);
+    store8(b + 70, 1);
+    store8(b + 72, 1);
+    store8(b + 73, 1);
+    store8(b + 74, 1);
+    store8(b + 75, 2);
+    store8(b + 76, 3);
+    store8(b + 80, 1);
+    store8(b + 81, 3);
+    store8(b + 82, 1);
+    store8(b + 83, 2);
+    store8(b + 84, 1);
+    store8(b + 85, 1);
+    store8(b + 86, 1);
+    store8(b + 91, 1);
+    return b;
+}
+
+fn test_bmp_rle_dword_padded_row_decodes() {
+    var lo = 0;
+    var b = fx_bmp_rle8_padded_row(&lo);
+    var err = 0;
+    var img = chitra_bmp_decode(b, lo, &err);
+    assert(img != 0, "an RLE row padded to the DWORD stride decodes (was CHITRA_ERR_BMP_RLE)");
+    if (img != 0) {
+        assert_eq(chitra_image_width(img), 3, "width is the image width, not the padded one");
+        assert_eq(chitra_image_height(img), 2, "height 2");
+        var px = chitra_image_pixels(img);
+        # Bottom-up: file row 0 is the BOTTOM image row. Verified against
+        # ImageMagick byte-for-byte on this exact fixture.
+        assert_eq(load8(px + 0), 0,   "pixel 0 R");
+        assert_eq(load8(px + 2), 255, "pixel 0 B — top row starts at palette index 3 (blue)");
+        assert_eq(load8(px + 8), 255, "pixel 2 R");
+        assert_eq(load8(px + 12), 0,  "pixel 3 R — bottom row, palette index 0");
+        assert_eq(load8(px + 16), 255,"pixel 4 R — bottom row, palette index 1 (red)");
+    }
+    return 0;
+}
+
+fn test_bmp_rle_run_past_the_padded_row_still_rejected() {
+    var lo = 0;
+    var b = fx_bmp_rle8_past_padded_row(&lo);
+    _breject(b, lo, CHITRA_ERR_BMP_RLE,
+      "a run past the DWORD-padded row is still refused, never clipped");
+    return 0;
+}
+
+# ================================================================
+# B-12 (1.0.3) — the four frozen `_rgba8` wrappers had no test that could tell
+# width from height.
+#
+# ⛔ NOT A LIVE DEFECT — A BLIND SPOT IN THE GATE STACK. Every wrapper test in
+# the tree used a SQUARE fixture (PNG 2x2, BMP 2x2, GIF 4x4, JPEG 16x16), so
+# swapping the two stores in `chitra_png_decode_rgba8` — transposing the
+# dimensions a caller gets back — passed all 13 suites, all 3,035 assertions and
+# all 10.7 M fuzz assertions with nothing red. Verified by doing exactly that.
+# `chitra_png_decode_rgba8` is mabda's primary entry point, and a transposed
+# w/h uploads a garbled texture with no ChitraErr to show for it.
+#
+# ⚠ Only `jpeg_noninterleaved.tcyr`'s 24x16 cell could see it, and only for
+# JPEG. These fixtures close the other three, and the assertions below compare
+# the wrapper's w/h against the FULL decoder's accessors on the same bytes —
+# so the two entry points cannot disagree either.
+# ================================================================
+fn test_bmp_rgba8_wrapper_distinguishes_w_from_h() {
+    var lo = 0;
+    var b = fx_bmp_rle8_padded_row(&lo);
+    var w = 0;
+    var h = 0;
+    var px = chitra_bmp_decode_rgba8(b, lo, &w, &h);
+    assert(px != 0, "the non-square BMP decodes through the wrapper");
+    assert_eq(w, 3, "wrapper w = 3 (not the height)");
+    assert_eq(h, 2, "wrapper h = 2 (not the width)");
+    assert_neq(w, h, "the fixture really is non-square, or this cell proves nothing");
+    return 0;
+}
+
 fn main() {
+    test_bmp_rgba8_wrapper_distinguishes_w_from_h();
+    test_bmp_rle_dword_padded_row_decodes();
+    test_bmp_rle_run_past_the_padded_row_still_rejected();
     test_bmp_signature();
     test_bmp24_bottom_up();
     test_bmp24_top_down();
@@ -8547,6 +8756,7 @@ fn main() {
     test_bmp_rle_amplification_bomb();
     test_bmp_rle_cap_allows_real_files();
     test_bmp_rle_bomb_resists_padding();
+    test_bmp_rle_bomb_refused_before_it_is_paid_for();
     test_bmp_v4_birgb_ignores_stale_masks();
     test_bmp_bitfields_no_color_channel_rejected();
     test_bmp_reject_depth();

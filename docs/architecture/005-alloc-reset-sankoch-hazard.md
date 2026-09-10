@@ -45,7 +45,7 @@ into the bump arena**, and the arena reset is invisible to it:
 - `lib/sankoch.cyr` declares `var crc32_table = 0;` and
   `fn crc32_init_table()` guards its allocation with `if (crc32_table == 0)`.
 - chitra calls `crc32_init_table()` on **every** PNG decode
-  ([`png_filter.cyr:365`](../../src/png_filter.cyr)) — correctly, since it
+  ([`png_filter.cyr:372`](../../src/png_filter.cyr)) — correctly, since it
   cannot know whether some other caller has initialized it.
 - After `alloc_reset()` the arena's bump pointer rewinds, but `crc32_table` is
   still non-zero. So the guard skips re-allocation and the function writes
@@ -152,7 +152,7 @@ pin bump is not by itself evidence that the bundled copy moved:
 ⛔ **One residual, which does not reach chitra.** `_sankoch_lock`'s copy of the
 guard is compiled out under `CYRIUS_TARGET_AGNOS`, so on AGNOS only
 `crc32_init_table`'s copy fires. chitra's PNG path calls `crc32_init_table()`
-(`src/png_filter.cyr:365`) well before `zlib_decompress()` (`:670`), so the
+(`src/png_filter.cyr:372`) well before `zlib_decompress()` (`:680`), so the
 covering call always happens first.
 
 ⚠ **This note is retired, not deleted, and the guard is now asserted in-tree.**

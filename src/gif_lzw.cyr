@@ -99,12 +99,33 @@ fn _gif_lzw_decode(data, data_len, min_code_size, out, out_cap, err_out): i64 {
     var clear_code = 1 << min_code_size;
     var end_code = clear_code + 1;
 
-    var prefix = alloc(GIF_LZW_MAX_CODES * 8);
+    # ⛔⛔ SIZE THE DICTIONARY TO WHAT THIS STREAM CAN ACTUALLY REACH (B-7, 1.0.3).
+    # These three arrays were a FLAT 69,632 bytes on every call — 32,768 +
+    # 32,768 + 4,096 — allocated before a single code was read, never memoized,
+    # on an allocator that never frees. A 45-byte GIF paid all of it, and so did
+    # a file the LZW decoder then rejected on its first code.
+    #
+    # ⚠ THE BOUND IS ARITHMETIC, NOT A HEURISTIC. Every code costs at least
+    # `min_code_size + 1` bits (the width never starts smaller and only grows),
+    # and each code adds at most ONE dictionary entry. So a stream of `data_len`
+    # bytes can add at most `data_len * 8 / (min_code_size + 1)` entries beyond
+    # the initial table plus Clear and End. Nothing a legitimate stream can do
+    # is refused by this that GIF_LZW_MAX_CODES would have allowed — the cap is
+    # an upper bound on reachable codes, not a policy.
+    # ⇒ `table_cap` therefore replaces GIF_LZW_MAX_CODES at EVERY bound below,
+    # not just at the allocations: the `next_code` ceiling and both chain-walk
+    # bounds must agree with the buffer they protect, or the guard is one
+    # looser than the array — the exact defect the 0.5.3 sweep found here.
+    var max_new = (data_len * 8) / (min_code_size + 1);
+    var table_cap = clear_code + 2 + max_new;
+    if (table_cap > GIF_LZW_MAX_CODES) { table_cap = GIF_LZW_MAX_CODES; }
+
+    var prefix = alloc(table_cap * 8);
     if (prefix == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0 - 1; }
-    var suffix = alloc(GIF_LZW_MAX_CODES * 8);
+    var suffix = alloc(table_cap * 8);
     if (suffix == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0 - 1; }
     # Expansion scratch: a chain can be at most one entry per dictionary slot.
-    var chain = alloc(GIF_LZW_MAX_CODES);
+    var chain = alloc(table_cap);
     if (chain == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0 - 1; }
 
     var i = 0;
@@ -172,7 +193,7 @@ fn _gif_lzw_decode(data, data_len, min_code_size, out, out_cap, err_out): i64 {
                                 cur = prev;
                                 guard = 0;
                                 while (cur >= clear_code) {
-                                    if (guard >= GIF_LZW_MAX_CODES) {
+                                    if (guard >= table_cap) {
                                         rc = CHITRA_ERR_GIF_LZW;
                                         cur = 0 - 1;
                                     }
@@ -182,7 +203,7 @@ fn _gif_lzw_decode(data, data_len, min_code_size, out, out_cap, err_out): i64 {
                                         # `chain`, and the guard counter was
                                         # one looser than the buffer it was
                                         # protecting.
-                                        if (sp >= GIF_LZW_MAX_CODES) {
+                                        if (sp >= table_cap) {
                                             rc = CHITRA_ERR_GIF_LZW;
                                             cur = 0 - 1;
                                         }
@@ -209,12 +230,12 @@ fn _gif_lzw_decode(data, data_len, min_code_size, out, out_cap, err_out): i64 {
                             cur = code;
                             guard = 0;
                             while (cur >= clear_code) {
-                                if (guard >= GIF_LZW_MAX_CODES) {
+                                if (guard >= table_cap) {
                                     rc = CHITRA_ERR_GIF_LZW;
                                     cur = 0 - 1;
                                 }
                                 if (cur >= clear_code) {
-                                    if (sp >= GIF_LZW_MAX_CODES) {
+                                    if (sp >= table_cap) {
                                         rc = CHITRA_ERR_GIF_LZW;
                                         cur = 0 - 1;
                                     }
@@ -259,7 +280,7 @@ fn _gif_lzw_decode(data, data_len, min_code_size, out, out_cap, err_out): i64 {
                         # which is strictly less than the index being written —
                         # that ordering is what makes a cyclic chain impossible.
                         if (prev >= 0) {
-                            if (next_code < GIF_LZW_MAX_CODES) {
+                            if (next_code < table_cap) {
                                 store64(prefix + next_code * 8, prev);
                                 store64(suffix + next_code * 8, first);
                                 next_code = next_code + 1;

@@ -122,6 +122,7 @@ chitra_jpeg_frame_sos_offset     chitra_jpeg_frame_comp_id
 chitra_jpeg_frame_comp_h         chitra_jpeg_frame_comp_v
 chitra_jpeg_frame_comp_tq        chitra_jpeg_frame_adobe_transform
 chitra_jpeg_frame_scan_ns        chitra_jpeg_frame_covered
+chitra_jpeg_frame_saw_jfif
 chitra_jpeg_scan_comp            chitra_jpeg_scan_td
 chitra_jpeg_scan_ta
 ```

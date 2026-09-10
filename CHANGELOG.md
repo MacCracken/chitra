@@ -9,6 +9,170 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 _Nothing yet._
 
+## [1.0.3] - 2026-09-10 — a P-1 sweep of all four formats, and the first audit of the gate stack
+
+The fifth security audit, and the first since the freeze:
+[`docs/audit/2026-09-10-audit.md`](docs/audit/2026-09-10-audit.md). Eleven
+adversarial lenses, every candidate put to **two independent skeptics with
+opposing jobs** — one re-deriving the control flow from the public entry, one
+constructing the malicious file byte by byte. **41 confirmed by both, 5 split,
+2 refuted**, deduplicating to **19 distinct defects**, all repaired here.
+
+⛔ **No memory-safety defect and no wrong-output defect on well-formed input.**
+10.7 M fuzz assertions had already established this code does not fault easily,
+so the sweep was weighted toward what fuzzing cannot see: **silently wrong
+output**, and **what a refusal costs**. That weighting is what the findings are.
+
+### Fixed — a valid PNG could kill the process
+
+⛔⛔ **B-1 · `crc32_init_table()`'s OOM return was discarded, and the next
+`crc32()` read through a NULL table.** sankoch allocates the 16 KB slice-by-8
+table on first use and returns `-ERR_OOM` when the arena cannot supply it;
+chitra called it as a bare statement.
+⚠ **No hostile file is involved** — the trigger is arena state, so the file that
+dies is the *first* PNG a memory-pressured process decodes. Reproduced with the
+repo's own 77-byte 2×2 fixture: **SIGSEGV, exit 139**, where the documented
+contract is `(0, *err_out = CHITRA_ERR_OOM)`. It also contradicted SECURITY.md's
+"every allocation is null-checked", which is now true again.
+
+### Fixed — a JFIF file's colour space was overridable by its component ids
+
+⛔ **B-2 · Six edited bytes turned an ordinary `cjpeg` image into a whole-image
+colour error with no error code**, while `source_color_type` returned **0x113**
+and actively told the consumer the samples were RGB. Every colour byte of a
+64×64 fixture came back wrong; `djpeg` and ImageMagick both decode the same bytes
+correctly.
+chitra never parsed **APP0**, so nothing knew a file was JFIF — and JFIF § 4.1
+*defines* three components as Y/Cb/Cr. 0.6.1's correct rule that `'R','G','B'`
+component ids name an RGB file therefore also applied to files that had already
+answered the question.
+⭐ The authority order is now **JFIF → Adobe APP14 transform → component ids →
+YCbCr**, which is libjpeg's (`default_decompress_parms` tests `saw_JFIF_marker`
+first). ⚠ `cjpeg -rgb` emits **no** JFIF APP0, so real RGB files still report
+0x113 — pinned by its own regression cell so this cannot silently revert 0.6.1.
+
+### Fixed — a truncated JPEG scan reported a clean close
+
+⛔ **B-5 · Two bytes inserted mid-scan produced an image whose bottom half is
+invented, with `seen_iend` = 1.** An RSTn the decoder never asked for latched in
+the bit reader and every subsequent bit was fabricated as zero — but the latch
+set `BR_MARKER` without `BR_EOD`. SECURITY.md is explicit that chitra does not
+raise an error for a partial JPEG, so `seen_iend` is the consumer's **only**
+channel, and it was asserting the opposite of the truth. `djpeg` on the same
+bytes: exit 2, "premature end of data segment".
+⭐ `BR_EOD` is now set at the **fabrication point** — where a bit is asked for and
+none can be supplied — not at the latch. ⚠ That distinction is load-bearing: a
+*legitimate* restart also latches and is then consumed with nothing fabricated,
+so setting the flag at the latch would make every restart-interval JPEG report an
+unclosed stream. A companion cell holds that line.
+
+### Fixed — every RLE BMP whose width is not a multiple of 4
+
+⛔ **B-6 · 30 of 30 files written by `magick -compress RLE` were refused**, all
+of which ffmpeg and ImageMagick itself read without complaint. A BMP row is `w`
+pixels of image inside a **DWORD-aligned** row and real encoders fill the
+padding — a 9-pixel RLE8 row is nine 1-pixel runs then a 3-pixel run — and chitra
+rejected at `x >= w`. The tree's own "ImageMagick-encoded RLE8" fixture is 8×4,
+a width where the padding does not exist, which is why no cell caught it.
+⭐ Samples in `[w, row_cap)` are now consumed and **discarded**; past `row_cap` is
+still refused. ⚠ Padding is not image data, so this is not clipping — the
+per-write bound that stops a run painting a different image than the file encodes
+is intact. Measured after: **52 of 52** RLE8 and **24 of 24** RLE4 files decode
+byte-identically to ImageMagick.
+
+### Fixed — four refusal paths that allocated what they were refusing
+
+⛔⛔ **A CAP BELONGS BEFORE THE ALLOCATION IT EXISTS TO PREVENT.** On an allocator
+that never frees, a cap that fires afterwards is decoration — and the spend is
+cumulative across decodes. Four findings, three formats, one shape:
+
+- **B-3 · JPEG · 50,354,832 bytes to return `CHITRA_ERR_DIMENSIONS`** (11,848:1
+  on the refusal path; ~40 such files exhaust the stdlib's 2 GiB `ALLOC_MAX`).
+  GATE 2 is the honest bound but can only run after every scan decodes, by which
+  point every plane is allocated. ⭐ A **GATE 0** now runs first: `total_espan`
+  can never exceed `len`, which makes it **strictly weaker** than GATE 2 — it can
+  only refuse what GATE 2 already refuses, so no accept/reject outcome moves.
+  ⇒ **22,160 bytes** after, which is the per-frame table allocation and nothing
+  else.
+- **B-4 · BMP · 16,777,344 bytes per refusal from a 60-byte file** (279,622:1;
+  200 decodes of the same 60 bytes reach **3.36 GB**). ⚠ The 0.5.3 audit named
+  this exact defect in GIF and repaired the GIF half — the BMP half was left,
+  with a source comment acknowledging the ordering. ⭐ A pre-gate on
+  `len - data_off`, an upper bound on `consumed`. The exact check stays: padding
+  a file raises the pre-gate's bound and only `consumed` sees through it.
+  ⇒ **128 bytes** after, same error code.
+- **B-7 · GIF · 69,632 bytes of LZW dictionary before a single code was read**,
+  on every call, never memoized. ⭐ Sized to the stream instead, by arithmetic
+  rather than heuristic: every code costs ≥ `min_code_size + 1` bits and adds at
+  most one entry. ⚠ `table_cap` replaces the flat ceiling at **every** bound, not
+  just the allocations — a guard one looser than its array is the exact defect
+  the 0.5.3 sweep found in this file. ⇒ **69,776 → 416 bytes**; 20 differential
+  cases against ImageMagick byte-exact; 1,379,514 fuzz assertions clean.
+
+### Fixed — gates that could not fire
+
+The eleventh lens audited the machinery that is supposed to catch everything
+above, on the principle that **a gate that cannot fire is the same defect class
+as a guard that cannot fire, one level up**. It was right to:
+
+- ⛔ **B-9 · `scripts/check-surface.sh` ran nowhere.** CLAUDE.md and
+  public-surface.md both say the frozen-surface gate runs on "every `make lint`"
+  — and it does, but **CI re-implements the lint loop** rather than calling
+  `make lint`, so the one machine that blesses a tag never ran it. At v1.0 an
+  unclassified export is a compatibility promise made by accident. Now an
+  explicit CI step.
+- ⛔ **B-10 · An unvalidated grep extracted the toolchain pin.** A reformatted or
+  missing pin line yields an **empty** `CYRIUS_VERSION`, and the installer treats
+  that as "give me the latest release" — CI would go green on a toolchain nobody
+  pinned. Both workflows now validate it as semver and fail loudly.
+- **B-11 · CI's dist-sync gate diffed only `dist/chitra.cyr`.** `cyrius deps`
+  treats `dist/chitra.deps` as authoritative for every consumer, so a stale leaf
+  list could drift green. Both are diffed now.
+- ⛔ **B-12 · No test could tell width from height on the four frozen `_rgba8`
+  wrappers.** Every wrapper cell used a **square** fixture, so transposing the
+  two stores in `chitra_png_decode_rgba8` — mabda's primary entry point — passed
+  all 13 suites, all 3,035 assertions and all 10.7 M fuzz assertions with nothing
+  red. Verified by doing exactly that. Non-square fixtures for all four now; the
+  same mutation fails in **five** suites.
+- **B-13 · `check-anchors.sh` inspected 66 of ~126 line-number claims** and
+  reported "suspicious: 0", because its regex matched only citations that repeat
+  the filename — the bare `:NNN` shorthand the ADRs use most was invisible,
+  including anchors landing on a bare brace. Coverage 66 → **90**, which
+  immediately surfaced **5 rotted anchors**, all repaired.
+- **B-14 · `version-check.sh`'s manifest arm could not fire**, and its guard also
+  passed a manifest that had *lost* its version key. All three arms now decided
+  explicitly and proven reachable.
+- **B-16 / B-17 · Two scripts' failure-reporting branches were unreachable**
+  under `set -euo pipefail` — the command substitution meant to feed the
+  diagnostic aborted the script first. So a red suite exited 1 with no
+  indication of which suite, and `bench-csv.sh`'s two "refusing to record
+  numbers" guards could never keep a failed run out of the committed series.
+
+### Behaviour a consumer can observe
+
+Neither touches a frozen signature, name, record offset or error code; both are
+narrowings toward the reference decoders.
+
+- **`seen_iend`** goes 1 → 0 for a JPEG whose scan carries an unexpected RSTn.
+  That is the point: such files were being reported as cleanly closed.
+- **`source_color_type` 0x113** is narrowed to the file set libjpeg recognises.
+  The sentinel and its meaning are unchanged.
+- ⭐ **B-6 widens acceptance** — files previously refused now decode. Nothing that
+  decoded before decodes differently.
+
+### Tests
+
+**3,035 → 3,084 assertions** across 13 suites, and every repair carries a
+regression test **checked to fail against the pre-repair code**.
+⚠ **Four of those are COST assertions, and they have to be.** B-3, B-4 and B-7
+change no verdict and no error code — only what reaching it costs. Asserting the
+refusal alone would pass against both versions, which is exactly how these
+defects survived four prior audits.
+⚠ One test asserts its own position: B-1's cell is reachable only on a process's
+first PNG decode, so it detects being moved out of first place and says so rather
+than passing vacuously. It fired during this cut, when the B-12 additions landed
+above it.
+
 ## [1.0.2] - 2026-09-10 — the toolchain catches up, and the `alloc_reset()` hazard arrives fixed
 
 ⛔ **No decode code changed.** `git diff dist/chitra.cyr` against the 1.0.1 bundle is **exactly two

@@ -684,6 +684,21 @@ fn _bmp_rle_put(idx, w, h, x, y, v): i64 {
 
 fn _bmp_decode_rle(src, len, data_off, w, h, is_rle4, idx, err_out, consumed_out): i64 {
     store64(err_out, 0);
+    # ⛔⛔ A ROW IS `w` PIXELS OF IMAGE INSIDE A DWORD-ALIGNED ROW (B-6, 1.0.3).
+    # Real encoders — ImageMagick among them — emit runs covering the padded
+    # row, not the image row: a 9-pixel-wide RLE8 row comes out as nine 1-pixel
+    # runs followed by a 3-pixel run of index 0, then end-of-line, because the
+    # uncompressed row would be 12 bytes. Rejecting at `x >= w` refused EVERY
+    # RLE BMP whose width is not a multiple of 4 — measured, 30 of 30 files
+    # written by `magick -compress RLE`, all of which ffmpeg and ImageMagick
+    # itself read without complaint.
+    # ⚠ THE PADDING IS NOT IMAGE DATA AND IS NOT CLIPPED IMAGE DATA. Samples in
+    # [w, row_cap) are DISCARDED, not stored and not clamped into the row — so
+    # this does not decode a different image than the file encodes, which is the
+    # thing the per-write bound exists to prevent. Past `row_cap` the stream is
+    # describing pixels the padded row does not have, and that is still refused.
+    var row_cap = ((w + 3) / 4) * 4;               # RLE8: 1 byte per pixel
+    if (is_rle4 == 1) { row_cap = ((w + 7) / 8) * 8; }   # RLE4: 2 pixels per byte
     var p = data_off;
     var x = 0;
     var y = 0;
@@ -758,7 +773,7 @@ fn _bmp_decode_rle(src, len, data_off, w, h, is_rle4, idx, err_out, consumed_out
                     if (done == 0) {
                         i = 0;
                         while (i < b1) {
-                            if (x >= w || y >= h) {
+                            if (x >= row_cap || y >= h) {
                                 rc = CHITRA_ERR_BMP_RLE;
                                 i = b1;
                                 done = 1;
@@ -771,7 +786,9 @@ fn _bmp_decode_rle(src, len, data_off, w, h, is_rle4, idx, err_out, consumed_out
                                 } else {
                                     v = load8(src + p + i);
                                 }
-                                _bmp_rle_put(idx, w, h, x, y, v);
+                                # Inside the image, store. In the row's DWORD
+                                # padding, consume and discard.
+                                if (x < w) { _bmp_rle_put(idx, w, h, x, y, v); }
                                 x = x + 1;
                                 i = i + 1;
                             }
@@ -788,7 +805,7 @@ fn _bmp_decode_rle(src, len, data_off, w, h, is_rle4, idx, err_out, consumed_out
                 # RLE4 alternates the two nibbles of b1, high first.
                 i = 0;
                 while (i < b0) {
-                    if (x >= w || y >= h) {
+                    if (x >= row_cap || y >= h) {
                         rc = CHITRA_ERR_BMP_RLE;
                         i = b0;
                         done = 1;
@@ -799,7 +816,9 @@ fn _bmp_decode_rle(src, len, data_off, w, h, is_rle4, idx, err_out, consumed_out
                             if ((i & 1) == 0) { v = (b1 >> 4) & 15; }
                             if ((i & 1) == 1) { v = b1 & 15; }
                         }
-                        _bmp_rle_put(idx, w, h, x, y, v);
+                        # Inside the image, store. In the row's DWORD padding,
+                        # consume and discard.
+                        if (x < w) { _bmp_rle_put(idx, w, h, x, y, v); }
                         x = x + 1;
                         i = i + 1;
                     }
@@ -866,6 +885,27 @@ fn chitra_bmp_decode(src, len, err_out): i64 {
     if (compression == BMP_BI_RLE8) { is_rle = 1; }
     if (compression == BMP_BI_RLE4) { is_rle = 1; }
     if (is_rle == 1) {
+        # ⛔⛔ PRE-GATE (B-4, 1.0.3) — REFUSE BEFORE ALLOCATING, NOT AFTER.
+        # The exact cap below can only run after the decode, because the only
+        # honest denominator is the bytes actually CONSUMED. But that left a
+        # 60-byte file — 4096x4096, BI_RLE8, payload `00 01` (end-of-bitmap) —
+        # allocating and zeroing a 16,777,216-byte index plane before the cap
+        # it exists to trip could see anything. On a bump allocator that never
+        # frees that is 16,777,344 bytes per refusal, 279,622:1 on the REFUSAL
+        # path, and cumulative: 200 decodes of the same 60 bytes reach 3.36 GB.
+        #
+        # ⚠ THE PRE-GATE IS STRICTLY WEAKER, WHICH IS WHAT MAKES IT SAFE.
+        # `consumed` can never exceed the bytes available after `data_off` (the
+        # cursor only advances and never leaves the buffer), so this refuses
+        # only files the exact check already refuses — no accept/reject outcome
+        # moves, and the same error code is returned, only ~144 bytes in.
+        # ⇒ It does NOT replace the exact check. Padding a file still raises
+        # this bound, which is precisely the attack the 0.5.3 cut was written
+        # for, and only the `consumed` denominator below sees through it.
+        if (out_size > (len - data_off) * CHITRA_MAX_BMP_RLE_RATIO) {
+            store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
+            return 0;
+        }
         rle_idx = alloc(w * h);
         if (rle_idx == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
         var zz = 0;

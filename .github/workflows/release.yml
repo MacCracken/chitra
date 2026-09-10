@@ -52,6 +52,17 @@ jobs:
         run: |
           set -e
           CYRIUS_VERSION="$(grep '^cyrius = ' cyrius.cyml | head -1 | sed 's/cyrius = "\(.*\)"/\1/')"
+          # B-10 (1.0.3): VALIDATE THE EXTRACTION, DO NOT TRUST IT. If the pin
+          # line is ever reformatted, renamed or lost, this grep yields an EMPTY
+          # string — and install.sh treats an empty CYRIUS_VERSION as "give me
+          # the latest release". CI would then go green on a toolchain nobody
+          # pinned, which is the precise failure the "the pin is the only source
+          # of truth" rule exists to prevent.
+          if ! printf '%s' "$CYRIUS_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "ERROR: could not read a semver toolchain pin from cyrius.cyml [package].cyrius"
+            echo "       got: '$CYRIUS_VERSION'"
+            exit 1
+          fi
           echo "Installing Cyrius $CYRIUS_VERSION"
           curl -sSf https://raw.githubusercontent.com/MacCracken/cyrius/main/scripts/install.sh | \
             CYRIUS_VERSION="$CYRIUS_VERSION" sh

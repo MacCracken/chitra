@@ -362,7 +362,17 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
 
     # crc32() needs its slice-by-8 table built first (it does not lazy-
     # init). Idempotent — cheap to call per decode.
-    crc32_init_table();
+    # ⛔⛔ THE RETURN IS LOAD-BEARING (B-1, 1.0.3). sankoch allocates the 16 KB
+    # slice-by-8 table here and returns `-ERR_OOM` when the arena cannot give
+    # it. Discarding that left `crc32_table` at 0, and the very next `crc32()`
+    # in _chitra_parse_ihdr read through a NULL base — SIGSEGV on a perfectly
+    # valid PNG, in place of the documented `(0, *err_out = CHITRA_ERR_OOM)`.
+    # ⚠ No hostile file is involved: the trigger is arena state, so the file
+    # that dies is the FIRST PNG a memory-pressured process decodes.
+    if (crc32_init_table() < 0) {
+        store64(err_out, chitra_err(CHITRA_ERR_OOM));
+        return 0;
+    }
 
     # ---- signature ----
     if (chitra_png_check_signature(src, len) == 0) {

@@ -106,7 +106,7 @@ RLE and masks), `budget.tcyr` (byte-budget refusals and their allocation cost),
 (`seen_iend` on all four formats), `subbyte.tcyr` (1/2/4-bit
 grayscale/palette), or `surface.tcyr` (record offsets, error names, the frozen
 accessors). The suites are globbed by `make test`; each is a standalone
-`main()`. The current baseline is **3,035 assertions across 13 suites** — PRs that
+`main()`. The current baseline is **3,084 assertions across 13 suites** — PRs that
 lower coverage will be asked to add it.
 Confirm the count with `make count-assertions`.
 

@@ -223,7 +223,29 @@ fn _jpeg_br_bit(reader): i64 {
         _jpeg_br_load_byte(reader);
         cnt = load64(reader + BR_CNT);
     }
-    if (cnt == 0) { return 0; }
+    # ⛔⛔ B-5 (1.0.3) — THE FABRICATION POINT, AND THEREFORE THE ONLY HONEST
+    # PLACE TO SET BR_EOD. Reaching here means a bit was asked for and the scan
+    # could not supply it, so the zero returned below is invented. That is
+    # precisely what BR_EOD is defined to mean twenty lines above: "set the
+    # moment the reader needs a byte the input does not contain."
+    #
+    # `_jpeg_br_load_byte` already set it for a span that simply ran out. What
+    # it did NOT set it for was a LATCHED MARKER — and the only markers inside
+    # a scan's span are RSTn, because _jpeg_entropy_span ends the span at the
+    # first marker that is neither stuffing nor a restart. So an RSTn the
+    # decoder never asked for (no DRI, DRI=0, or the wrong interval) latched,
+    # every subsequent MCU was fabricated from zero bits, and `seen_iend` still
+    # came back 1 — a positive assertion of a clean close over an image whose
+    # bottom half is invented. Two bytes inserted mid-scan were enough.
+    #
+    # ⚠ Setting it at the latch instead would be wrong: a LEGITIMATE restart
+    # also latches, and `_jpeg_br_restart` then consumes it and clears
+    # BR_MARKER. Nothing is fabricated on that path and it must keep reporting
+    # a clean close. Fabrication, not latching, is the event worth recording.
+    if (cnt == 0) {
+        store64(reader + BR_EOD, 1);
+        return 0;
+    }
     cnt = cnt - 1;
     store64(reader + BR_CNT, cnt);
     return (load64(reader + BR_BUF) >> cnt) & 1;

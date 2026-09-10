@@ -75,8 +75,14 @@ enum ChitraErrCode {
     # ⛔⛔ NOT A VALIDITY FAILURE, NOT AN OOM, AND NOT A BOMB. The file is a correct PNG, the heap is
     # fine, and the caller asked for it — but its inflated scanline data is larger than the linked
     # `sankoch` will EMIT. `DECOMPRESS_MAX_OUTPUT` is sankoch's absolute 16 MiB anti-bomb backstop,
-    # enforced identically by the one-shot and the streaming decoders, so no sankoch entry point can
-    # exceed it and chitra cannot work around it.
+    # enforced identically by `zlib_decompress` and the
+    # streaming decoder, which are the entry points chitra calls.
+    # ⚠ CORRECTED 1.0.3 — this used to say "no sankoch entry point can exceed it and chitra cannot
+    # work around it", and the second half stopped being true when sankoch **2.7.13** added
+    # `zlib_decompress_capped`, which lets a caller that has independently bounded its own output
+    # name its own ceiling. That entry point is vendored and works. chitra still calls plain
+    # `zlib_decompress` DELIBERATELY: adopting the capped form retires files that currently answer
+    # this code, so it is a release with an entry, not a swap.
     # ⚠ THIS USED TO SURFACE AS `CHITRA_ERR_INFLATE` — "the decompressor reported a failure" — which
     # is true and useless: it does not distinguish a corrupt stream from a perfectly good image that
     # is simply too large for this build. A caller can retry a corrupt file, or ask the user; it can

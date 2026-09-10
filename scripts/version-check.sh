@@ -17,12 +17,28 @@ fail=0
 # Allow the manifest to either inline the version or template it from VERSION.
 # The manifest's `version = "${file:VERSION}"` form is valid — so we only
 # diff when the manifest has a literal version string.
-if grep -qE '^version = "[0-9]' cyrius.cyml; then
-    MANIFEST_VERSION=$(grep -E '^version = "' cyrius.cyml | head -1 | sed -E 's/version = "([^"]*)"/\1/')
+# B-14 (1.0.3): this arm could not fire, AND its guard passed a manifest with
+# no version key at all. The manifest uses the template form
+# `version = "${file:VERSION}"`, which the `^version = "[0-9]` test never
+# matches — so the "VERSION == cyrius.cyml version" leg of the gate the release
+# workflow documents was a no-op, and a manifest that had LOST or reformatted
+# its version line was indistinguishable from a correct one. Both halves are
+# now decided explicitly, and an unrecognised form is a FAIL rather than a pass.
+MANIFEST_LINE=$(grep -E '^version = "' cyrius.cyml | head -1 || true)
+if [ -z "$MANIFEST_LINE" ]; then
+    echo "  FAIL: cyrius.cyml has no 'version = ' line"
+    fail=1
+elif echo "$MANIFEST_LINE" | grep -qE '^version = "\$\{file:VERSION\}"$'; then
+    : # the template form — VERSION *is* the manifest version; nothing to diff.
+elif echo "$MANIFEST_LINE" | grep -qE '^version = "[0-9]'; then
+    MANIFEST_VERSION=$(echo "$MANIFEST_LINE" | sed -E 's/version = "([^"]*)"/\1/')
     if [ "$FILE_VERSION" != "$MANIFEST_VERSION" ]; then
         echo "  FAIL: VERSION ($FILE_VERSION) != cyrius.cyml ($MANIFEST_VERSION)"
         fail=1
     fi
+else
+    echo "  FAIL: cyrius.cyml version is neither a literal nor \${file:VERSION}: $MANIFEST_LINE"
+    fail=1
 fi
 
 if ! grep -q "^## \[$FILE_VERSION\]" CHANGELOG.md; then

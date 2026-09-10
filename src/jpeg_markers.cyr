@@ -116,12 +116,17 @@ var JF_SCAN_TA          = 16;    # AC Huffman selector for THIS scan
 # makes an omitted component detectable — Y=Cb=Cr=0 is solid green through the
 # BT.601 constants, which decodes cleanly and looks plausible.
 var JF_COVERED          = 344;
+# 1 once a JFIF APP0 has been seen (B-2, 1.0.3). JFIF § 4.1 defines the sample
+# space: one component is greyscale, three are Y/Cb/Cr. So a file that DECLARES
+# itself JFIF has already answered the colour question, and nothing weaker may
+# override it — see the authority order in _jpeg_build_image.
+var JF_SAW_JFIF         = 352;
 # Grown 320 -> 384 in 0.6.1 for the field above. This record is @internal and
 # heap-allocated per decode, so growing it costs 8 bytes a decode and nothing
 # else — but the 0.7.0 multi-scan work needs a per-component coverage bitmask
 # and a resume position (ADR 0006), so the slack is left deliberately generous
 # rather than shaved to fit.
-var CHITRA_JPEG_FRAME_SIZE = 384;   # 352 used, 32 B spare
+var CHITRA_JPEG_FRAME_SIZE = 384;   # 360 used, 24 B spare
 
 fn chitra_jpeg_frame_width(f): i64          { return load64(f + JF_WIDTH); }
 fn chitra_jpeg_frame_height(f): i64         { return load64(f + JF_HEIGHT); }
@@ -145,6 +150,7 @@ fn chitra_jpeg_frame_sos_offset(f): i64  { return load64(f + JF_SOS_OFFSET); }
 fn chitra_jpeg_frame_adobe_transform(f): i64 { return load64(f + JF_ADOBE_TRANSFORM); }
 fn chitra_jpeg_frame_scan_ns(f): i64   { return load64(f + JF_SCAN_NS); }
 fn chitra_jpeg_frame_covered(f): i64   { return load64(f + JF_COVERED); }
+fn chitra_jpeg_frame_saw_jfif(f): i64  { return load64(f + JF_SAW_JFIF); }
 fn chitra_jpeg_scan_comp(f, j): i64 { return load64(f + JF_SCAN + j * JF_SCAN_STRIDE + JF_SCAN_COMP); }
 fn chitra_jpeg_scan_td(f, j): i64   { return load64(f + JF_SCAN + j * JF_SCAN_STRIDE + JF_SCAN_TD); }
 fn chitra_jpeg_scan_ta(f, j): i64   { return load64(f + JF_SCAN + j * JF_SCAN_STRIDE + JF_SCAN_TA); }
@@ -187,6 +193,7 @@ fn _jpeg_marker_action(m): i64 {
     if (m == 0xDB) { return 5; }                          # DQT — parse
     if (m == 0xC4) { return 6; }                          # DHT — parse
     if (m == 0xDD) { return 7; }                          # DRI — parse restart interval
+    if (m == 0xE0) { return 9; }                          # APP0 — may be the JFIF identifier
     if (m == 0xEE) { return 8; }                          # APP14 — may carry the Adobe colour transform
     if (m == 0xC2) { return CHITRA_ERR_JPEG_PROGRESSIVE; }
     if (m == 0xC9) { return CHITRA_ERR_JPEG_ARITHMETIC; } # SOF9 ext-seq arithmetic
@@ -433,6 +440,51 @@ fn _jpeg_parse_dht(cur, frame): i64 {
 # marker is not reserved to them) is skipped exactly as before.
 # Returns 0 on success, or a CHITRA_ERR_* code.
 # ================================================================
+# ================================================================
+# APP0 — is this a JFIF file? (B-2, 1.0.3)
+#
+# Only the five-byte identifier matters: version, density and the thumbnail are
+# metadata chitra has no use for. The segment is skipped whole either way; the
+# single bit recorded is whether it said "JFIF\0".
+#
+# ⛔ WHY IT IS RECORDED AT ALL. Through 1.0.2 APP0 fell through to the generic
+# length-skip, so nothing in the tree knew a file was JFIF — and the colour
+# decision's second rule, "component ids 'R','G','B' name the space outright",
+# then applied to files that had already declared themselves YCbCr. Six edited
+# bytes turned an ordinary cjpeg image into a whole-image colour error with no
+# error code, while `source_color_type` actively asserted 0x113 (RGB) to the
+# consumer. libjpeg does not have this hole because `default_decompress_parms`
+# tests `saw_JFIF_marker` FIRST; chitra now does the same.
+# ================================================================
+fn _jpeg_parse_app0(cur, frame): i64 {
+    if (_cur_can_read(cur, 2) == 0) { return CHITRA_ERR_TRUNCATED; }
+    var seglen = _cur_u16_be(cur);
+    if (seglen < 2) { return CHITRA_ERR_JPEG_MARKER; }
+    var remaining = seglen - 2;
+    if (_cur_can_read(cur, remaining) == 0) { return CHITRA_ERR_TRUNCATED; }
+    # Shorter than the identifier cannot be JFIF; skip it whole.
+    if (remaining < 5) {
+        _cur_skip(cur, remaining);
+        return 0;
+    }
+    var b0 = _cur_u8(cur);
+    var b1 = _cur_u8(cur);
+    var b2 = _cur_u8(cur);
+    var b3 = _cur_u8(cur);
+    var b4 = _cur_u8(cur);
+    if (b0 == 0x4A) {
+        if (b1 == 0x46) {
+            if (b2 == 0x49) {
+                if (b3 == 0x46) {
+                    if (b4 == 0x00) { store64(frame + JF_SAW_JFIF, 1); }
+                }
+            }
+        }
+    }
+    _cur_skip(cur, remaining - 5);
+    return 0;
+}
+
 fn _jpeg_parse_app14(cur, frame): i64 {
     if (_cur_can_read(cur, 2) == 0) { return CHITRA_ERR_TRUNCATED; }
     var seglen = _cur_u16_be(cur);
@@ -675,6 +727,10 @@ fn _jpeg_resume_to_next_scan(frame, src, len, resume, err_out): i64 {
                 rc = _jpeg_parse_app14(&cur, frame);
                 if (rc != 0) { done = 1; }
             }
+            if (act == 9) {
+                rc = _jpeg_parse_app0(&cur, frame);
+                if (rc != 0) { done = 1; }
+            }
             if (act == 2) {
                 store64(frame + JF_SOS_OFFSET, _cur_pos(&cur));
                 found = _cur_pos(&cur);
@@ -732,6 +788,7 @@ fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
     store64(frame + JF_ADOBE_TRANSFORM, 0 - 1);   # -1 = no Adobe APP14 seen
     store64(frame + JF_SCAN_NS, 0);
     store64(frame + JF_COVERED, 0);
+    store64(frame + JF_SAW_JFIF, 0);
     # The quantization and Huffman stores are NOT allocated here — see
     # _jpeg_alloc_quant / _jpeg_alloc_huff. A file that never defines a table
     # never pays for one, which is what makes the refusal path cheap.
@@ -793,6 +850,10 @@ fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
             }
             if (act == 8) {
                 rc = _jpeg_parse_app14(&cur, frame);
+                if (rc != 0) { done = 1; }
+            }
+            if (act == 9) {
+                rc = _jpeg_parse_app0(&cur, frame);
                 if (rc != 0) { done = 1; }
             }
             if (act == 2) {

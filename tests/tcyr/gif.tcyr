@@ -2623,7 +2623,107 @@ fn test_gif_transparent_index_in_range_decodes() {
     return 0;
 }
 
+# ================================================================
+# B-7 (1.0.3) — the LZW dictionary is sized to the stream, not to the format's
+# 12-bit ceiling.
+#
+# ⛔ 69,632 BYTES BEFORE A SINGLE CODE WAS READ — prefix 32,768 + suffix 32,768
+# + chain 4,096, on every call, never memoized, on an allocator that never
+# frees. A 45-byte GIF paid all of it; so did one the decoder rejected on its
+# first code. A thumbnailer walking a directory paid it per image, for ever.
+#
+# The bound is arithmetic, not a guess: every code costs at least
+# `min_code_size + 1` bits and adds at most one entry, so a `data_len`-byte
+# stream can add at most `data_len * 8 / (min_code_size + 1)` entries beyond
+# the initial table plus Clear and End.
+#
+# ⚠ MUTATION-CHECKED on COST, because nothing else moves: restore
+# GIF_LZW_MAX_CODES at the three allocations and every other assertion in this
+# suite still passes while this one fails. And the correctness direction is
+# covered by the 643 cells around it plus a 20-cell ImageMagick differential —
+# a cap that were too TIGHT would corrupt output, not merely cost less.
+# ================================================================
+fn test_gif_lzw_dictionary_is_sized_to_the_stream() {
+    var lo = 0;
+    var b = fx_gif_plain(&lo);
+    var err = 0;
+    var before = alloc_used();
+    var img = chitra_gif_decode(b, lo, &err);
+    var spent = alloc_used() - before;
+    assert(img != 0, "the ordinary GIF fixture still decodes");
+    assert_lt(spent, 16384,
+      "a small GIF costs well under 16 KiB, not the flat 69,632-byte dictionary");
+    return 0;
+}
+
+# ================================================================
+# B-12 (1.0.3) — the four frozen `_rgba8` wrappers had no test that could tell
+# width from height.
+#
+# ⛔ NOT A LIVE DEFECT — A BLIND SPOT IN THE GATE STACK. Every wrapper test in
+# the tree used a SQUARE fixture (PNG 2x2, BMP 2x2, GIF 4x4, JPEG 16x16), so
+# swapping the two stores in `chitra_png_decode_rgba8` — transposing the
+# dimensions a caller gets back — passed all 13 suites, all 3,035 assertions and
+# all 10.7 M fuzz assertions with nothing red. Verified by doing exactly that.
+# `chitra_png_decode_rgba8` is mabda's primary entry point, and a transposed
+# w/h uploads a garbled texture with no ChitraErr to show for it.
+#
+# ⚠ Only `jpeg_noninterleaved.tcyr`'s 24x16 cell could see it, and only for
+# JPEG. These fixtures close the other three, and the assertions below compare
+# the wrapper's w/h against the FULL decoder's accessors on the same bytes —
+# so the two entry points cannot disagree either.
+# ================================================================
+# 3x2 GIF — 3x2, deliberately NON-SQUARE (B-12, 1.0.3).
+fn fx_gif_3x2_nonsquare(len_out): i64 {
+    var b = alloc(44);
+    store64(len_out, 44);
+    var i = 0;
+    while (i < 44) {
+        store8(b + i, 0);
+        i = i + 1;
+    }
+    store8(b + 0, 71);
+    store8(b + 1, 73);
+    store8(b + 2, 70);
+    store8(b + 3, 56);
+    store8(b + 4, 57);
+    store8(b + 5, 97);
+    store8(b + 6, 3);
+    store8(b + 8, 2);
+    store8(b + 10, 240);
+    store8(b + 13, 255);
+    store8(b + 18, 255);
+    store8(b + 19, 33);
+    store8(b + 20, 249);
+    store8(b + 21, 4);
+    store8(b + 27, 44);
+    store8(b + 32, 3);
+    store8(b + 34, 2);
+    store8(b + 37, 2);
+    store8(b + 38, 3);
+    store8(b + 39, 132);
+    store8(b + 40, 131);
+    store8(b + 41, 5);
+    store8(b + 43, 59);
+    return b;
+}
+
+fn test_gif_rgba8_wrapper_distinguishes_w_from_h() {
+    var lo = 0;
+    var b = fx_gif_3x2_nonsquare(&lo);
+    var w = 0;
+    var h = 0;
+    var px = chitra_gif_decode_rgba8(b, lo, &w, &h);
+    assert(px != 0, "the non-square GIF decodes through the wrapper");
+    assert_eq(w, 3, "wrapper w = 3 (not the height)");
+    assert_eq(h, 2, "wrapper h = 2 (not the width)");
+    assert_neq(w, h, "the fixture really is non-square, or this cell proves nothing");
+    return 0;
+}
+
 fn main() {
+    test_gif_rgba8_wrapper_distinguishes_w_from_h();
+    test_gif_lzw_dictionary_is_sized_to_the_stream();
     test_gif_signature();
     test_gif_plain();
     test_gif_interlaced();

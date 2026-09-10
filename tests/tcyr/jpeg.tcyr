@@ -2541,7 +2541,637 @@ fn test_dht_table_storage_allocated_at_most_once() {
     return 0;
 }
 
+# ================================================================
+# B-3 (1.0.3) — GATE 2 refused the file, but only after every plane was
+# allocated.
+#
+# 4,250 bytes: SOF0 declaring 4096x4096 Nf=3 (three 1x1 components, so three
+# 16,777,216-byte planes) over 4,100 bytes of entropy data. The per-scan GATE 1
+# passes — 4100*4096 = 16,793,600 is 16,384 MORE than one plane — so all three
+# planes are allocated; only then does GATE 2 find w*h*4 = 67,108,864 against
+# 4,100 bytes and refuse. Cost through 1.0.2: **50,354,832 bytes** to return
+# CHITRA_ERR_DIMENSIONS, on an allocator that never frees. ~40 such files
+# exhaust the stdlib's 2 GiB ALLOC_MAX.
+#
+# ⚠ MUTATION-CHECKED: with GATE 0 deleted the verdict and the error code are
+# unchanged and ONLY the byte count moves, 22,160 -> 50,354,832. The cost
+# assertion is therefore the whole test; asserting the refusal alone would pass
+# against both versions.
+#
+# ⚠ The residual 22,160 bytes is the per-FRAME DQT/DHT table allocation from
+# `chitra_jpeg_scan_markers` — 0.6.1's lazy-allocation cost, which is expected
+# and is why the bound below is not tighter.
+# ================================================================
+fn fx_jpeg_amplification_bomb(len_out): i64 {
+    var b = alloc(4250);
+    store64(len_out, 4250);
+    var i = 0;
+    while (i < 4250) {
+        store8(b + i, 0);
+        i = i + 1;
+    }
+    store8(b + 0, 255);
+    store8(b + 1, 216);
+    store8(b + 2, 255);
+    store8(b + 3, 219);
+    store8(b + 5, 67);
+    store8(b + 7, 1);
+    store8(b + 8, 1);
+    store8(b + 9, 1);
+    store8(b + 10, 1);
+    store8(b + 11, 1);
+    store8(b + 12, 1);
+    store8(b + 13, 1);
+    store8(b + 14, 1);
+    store8(b + 15, 1);
+    store8(b + 16, 1);
+    store8(b + 17, 1);
+    store8(b + 18, 1);
+    store8(b + 19, 1);
+    store8(b + 20, 1);
+    store8(b + 21, 1);
+    store8(b + 22, 1);
+    store8(b + 23, 1);
+    store8(b + 24, 1);
+    store8(b + 25, 1);
+    store8(b + 26, 1);
+    store8(b + 27, 1);
+    store8(b + 28, 1);
+    store8(b + 29, 1);
+    store8(b + 30, 1);
+    store8(b + 31, 1);
+    store8(b + 32, 1);
+    store8(b + 33, 1);
+    store8(b + 34, 1);
+    store8(b + 35, 1);
+    store8(b + 36, 1);
+    store8(b + 37, 1);
+    store8(b + 38, 1);
+    store8(b + 39, 1);
+    store8(b + 40, 1);
+    store8(b + 41, 1);
+    store8(b + 42, 1);
+    store8(b + 43, 1);
+    store8(b + 44, 1);
+    store8(b + 45, 1);
+    store8(b + 46, 1);
+    store8(b + 47, 1);
+    store8(b + 48, 1);
+    store8(b + 49, 1);
+    store8(b + 50, 1);
+    store8(b + 51, 1);
+    store8(b + 52, 1);
+    store8(b + 53, 1);
+    store8(b + 54, 1);
+    store8(b + 55, 1);
+    store8(b + 56, 1);
+    store8(b + 57, 1);
+    store8(b + 58, 1);
+    store8(b + 59, 1);
+    store8(b + 60, 1);
+    store8(b + 61, 1);
+    store8(b + 62, 1);
+    store8(b + 63, 1);
+    store8(b + 64, 1);
+    store8(b + 65, 1);
+    store8(b + 66, 1);
+    store8(b + 67, 1);
+    store8(b + 68, 1);
+    store8(b + 69, 1);
+    store8(b + 70, 1);
+    store8(b + 71, 255);
+    store8(b + 72, 196);
+    store8(b + 74, 20);
+    store8(b + 76, 1);
+    store8(b + 93, 255);
+    store8(b + 94, 196);
+    store8(b + 96, 20);
+    store8(b + 97, 16);
+    store8(b + 98, 1);
+    store8(b + 115, 255);
+    store8(b + 116, 192);
+    store8(b + 118, 17);
+    store8(b + 119, 8);
+    store8(b + 120, 16);
+    store8(b + 122, 16);
+    store8(b + 124, 3);
+    store8(b + 125, 1);
+    store8(b + 126, 17);
+    store8(b + 128, 2);
+    store8(b + 129, 17);
+    store8(b + 131, 3);
+    store8(b + 132, 17);
+    store8(b + 134, 255);
+    store8(b + 135, 218);
+    store8(b + 137, 12);
+    store8(b + 138, 3);
+    store8(b + 139, 1);
+    store8(b + 141, 2);
+    store8(b + 143, 3);
+    store8(b + 146, 63);
+    # 4,100 bytes of zero entropy data are already in place; close with EOI.
+    store8(b + 4248, 0xFF);
+    store8(b + 4249, 0xD9);
+    return b;
+}
+
+fn test_jpeg_bomb_refused_before_the_planes_are_paid_for() {
+    var lo = 0;
+    var b = fx_jpeg_amplification_bomb(&lo);
+    var err = 0;
+    var before = alloc_used();
+    var img = chitra_jpeg_decode(b, lo, &err);
+    var spent = alloc_used() - before;
+    assert_eq(img, 0, "the JPEG amplification bomb is refused");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_DIMENSIONS, "...as CHITRA_ERR_DIMENSIONS");
+    # One plane alone is 16,777,216 bytes. Anything at that scale means GATE 0
+    # is gone and the planes were allocated before the verdict.
+    assert_lt(spent, 1048576,
+      "refusing the bomb costs under 1 MiB, not the three 16 MB planes");
+    return 0;
+}
+
+# ================================================================
+# B-2 (1.0.3) — a JFIF file has already declared its colour space.
+#
+# ⛔ THE AUTHORITY ORDER IS JFIF > Adobe APP14 > component ids > YCbCr, and it
+# is libjpeg's (`default_decompress_parms` tests `saw_JFIF_marker` first).
+# Through 1.0.2 chitra never parsed APP0 at all, so rule 2 — "'R','G','B'
+# component ids name the space outright", correct on its own terms and added by
+# 0.6.1 — also applied to files that had already said they were JFIF. Six edited
+# bytes then produced a whole-image colour error with NO error code, while
+# `source_color_type` returned 0x113 and actively told the consumer the samples
+# were RGB. Measured on a 64x64 fixture: every colour byte wrong; djpeg and
+# ImageMagick both decode the same bytes correctly.
+#
+# ⚠ BOTH CELLS ARE REQUIRED. The second is the one that stops the repair being
+# "always YCbCr": `cjpeg -rgb` emits NO JFIF APP0 (ADR 0009), so real RGB files
+# must still reach rule 2 and report 0x113. Fixing only the first would silently
+# undo 0.6.1.
+# ================================================================
+fn _fx_patch_rgb_ids(src, len): i64 {
+    # Rewrite the three SOF0 and three SOS component ids to 'R','G','B'.
+    var i = 0;
+    var sof = 0 - 1;
+    var sos = 0 - 1;
+    while (i < len - 1) {
+        if (load8(src + i) == 0xFF) {
+            if (load8(src + i + 1) == 0xC0) { sof = i; }
+            if (load8(src + i + 1) == 0xDA) { sos = i; }
+        }
+        i = i + 1;
+    }
+    # SOF0: FFC0 len(2) P(1) Y(2) X(2) Nf(1) then id,HV,Tq per component.
+    var base = sof + 2 + 2 + 1 + 2 + 2 + 1;
+    store8(src + base + 0, 0x52);
+    store8(src + base + 3, 0x47);
+    store8(src + base + 6, 0x42);
+    # SOS: FFDA len(2) Ns(1) then Cs,TdTa per component.
+    var sbase = sos + 2 + 2 + 1;
+    store8(src + sbase + 0, 0x52);
+    store8(src + sbase + 2, 0x47);
+    store8(src + sbase + 4, 0x42);
+    return 0;
+}
+
+# YCbCr 8x8, component ids rewritten to 'R','G','B', NO JFIF APP0.
+# This is the 0.6.1 shape and must still report RGB.
+fn fx_jpeg_rgbids_no_jfif(len_out): i64 {
+    var lo = 0;
+    var b = fx_jpeg_ycc_8x8(&lo);
+    store64(len_out, lo);
+    _fx_patch_rgb_ids(b, lo);
+    return b;
+}
+
+# The same file with a minimal JFIF APP0 spliced in after SOI. JFIF says the
+# three components are Y/Cb/Cr, so the ids must not be believed.
+fn fx_jpeg_rgbids_with_jfif(len_out): i64 {
+    var lo = 0;
+    var srcb = fx_jpeg_ycc_8x8(&lo);
+    var app0 = 18;
+    var out = alloc(lo + app0);
+    store64(len_out, lo + app0);
+    store8(out + 0, 0xFF);
+    store8(out + 1, 0xD8);
+    store8(out + 2, 0xFF);
+    store8(out + 3, 0xE0);
+    store8(out + 4, 0x00);
+    store8(out + 5, 0x10);
+    store8(out + 6, 0x4A);      # 'J'
+    store8(out + 7, 0x46);      # 'F'
+    store8(out + 8, 0x49);      # 'I'
+    store8(out + 9, 0x46);      # 'F'
+    store8(out + 10, 0x00);
+    store8(out + 11, 0x01);     # version 1.1
+    store8(out + 12, 0x01);
+    store8(out + 13, 0x00);     # units: none
+    store8(out + 14, 0x00);
+    store8(out + 15, 0x01);     # x density 1
+    store8(out + 16, 0x00);
+    store8(out + 17, 0x01);     # y density 1
+    store8(out + 18, 0x00);     # no thumbnail
+    store8(out + 19, 0x00);
+    var i = 2;
+    while (i < lo) {
+        store8(out + i + app0, load8(srcb + i));
+        i = i + 1;
+    }
+    _fx_patch_rgb_ids(out, lo + app0);
+    return out;
+}
+
+fn test_jfif_app0_outranks_rgb_component_ids() {
+    var lo = 0;
+    var b = fx_jpeg_rgbids_with_jfif(&lo);
+    var err = 0;
+    var img = chitra_jpeg_decode(b, lo, &err);
+    assert(img != 0, "the JFIF file with R/G/B ids decodes");
+    if (img != 0) {
+        assert_eq(chitra_image_source_color_type(img), 0x103,
+          "a JFIF file is YCbCr no matter what its component ids say");
+    }
+    return 0;
+}
+
+fn test_rgb_component_ids_still_win_without_jfif() {
+    # ⛔ THE OTHER HALF. `cjpeg -rgb` writes no JFIF APP0, so rule 2 must still
+    # fire for it — otherwise B-2's repair silently reverts 0.6.1 and every
+    # cjpeg -rgb file is hue-rotated again.
+    var lo = 0;
+    var b = fx_jpeg_rgbids_no_jfif(&lo);
+    var err = 0;
+    var img = chitra_jpeg_decode(b, lo, &err);
+    assert(img != 0, "the JFIF-less file with R/G/B ids decodes");
+    if (img != 0) {
+        assert_eq(chitra_image_source_color_type(img), 0x113,
+          "without a JFIF APP0, R/G/B component ids still name RGB (0.6.1)");
+    }
+    return 0;
+}
+
+# ================================================================
+# B-12 (1.0.3) — the four frozen `_rgba8` wrappers had no test that could tell
+# width from height.
+#
+# ⛔ NOT A LIVE DEFECT — A BLIND SPOT IN THE GATE STACK. Every wrapper test in
+# the tree used a SQUARE fixture (PNG 2x2, BMP 2x2, GIF 4x4, JPEG 16x16), so
+# swapping the two stores in `chitra_png_decode_rgba8` — transposing the
+# dimensions a caller gets back — passed all 13 suites, all 3,035 assertions and
+# all 10.7 M fuzz assertions with nothing red. Verified by doing exactly that.
+# `chitra_png_decode_rgba8` is mabda's primary entry point, and a transposed
+# w/h uploads a garbled texture with no ChitraErr to show for it.
+#
+# ⚠ Only `jpeg_noninterleaved.tcyr`'s 24x16 cell could see it, and only for
+# JPEG. These fixtures close the other three, and the assertions below compare
+# the wrapper's w/h against the FULL decoder's accessors on the same bytes —
+# so the two entry points cannot disagree either.
+# ================================================================
+# 16x8 baseline grayscale JPEG — 16x8, deliberately NON-SQUARE (B-12, 1.0.3).
+fn fx_jpeg_16x8_nonsquare(len_out): i64 {
+    var b = alloc(348);
+    store64(len_out, 348);
+    var i = 0;
+    while (i < 348) {
+        store8(b + i, 0);
+        i = i + 1;
+    }
+    store8(b + 0, 255);
+    store8(b + 1, 216);
+    store8(b + 2, 255);
+    store8(b + 3, 224);
+    store8(b + 5, 16);
+    store8(b + 6, 74);
+    store8(b + 7, 70);
+    store8(b + 8, 73);
+    store8(b + 9, 70);
+    store8(b + 11, 1);
+    store8(b + 12, 1);
+    store8(b + 15, 1);
+    store8(b + 17, 1);
+    store8(b + 20, 255);
+    store8(b + 21, 219);
+    store8(b + 23, 67);
+    store8(b + 25, 3);
+    store8(b + 26, 2);
+    store8(b + 27, 2);
+    store8(b + 28, 3);
+    store8(b + 29, 2);
+    store8(b + 30, 2);
+    store8(b + 31, 3);
+    store8(b + 32, 3);
+    store8(b + 33, 3);
+    store8(b + 34, 3);
+    store8(b + 35, 4);
+    store8(b + 36, 3);
+    store8(b + 37, 3);
+    store8(b + 38, 4);
+    store8(b + 39, 5);
+    store8(b + 40, 8);
+    store8(b + 41, 5);
+    store8(b + 42, 5);
+    store8(b + 43, 4);
+    store8(b + 44, 4);
+    store8(b + 45, 5);
+    store8(b + 46, 10);
+    store8(b + 47, 7);
+    store8(b + 48, 7);
+    store8(b + 49, 6);
+    store8(b + 50, 8);
+    store8(b + 51, 12);
+    store8(b + 52, 10);
+    store8(b + 53, 12);
+    store8(b + 54, 12);
+    store8(b + 55, 11);
+    store8(b + 56, 10);
+    store8(b + 57, 11);
+    store8(b + 58, 11);
+    store8(b + 59, 13);
+    store8(b + 60, 14);
+    store8(b + 61, 18);
+    store8(b + 62, 16);
+    store8(b + 63, 13);
+    store8(b + 64, 14);
+    store8(b + 65, 17);
+    store8(b + 66, 14);
+    store8(b + 67, 11);
+    store8(b + 68, 11);
+    store8(b + 69, 16);
+    store8(b + 70, 22);
+    store8(b + 71, 16);
+    store8(b + 72, 17);
+    store8(b + 73, 19);
+    store8(b + 74, 20);
+    store8(b + 75, 21);
+    store8(b + 76, 21);
+    store8(b + 77, 21);
+    store8(b + 78, 12);
+    store8(b + 79, 15);
+    store8(b + 80, 23);
+    store8(b + 81, 24);
+    store8(b + 82, 22);
+    store8(b + 83, 20);
+    store8(b + 84, 24);
+    store8(b + 85, 18);
+    store8(b + 86, 20);
+    store8(b + 87, 21);
+    store8(b + 88, 20);
+    store8(b + 89, 255);
+    store8(b + 90, 192);
+    store8(b + 92, 11);
+    store8(b + 93, 8);
+    store8(b + 95, 8);
+    store8(b + 97, 16);
+    store8(b + 98, 1);
+    store8(b + 99, 1);
+    store8(b + 100, 17);
+    store8(b + 102, 255);
+    store8(b + 103, 196);
+    store8(b + 105, 31);
+    store8(b + 108, 1);
+    store8(b + 109, 5);
+    store8(b + 110, 1);
+    store8(b + 111, 1);
+    store8(b + 112, 1);
+    store8(b + 113, 1);
+    store8(b + 114, 1);
+    store8(b + 115, 1);
+    store8(b + 124, 1);
+    store8(b + 125, 2);
+    store8(b + 126, 3);
+    store8(b + 127, 4);
+    store8(b + 128, 5);
+    store8(b + 129, 6);
+    store8(b + 130, 7);
+    store8(b + 131, 8);
+    store8(b + 132, 9);
+    store8(b + 133, 10);
+    store8(b + 134, 11);
+    store8(b + 135, 255);
+    store8(b + 136, 196);
+    store8(b + 138, 181);
+    store8(b + 139, 16);
+    store8(b + 141, 2);
+    store8(b + 142, 1);
+    store8(b + 143, 3);
+    store8(b + 144, 3);
+    store8(b + 145, 2);
+    store8(b + 146, 4);
+    store8(b + 147, 3);
+    store8(b + 148, 5);
+    store8(b + 149, 5);
+    store8(b + 150, 4);
+    store8(b + 151, 4);
+    store8(b + 154, 1);
+    store8(b + 155, 125);
+    store8(b + 156, 1);
+    store8(b + 157, 2);
+    store8(b + 158, 3);
+    store8(b + 160, 4);
+    store8(b + 161, 17);
+    store8(b + 162, 5);
+    store8(b + 163, 18);
+    store8(b + 164, 33);
+    store8(b + 165, 49);
+    store8(b + 166, 65);
+    store8(b + 167, 6);
+    store8(b + 168, 19);
+    store8(b + 169, 81);
+    store8(b + 170, 97);
+    store8(b + 171, 7);
+    store8(b + 172, 34);
+    store8(b + 173, 113);
+    store8(b + 174, 20);
+    store8(b + 175, 50);
+    store8(b + 176, 129);
+    store8(b + 177, 145);
+    store8(b + 178, 161);
+    store8(b + 179, 8);
+    store8(b + 180, 35);
+    store8(b + 181, 66);
+    store8(b + 182, 177);
+    store8(b + 183, 193);
+    store8(b + 184, 21);
+    store8(b + 185, 82);
+    store8(b + 186, 209);
+    store8(b + 187, 240);
+    store8(b + 188, 36);
+    store8(b + 189, 51);
+    store8(b + 190, 98);
+    store8(b + 191, 114);
+    store8(b + 192, 130);
+    store8(b + 193, 9);
+    store8(b + 194, 10);
+    store8(b + 195, 22);
+    store8(b + 196, 23);
+    store8(b + 197, 24);
+    store8(b + 198, 25);
+    store8(b + 199, 26);
+    store8(b + 200, 37);
+    store8(b + 201, 38);
+    store8(b + 202, 39);
+    store8(b + 203, 40);
+    store8(b + 204, 41);
+    store8(b + 205, 42);
+    store8(b + 206, 52);
+    store8(b + 207, 53);
+    store8(b + 208, 54);
+    store8(b + 209, 55);
+    store8(b + 210, 56);
+    store8(b + 211, 57);
+    store8(b + 212, 58);
+    store8(b + 213, 67);
+    store8(b + 214, 68);
+    store8(b + 215, 69);
+    store8(b + 216, 70);
+    store8(b + 217, 71);
+    store8(b + 218, 72);
+    store8(b + 219, 73);
+    store8(b + 220, 74);
+    store8(b + 221, 83);
+    store8(b + 222, 84);
+    store8(b + 223, 85);
+    store8(b + 224, 86);
+    store8(b + 225, 87);
+    store8(b + 226, 88);
+    store8(b + 227, 89);
+    store8(b + 228, 90);
+    store8(b + 229, 99);
+    store8(b + 230, 100);
+    store8(b + 231, 101);
+    store8(b + 232, 102);
+    store8(b + 233, 103);
+    store8(b + 234, 104);
+    store8(b + 235, 105);
+    store8(b + 236, 106);
+    store8(b + 237, 115);
+    store8(b + 238, 116);
+    store8(b + 239, 117);
+    store8(b + 240, 118);
+    store8(b + 241, 119);
+    store8(b + 242, 120);
+    store8(b + 243, 121);
+    store8(b + 244, 122);
+    store8(b + 245, 131);
+    store8(b + 246, 132);
+    store8(b + 247, 133);
+    store8(b + 248, 134);
+    store8(b + 249, 135);
+    store8(b + 250, 136);
+    store8(b + 251, 137);
+    store8(b + 252, 138);
+    store8(b + 253, 146);
+    store8(b + 254, 147);
+    store8(b + 255, 148);
+    store8(b + 256, 149);
+    store8(b + 257, 150);
+    store8(b + 258, 151);
+    store8(b + 259, 152);
+    store8(b + 260, 153);
+    store8(b + 261, 154);
+    store8(b + 262, 162);
+    store8(b + 263, 163);
+    store8(b + 264, 164);
+    store8(b + 265, 165);
+    store8(b + 266, 166);
+    store8(b + 267, 167);
+    store8(b + 268, 168);
+    store8(b + 269, 169);
+    store8(b + 270, 170);
+    store8(b + 271, 178);
+    store8(b + 272, 179);
+    store8(b + 273, 180);
+    store8(b + 274, 181);
+    store8(b + 275, 182);
+    store8(b + 276, 183);
+    store8(b + 277, 184);
+    store8(b + 278, 185);
+    store8(b + 279, 186);
+    store8(b + 280, 194);
+    store8(b + 281, 195);
+    store8(b + 282, 196);
+    store8(b + 283, 197);
+    store8(b + 284, 198);
+    store8(b + 285, 199);
+    store8(b + 286, 200);
+    store8(b + 287, 201);
+    store8(b + 288, 202);
+    store8(b + 289, 210);
+    store8(b + 290, 211);
+    store8(b + 291, 212);
+    store8(b + 292, 213);
+    store8(b + 293, 214);
+    store8(b + 294, 215);
+    store8(b + 295, 216);
+    store8(b + 296, 217);
+    store8(b + 297, 218);
+    store8(b + 298, 225);
+    store8(b + 299, 226);
+    store8(b + 300, 227);
+    store8(b + 301, 228);
+    store8(b + 302, 229);
+    store8(b + 303, 230);
+    store8(b + 304, 231);
+    store8(b + 305, 232);
+    store8(b + 306, 233);
+    store8(b + 307, 234);
+    store8(b + 308, 241);
+    store8(b + 309, 242);
+    store8(b + 310, 243);
+    store8(b + 311, 244);
+    store8(b + 312, 245);
+    store8(b + 313, 246);
+    store8(b + 314, 247);
+    store8(b + 315, 248);
+    store8(b + 316, 249);
+    store8(b + 317, 250);
+    store8(b + 318, 255);
+    store8(b + 319, 218);
+    store8(b + 321, 8);
+    store8(b + 322, 1);
+    store8(b + 323, 1);
+    store8(b + 326, 63);
+    store8(b + 328, 79);
+    store8(b + 329, 248);
+    store8(b + 330, 117);
+    store8(b + 331, 159);
+    store8(b + 332, 253);
+    store8(b + 333, 66);
+    store8(b + 334, 63);
+    store8(b + 335, 242);
+    store8(b + 336, 29);
+    store8(b + 337, 31);
+    store8(b + 338, 240);
+    store8(b + 339, 235);
+    store8(b + 340, 63);
+    store8(b + 341, 250);
+    store8(b + 342, 132);
+    store8(b + 343, 127);
+    store8(b + 344, 228);
+    store8(b + 345, 58);
+    store8(b + 346, 255);
+    store8(b + 347, 217);
+    return b;
+}
+
+fn test_jpeg_rgba8_wrapper_distinguishes_w_from_h() {
+    var lo = 0;
+    var b = fx_jpeg_16x8_nonsquare(&lo);
+    var w = 0;
+    var h = 0;
+    var px = chitra_jpeg_decode_rgba8(b, lo, &w, &h);
+    assert(px != 0, "the non-square JPEG decodes through the wrapper");
+    assert_eq(w, 16, "wrapper w = 16 (not the height)");
+    assert_eq(h, 8, "wrapper h = 8 (not the width)");
+    assert_neq(w, h, "the fixture really is non-square, or this cell proves nothing");
+    return 0;
+}
+
 fn main() {
+    test_jpeg_rgba8_wrapper_distinguishes_w_from_h();
+    test_jfif_app0_outranks_rgb_component_ids();
+    test_rgb_component_ids_still_win_without_jfif();
+    test_jpeg_bomb_refused_before_the_planes_are_paid_for();
     test_cur_u16_be();
     test_signature();
     test_scan_baseline();

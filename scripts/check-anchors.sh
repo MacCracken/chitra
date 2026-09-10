@@ -49,9 +49,39 @@ while IFS= read -r hit; do
         continue
     fi
     [ "$ONLY_SUSPECT" -eq 1 ] || printf 'ok        %s -> %s:%s | %.70s\n' "$doc" "$file" "$line" "$content"
-done < <(grep -rnoE "[a-z_]+\.cyr:[0-9]+" --include="*.md" . \
-           | grep -v "^./lib/" | grep -v "^./docs/audit/" \
-           | sed -E 's/^\.\///' | awk -F: '{print $1":"$3":"$4}' | sort -u)
+done < <(
+    # B-13 (1.0.3) — ALSO RESOLVE THE BARE `:NNN` CONTINUATION ANCHORS.
+    # The original extractor matched only citations that REPEAT the filename,
+    # so the shorthand the ADRs use most — "`src/png_filter.cyr:39`) -> `:665`"
+    # — was invisible to it. Measured at the 1.0.3 sweep: it inspected 66 of
+    # ~126 live line-number claims and still printed "suspicious: 0", while
+    # anchors it could not see were landing on a bare brace — exactly the case
+    # this script advertises catching. A checker that reports clean over half
+    # the corpus is worse than one that reports its own coverage.
+    #
+    # A bare anchor is attributed to the LAST .cyr filename named at or before
+    # it in the same document, which is what the shorthand means. A document
+    # that writes a bare anchor before ever naming a file is skipped rather
+    # than guessed at.
+    find . -name '*.md' -not -path './lib/*' -not -path './docs/audit/*' -print0 \
+    | while IFS= read -r -d '' md; do
+        awk -v doc="${md#./}" '{
+            line = $0
+            while (match(line, /[a-z_]+\.cyr:[0-9]+/)) {
+              a = substr(line, RSTART, RLENGTH)
+              split(a, parts, ":")
+              last = parts[1]
+              print doc ":" parts[1] ":" parts[2]
+              line = substr(line, RSTART + RLENGTH)
+            }
+            rest = $0
+            while (match(rest, /`:[0-9]+`/)) {
+              b = substr(rest, RSTART + 2, RLENGTH - 3)
+              if (last != "") { print doc ":" last ":" b }
+              rest = substr(rest, RSTART + RLENGTH)
+            }
+          }' "$md"
+      done | sort -u)
 
 echo
 echo "anchors checked: $total   suspicious: $suspect"
