@@ -46,12 +46,14 @@ jobs:
           echo "$HOME/.cyrius/bin" >> "$GITHUB_PATH"
 
       - name: Resolve dependencies
-        # `cyrius deps` reads [deps].stdlib from cyrius.cyml and copies the
-        # declared modules (string/fmt/alloc/io/str/syscalls/assert/
-        # bench/sankoch/thread — 10 leaves; args/flags/vec were dropped at
-        # 1.0.1) from the installed toolchain into
-        # `lib/`. chitra is pure-Cyrius — no external C libs to fetch. Do NOT
-        # replace lib/ with a symlink to a cyrius checkout (cross-repo writes).
+        # `cyrius deps` reads cyrius.cyml: the 8 [deps].stdlib leaves
+        # (string/fmt/alloc/io/str/syscalls/assert/bench) come from the
+        # installed toolchain, and [deps.sankoch] (tag 2.8.7, the zlib profile
+        # dist/sankoch-zlib.cyr — not the full stdlib sankoch) is cloned from
+        # its repo and checked against the commit pin in cyrius.lock. The
+        # result is the 26-file closure the lock records. chitra is
+        # pure-Cyrius — no external C libs to fetch. Do NOT replace lib/ with
+        # a symlink to a cyrius checkout (cross-repo writes).
         run: |
           rm -rf lib
           mkdir lib

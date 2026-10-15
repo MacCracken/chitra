@@ -98,3 +98,13 @@ pin: an unused include in `src/lib.cyr` now costs chitra's own build and nobody 
 includes were left in place for that reason — removing them would change nothing a consumer links.
 ⚠ The CI dist-sync step diffs `dist/chitra.deps`, so if a future pin reverts to include-derived
 sidecars the change shows up as a stale-dist failure rather than silently re-billing consumers.
+
+### And at 1.1.0: the sidecar is one leaf
+
+The "big number" this report set aside — `sankoch` + `thread`, ~407 KB, "PNG's price" — was half
+right. PNG needs DEFLATE; it never needed every codec sankoch ships. 1.1.0 links sankoch's `zlib`
+profile through `[deps.sankoch]` (tag 2.8.7, `dist/sankoch-zlib.cyr`) and drops `sankoch` and
+`thread` from `[deps].stdlib`. `dist/chitra.deps` is now just `string`; sankoch reaches a consumer
+through chitra's own `[deps.sankoch]`, transitively and closest-wins, so a consumer that already
+links a sankoch keeps exactly that one. A consumer with no sankoch of its own, measured on 6.7.9:
+**811,544 → 280,112 B** (DCE off), **246,296 → 99,888 B** (DCE on).

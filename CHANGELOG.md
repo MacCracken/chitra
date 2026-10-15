@@ -9,6 +9,110 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 _Nothing yet._
 
+## [1.1.0] - 2026-10-15 — chitra links sankoch's `zlib` profile, not all of sankoch
+
+⛔ **No decode code changed and no name moved.** `scripts/check-surface.sh` reports **75 exports,
+29 frozen**; the bundle differs from 1.0.4's by the stamp, `chitra_version()` (→ **10100**) and its
+`Requires` header. A minor rather than a patch because **how chitra gets sankoch changed**, and that
+is something every consumer's dependency resolution sees.
+
+### Changed — sankoch comes from `[deps.sankoch]`, `zlib` profile, tag `2.8.7`
+
+chitra calls two sankoch functions — `zlib_decompress` and `crc32` (plus `crc32_init_table`) — and
+through 1.0.4 linked the **full** stdlib bundle for them: every codec sankoch has (gzip, xz, bzip2,
+zstd, brotli, LZ4, tar, zip) and the `thread` leaf for its old lock. sankoch publishes a `zlib`
+profile carrying exactly the RFC 1950/1951 closure (inflate + deflate + CRC-32 + Adler-32) and
+nothing else, and chitra now links that:
+
+```toml
+[deps.sankoch]
+git = "https://github.com/MacCracken/sankoch.git"
+tag = "2.8.7"
+modules = ["dist/sankoch-zlib.cyr"]
+```
+
+`sankoch` and `thread` leave `[deps].stdlib` (10 → **8** leaves); `src/lib.cyr` includes
+`lib/sankoch-zlib.cyr` in place of `lib/thread.cyr` + `lib/sankoch.cyr`. The profile brings its own
+`alloc` / `atomic` / `sync` — the API lock is a BSS cell since sankoch 2.8.6, so `thread` is not
+needed at all. Every symbol `src/`, the fuzz harness and the bench use (`zlib_compress` included) is
+in the profile. CI's closure goes **35 → 26** files.
+
+| | 1.0.4 (6.6.20, full bundle) | **1.1.0** (6.7.9, `zlib` profile) |
+|---|---:|---:|
+| `build/chitra_smoke`, DCE off | 803,448 | **343,776** |
+| `build/chitra_smoke`, `CYRIUS_DCE=1` (CI) | 184,952 | **36,576** |
+| `dist/chitra.deps` leaves | 3 | **1** (`string`) |
+
+### Corrected — the 1.0.4 entry blamed sankoch for chitra's size
+
+1.0.4's *Size* paragraph called the smoke binary's growth (44,296 → 184,952 B under DCE) "an
+upstream matter". **It was not.** sankoch growing as it adds codecs is sankoch working as intended;
+chitra linking every one of those codecs to call `zlib_decompress` and `crc32` was chitra's choice,
+and this release reverses it. The 1.0.4 entry is left as released — a shipped entry is a historical
+record — and corrected here.
+
+### Changed — what a consumer links
+
+⭐ **The bundle no longer pulls a sankoch in itself.** `dist/chitra.deps` is just `string`, and
+sankoch reaches a consumer through chitra's own `[deps.sankoch]`, which `cyrius deps` resolves
+transitively — **closest-wins**, so a consumer that has already chosen a sankoch keeps it. That
+matters because sankoch's rule is **one bundle per program** (profiles are closures, not layers; two
+in one program leave one bundle's tables alive across `alloc_reset()`). Proved against all three
+shapes chitra's five consumers use, each decoding a PNG and running 200 decode + `alloc_reset()`
+cycles, each linking exactly one sankoch:
+
+| consumer shape | example | sankoch it gets | bytes (6.7.9) |
+|---|---|---|---:|
+| no sankoch of its own | crab | chitra's `sankoch-zlib.cyr` (transitive) | **280,112** (1.0.3: 811,544) |
+| stdlib `"sankoch"` leaf | kii, mabda, aethersafha | its own full `sankoch.cyr` — the stdlib leaf wins; the profile is not vendored | 815,672 |
+| its own `[deps.sankoch]` | jalwa | its own bundle — closest-wins | 827,440 |
+
+The no-sankoch consumer resolves **18** stdlib files instead of 36, and with `CYRIUS_DCE=1` links
+**99,888 B** instead of 246,296. ⚠ Consumers that link the full sankoch for their own reasons keep
+paying for it — that is their choice, and chitra no longer makes it for them.
+
+**Real downstream check**: a scratch copy of kii (same 6.7.9 pin, stdlib `sankoch`) built against
+this tree with no other change — **all 5 suites (599 assertions) and its 1,000,000-iteration
+decode + `alloc_reset()` fuzz pass**.
+
+### Changed — cyrius pin `6.6.20` → `6.7.9`, `lib/` re-vendored
+
+113 `.cyr` files, `diff -rq`-identical to the 6.7.9 snapshot; **67** differ from 6.6.20's, none
+added or removed. The snapshot's own `sankoch.cyr` (2.8.3) is still vendored by
+`cyrius lib sync --full` but is no longer linked.
+
+### Changed — `cyrius.lock` is the 26-file closure, with sankoch commit-pinned
+
+Regenerated from a closure-only `lib/`: 26 file hashes plus the `sankoch` 2.8.7 commit pin. ⚠ A
+`cyrius lib sync --full` over an existing lock rewrites it to every vendored file, so regenerate the
+lock from a clean `lib/` first and full-sync after (`state.md` § Toolchain has the order).
+
+### Verification
+
+- **3,086 assertions across 13 suites**, including the B-1 CRC-table OOM test, whose
+  `crc32_table` pin confirms the table is still sankoch's first fault-injectable allocation at
+  2.8.7; **10,732,113 fuzz assertions** across 4 harnesses; lint / fmt / vet / surface clean; 90
+  anchors, 0 suspicious.
+- **53-file corpus: 53/53 byte-identical to 1.0.3 on 6.6.2**, refusals included, so the oracle
+  results recorded under 1.0.4 carry over unchanged (exact against `djpeg -nosmooth` /
+  ImageMagick bar the documented BMP 565/555 bit-replication cells, where ffmpeg is exact).
+- **Benchmarks — PNG decode is substantially faster, and the attribution is measured, not
+  assumed**: the six PNG rows drop **22–75 %** against 1.0.3 on 6.6.2 (`png_gray8_256`
+  10.13 → 2.53 ms, `png_palette8_256` 10.22 → 2.62 ms, `png_rgb8_256` 6.60 → 3.44 ms,
+  `png_rgba8_adam7_256` 8.44 → 6.60 ms), while JPEG, BMP and GIF — which never touch sankoch —
+  stay within ±3 %. sankoch 2.8.5 added a PCLMULQDQ CRC-32 fold and 2.8.6 replaced the slow-path
+  Huffman decode; chitra's code did not change. The two fixed-cost rows moved +2–4 µs.
+- ⚠ sankoch 2.8.6 also made inflate **reject five stream classes zlib rejects** (Kraft
+  over-subscription and incompleteness, `hdist` 31/32). A PNG carrying such a stream now refuses
+  with `CHITRA_ERR_INFLATE` where it may previously have decoded — a narrowing toward the reference,
+  in sankoch, not chitra.
+
+### Not in this release
+
+⛔ sankoch's 16 MiB `DECOMPRESS_MAX_OUTPUT` is unchanged at 2.8.7, so `CHITRA_ERR_INFLATE_LIMIT`
+stands. ⛔ Downstream pins are not bumped — that follows the tag. `make bench-record` is not run:
+it stamps rows with `HEAD`, which is still the 1.0.3 commit until this is committed.
+
 ## [1.0.4] - 2026-10-15 — cyrius 6.6.20, and consumers stop linking what chitra never calls
 
 ⛔ **No decode code changed.** `git diff dist/chitra.cyr` against 1.0.3 is the header stamp, the

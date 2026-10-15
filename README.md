@@ -1,6 +1,6 @@
 # chitra
 
-Version: 1.0.4
+Version: 1.1.0
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder, a sibling AGNOS package in the mould of `sakshi` /
@@ -151,22 +151,24 @@ is a bug fix — the § 13.13 depth-16 rescaling change in 0.7.x changed every
 
 ## Dependencies
 
-- **Cyrius stdlib** (10 leaves to build chitra itself) — `string`, `fmt`,
-  `alloc`, `io`, `str`, `syscalls`, `assert`, `bench`, plus **`sankoch`**
-  (zlib inflate + CRC32) and **`thread`** (sankoch's mutex pair). Resolved by
-  `cyrius deps` into `lib/`.
-- **What a consumer links** is only the **3** leaves in `dist/chitra.deps` —
-  `sankoch`, `alloc`, `string` (`thread` arrives through sankoch). Since 1.0.4
-  `cyrius distlib` derives that list from what the bundle references, so the
-  test and bench leaves chitra builds with are not billed to anyone else.
+- **sankoch, `zlib` profile** — `[deps.sankoch]` tag `2.8.7`,
+  `dist/sankoch-zlib.cyr`: zlib inflate + CRC-32, and none of sankoch's other
+  codecs.
+- **Cyrius stdlib** (8 leaves to build chitra itself) — `string`, `fmt`,
+  `alloc`, `io`, `str`, `syscalls`, `assert`, `bench`. Resolved with sankoch
+  by `cyrius deps` into `lib/`.
+- **What a consumer links**: `dist/chitra.deps` names one stdlib leaf
+  (`string`), and sankoch arrives through chitra's `[deps.sankoch]` — unless
+  the consumer already links a sankoch bundle of its own, which then wins
+  (one sankoch bundle per program).
 
 All deps are pinned in `cyrius.cyml`; the toolchain pin is
-`cyrius = "6.6.20"`.
+`cyrius = "6.7.9"`.
 
 ## Quick Start
 
 ```bash
-cyrius deps          # resolve stdlib + sankoch + thread into lib/
+cyrius deps          # resolve stdlib + sankoch (zlib profile) into lib/
 make build           # link-check the include chain (→ build/chitra_smoke)
 make test            # 3086 assertions across tests/tcyr/
 make fuzz            # ~2.6 M adversarial decode cases (fuzz/*.fcyr)

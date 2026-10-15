@@ -37,15 +37,18 @@ include "lib/syscalls.cyr"
 include "lib/assert.cyr"
 include "lib/bench.cyr"
 
-# thread.cyr (mutex_* via clone(CLONE_VM)) must precede sankoch.cyr —
-# sankoch's public-API lock wraps mutex_lock/mutex_unlock. thread.cyr
-# self-includes mmap.cyr + atomic.cyr.
-include "lib/thread.cyr"
-
-# sankoch — RFC 1950/1951 zlib_decompress + crc32 + adler32. PNG IDAT
-# inflate + chunk-CRC validation route through here (DEFLATE is not
-# chitra's work, exactly as kii does).
-include "lib/sankoch.cyr"
+# sankoch's `zlib` profile (1.1.0) — RFC 1950/1951 zlib_decompress + crc32 +
+# adler32, and nothing else. PNG IDAT inflate + chunk-CRC validation route
+# through here (DEFLATE is not chitra's work, exactly as kii does). chitra
+# needs no other codec, so it links the narrow bundle from `[deps.sankoch]`
+# rather than the full stdlib `sankoch.cyr`; the profile brings its own
+# `alloc` / `atomic` / `sync` (the API lock is a BSS cell since sankoch
+# 2.8.6, so `thread` is no longer needed).
+# ⚠ ONE sankoch bundle per program — profiles are closures, not layers. A
+# consumer that links another sankoch bundle declares its own
+# `[deps.sankoch]`, which wins over this one (closest-wins), and chitra's
+# calls resolve against that bundle instead.
+include "lib/sankoch-zlib.cyr"
 
 # ================================================================
 # chitra domain modules — flat, dependency order.

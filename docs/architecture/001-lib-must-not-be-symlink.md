@@ -9,8 +9,9 @@ note describes *how the world is*, not *what we chose* (decisions live in
 
 `lib/` holds the **resolved** dependency tree that `cyrius deps` writes after
 reading the `[deps.*]` tables in [`../../cyrius.cyml`](../../cyrius.cyml): the
-cyrius stdlib (`string`, `fmt`, `alloc`, `io`, `vec`, `str`, `syscalls`,
-`assert`, `bench`, `args`, `flags`, `sankoch`, `thread`). It is a build
+cyrius stdlib leaves (`string`, `fmt`, `alloc`, `io`, `str`, `syscalls`,
+`assert`, `bench`) and the `[deps.sankoch]` zlib profile
+(`lib/sankoch-zlib.cyr`), each with its transitive closure. It is a build
 artifact — a local, repo-owned *copy* of those modules.
 
 > **`lib/` must be a real directory populated by `cyrius deps`. It must never

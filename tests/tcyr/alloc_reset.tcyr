@@ -13,9 +13,10 @@
 # ⭐ sankoch 2.7.10's arena canary fixes it, and chitra picked it up at 1.0.2
 # by bumping `[package].cyrius` to 6.6.2 (sankoch 2.7.14). Nothing in `src/`
 # changed. That is exactly why this suite is here: the fix lives in vendored
-# `lib/`, which is gitignored and re-resolved from whatever the pin says, so a
-# future pin bump can take it away again with no diff anywhere in this repo to
-# show for it.
+# `lib/`, which is gitignored and re-resolved from whatever the manifest says,
+# so a future bump can take it away again with no diff in `src/` to show for
+# it. Since 1.1.0 that means the `[deps.sankoch]` tag (2.8.7, zlib profile),
+# not the cyrius pin.
 #
 # ⚠ REACHABILITY PROVEN, not assumed. With the canary neutered in a scratch
 # copy of sankoch (a single copy — linking two makes the result meaningless),

@@ -21,8 +21,8 @@ source tree obeys one rule:
 > FLAT: they carry no `include` lines at all.**
 
 `src/lib.cyr` is the single include chain ([`../../src/lib.cyr`](../../src/lib.cyr)):
-it pulls the stdlib (`string`, `fmt`, `alloc`, `vec`, `str`, `io`, `args`,
-`syscalls`, `flags`, `assert`, `bench`, then `thread`, then `sankoch`) and then
+it pulls the stdlib (`string`, `fmt`, `alloc`, `str`, `io`, `syscalls`,
+`assert`, `bench`), then sankoch's zlib profile (`lib/sankoch-zlib.cyr`), and then
 the twelve domain modules (five PNG + four JPEG + BMP + two GIF) in dependency order. That file is what the smoke build
 (`programs/smoke.cyr` → `build/chitra_smoke`, `make build`) compiles to prove the
 whole chain parses; it is **not** itself part of the distributed bundle.

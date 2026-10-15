@@ -135,7 +135,9 @@ above are covered, not only the CRC table.
 
 chitra could not pick it up on its own: `lib/` is vendored from the toolchain
 snapshot, so it arrived with a bump of `[package].cyrius` (`6.6.2` as of 1.0.2),
-not with anything chitra did.
+not with anything chitra did. ⚠ **Since 1.1.0 sankoch is not from the snapshot**:
+it is `[deps.sankoch]` (tag `2.8.7`, `zlib` profile), so the canary now rides on
+**that tag**, and a sankoch tag bump is what could withdraw it.
 
 **The reproduction above was re-run before this note was retired**, because a
 pin bump is not by itself evidence that the bundled copy moved:
@@ -149,16 +151,19 @@ pin bump is not by itself evidence that the bundled copy moved:
   meaningless), the failure returns exactly as recorded above:
   `CHITRA_ERR_CRC` (7) on the first decode after the reset.
 
-⛔ **One residual, which does not reach chitra.** `_sankoch_lock`'s copy of the
-guard is compiled out under `CYRIUS_TARGET_AGNOS`, so on AGNOS only
-`crc32_init_table`'s copy fires. chitra's PNG path calls `crc32_init_table()`
+⛔ **One residual, which does not reach chitra — and is closed upstream since
+sankoch 2.8.0.** Through 2.7.x `_sankoch_lock`'s copy of the guard was compiled
+out under `CYRIUS_TARGET_AGNOS`, so on AGNOS only `crc32_init_table`'s copy
+fired (2.8.0 runs it on every target; the 2.8.7 `zlib` profile chitra links
+does). chitra's PNG path calls `crc32_init_table()`
 (`src/png_filter.cyr:372`) well before `zlib_decompress()` (`:680`), so the
 covering call always happens first.
 
 ⚠ **This note is retired, not deleted, and the guard is now asserted in-tree.**
 `tests/tcyr/alloc_reset.tcyr` (15 assertions) pins the behaviour, because the
-fix lives in gitignored `lib/` and a future pin bump could withdraw it with no
-diff anywhere in this repo to show for it.
+fix lives in gitignored `lib/` and a future pin bump — since 1.1.0, a
+`[deps.sankoch]` tag bump — could withdraw it with no diff in `src/` to show
+for it.
 
 ## See also
 

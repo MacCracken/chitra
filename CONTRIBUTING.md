@@ -19,7 +19,7 @@ into a PR description.
 Build and test before submitting:
 
 ```sh
-cyrius deps      # resolve stdlib + sankoch + thread into lib/
+cyrius deps      # resolve stdlib + sankoch (zlib profile) into lib/
 make build       # link-check the include chain (programs/smoke.cyr → build/chitra_smoke)
 make test        # run every tests/tcyr/*.tcyr CPU suite
 make dist        # regenerate dist/chitra.cyr via `cyrius distlib`
@@ -76,13 +76,18 @@ CHANGELOG entry and an ADR.
 
 ## Dependencies
 
-The full non-stdlib dependency set is **`sankoch` + `thread`** — and that is
-deliberate:
+The full non-stdlib dependency set is **`sankoch`, `zlib` profile only** — and
+that is deliberate:
 
 - **`sankoch` owns DEFLATE.** IDAT inflate (RFC 1950/1951) and chunk-CRC route
   through `sankoch` (`zlib_decompress` / `crc32` / `adler32`). Do **not**
   reimplement zlib inline — that is sankoch's job, not chitra's.
-- **`thread`** supplies the mutex pair sankoch's public-API lock wraps.
+- **Link the narrowest bundle that carries what chitra calls.** chitra uses
+  `[deps.sankoch]` with `modules = ["dist/sankoch-zlib.cyr"]`, not the full
+  stdlib `sankoch` (every codec). A change that needs another sankoch codec
+  moves to the smallest profile carrying both — never to two bundles: sankoch
+  allows **one bundle per program**. (`thread` was dropped at 1.1.0; the
+  profile's lock needs only `sync`.)
 
 A new dependency needs a written rationale in the PR: what does it own that we
 can't do in-tree, does an AGNOS-family substrate already exist, and has the

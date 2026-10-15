@@ -23,11 +23,11 @@ and GIF in 0.5.0, with room for more without a rename.
 ## Build & verify locally
 
 You need the Cyrius toolchain pinned in
-[`cyrius.cyml`](../../cyrius.cyml) (`cyrius = "6.6.20"`). If `cyrius`
+[`cyrius.cyml`](../../cyrius.cyml) (`cyrius = "6.7.9"`). If `cyrius`
 isn't on your PATH yet, see the agnosticos bootstrap.
 
 ```bash
-cyrius deps        # resolve stdlib + sankoch + thread into lib/
+cyrius deps        # resolve stdlib + sankoch (zlib profile) into lib/
 make build         # link-check: builds build/chitra_smoke from programs/smoke.cyr
 make test          # 3086 assertions across tests/tcyr/
 make fuzz          # ~2.6 M adversarial decode cases across fuzz/*.fcyr
@@ -38,12 +38,12 @@ make test-all      # version-check + dist + test + fuzz — the pre-release gate
 
 A few notes on what each step proves:
 
-- **`cyrius deps`** populates `lib/` from the stdlib + sankoch + thread
-  pins. `lib/` must be a real directory (never a symlink) — see
+- **`cyrius deps`** populates `lib/` from the stdlib leaves and the
+  `[deps.sankoch]` zlib profile. `lib/` must be a real directory (never a symlink) — see
   [architecture note 001](../architecture/001-lib-must-not-be-symlink.md).
 - **`make build`** compiles [`programs/smoke.cyr`](../../programs/smoke.cyr)
   into `build/chitra_smoke`. chitra has no CLI, so this binary exists
-  only to prove the full include chain (stdlib + sankoch + thread +
+  only to prove the full include chain (stdlib + sankoch zlib profile +
   domain modules) parses and links clean; it writes a one-line banner
   and exits 0.
 - **`make test`** runs the thirteen suites under `tests/tcyr/` — each is a
@@ -77,15 +77,17 @@ released tag and pulling that one module:
 ```toml
 [deps.chitra]
 git     = "https://github.com/MacCracken/chitra"
-tag     = "1.0.2"
+tag     = "1.1.0"
 modules = ["dist/chitra.cyr"]
 ```
 
-chitra's own stdlib needs — notably **`sankoch`** (the RFC 1950/1951
-`zlib_decompress` + `crc32` + `adler32` that does the IDAT inflate;
-DEFLATE is sankoch's job, not chitra's) and **`thread`** (the mutex
-pair sankoch's public-API lock wraps) — resolve from *your* stdlib
-list. Make sure your manifest's stdlib includes them, then run
+chitra needs **`sankoch`** for PNG (the RFC 1950/1951 `zlib_decompress` +
+`crc32` that do the IDAT inflate; DEFLATE is sankoch's job, not chitra's).
+**You do not have to declare it.** Since 1.1.0 chitra's own manifest pins
+sankoch's `zlib` profile, and `cyrius deps` resolves it transitively. If your
+program already links a sankoch bundle — a stdlib `"sankoch"` leaf or your own
+`[deps.sankoch]` — yours wins and chitra's calls resolve against it: sankoch
+allows **one bundle per program**, so never add a second. Then run
 `cyrius deps`.
 
 ## The decode call
