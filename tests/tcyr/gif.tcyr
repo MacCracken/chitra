@@ -2638,7 +2638,7 @@ fn test_gif_transparent_index_in_range_decodes() {
 # the initial table plus Clear and End.
 #
 # ⚠ MUTATION-CHECKED on COST, because nothing else moves: restore
-# GIF_LZW_MAX_CODES at the three allocations and every other assertion in this
+# _CHITRA_GIF_LZW_MAX_CODES at the three allocations and every other assertion in this
 # suite still passes while this one fails. And the correctness direction is
 # covered by the 643 cells around it plus a 20-cell ImageMagick differential —
 # a cap that were too TIGHT would corrupt output, not merely cost less.

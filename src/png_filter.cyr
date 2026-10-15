@@ -196,12 +196,12 @@ fn _chitra_parse_ihdr(cur, raw): i64 {
         return chitra_err(CHITRA_ERR_DIMENSIONS);
     }
 
-    store64(raw + RAW_WIDTH_OFFSET, width);
-    store64(raw + RAW_HEIGHT_OFFSET, height);
-    store64(raw + RAW_BIT_DEPTH_OFFSET, bit_depth);
-    store64(raw + RAW_COLOR_TYPE_OFFSET, color_type);
-    store64(raw + RAW_CHANNELS_OFFSET, channels);
-    store64(raw + RAW_INTERLACE_OFFSET, interlace);
+    store64(raw + _CHITRA_RAW_WIDTH_OFFSET, width);
+    store64(raw + _CHITRA_RAW_HEIGHT_OFFSET, height);
+    store64(raw + _CHITRA_RAW_BIT_DEPTH_OFFSET, bit_depth);
+    store64(raw + _CHITRA_RAW_COLOR_TYPE_OFFSET, color_type);
+    store64(raw + _CHITRA_RAW_CHANNELS_OFFSET, channels);
+    store64(raw + _CHITRA_RAW_INTERLACE_OFFSET, interlace);
     return 0;
 }
 
@@ -498,16 +498,16 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
                     # and 4 — a greyscale image has no palette to suggest.
                     # chitra accepted it on every type through 0.7.0, which is
                     # the same leniency it refuses one branch below for tRNS.
-                    if (load64(raw + RAW_COLOR_TYPE_OFFSET) == 0) {
+                    if (load64(raw + _CHITRA_RAW_COLOR_TYPE_OFFSET) == 0) {
                         store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
                         return 0;
                     }
-                    if (load64(raw + RAW_COLOR_TYPE_OFFSET) == 4) {
+                    if (load64(raw + _CHITRA_RAW_COLOR_TYPE_OFFSET) == 4) {
                         store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
                         return 0;
                     }
-                    store64(raw + RAW_PLTE_OFF_OFFSET, data_off);
-                    store64(raw + RAW_PLTE_LEN_OFFSET, chunk_len);
+                    store64(raw + _CHITRA_RAW_PLTE_OFF_OFFSET, data_off);
+                    store64(raw + _CHITRA_RAW_PLTE_LEN_OFFSET, chunk_len);
                     seen_plte = 1;
                 }
                 if (is_trns == 1) {
@@ -526,7 +526,7 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
                     # before the palette they index exists. The comment above
                     # has claimed this rule since 0.3.3; the code enforced only
                     # the other two until 0.5.3.
-                    if (load64(raw + RAW_COLOR_TYPE_OFFSET) == 3) {
+                    if (load64(raw + _CHITRA_RAW_COLOR_TYPE_OFFSET) == 3) {
                         if (seen_plte == 0) {
                             store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
                             return 0;
@@ -539,16 +539,16 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
                     # left its posture inverted: it REJECTS tRNS-before-PLTE, an
                     # ordering ImageMagick tolerates, while ACCEPTING a chunk
                     # the spec forbids outright.
-                    if (load64(raw + RAW_COLOR_TYPE_OFFSET) == 4) {
+                    if (load64(raw + _CHITRA_RAW_COLOR_TYPE_OFFSET) == 4) {
                         store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
                         return 0;
                     }
-                    if (load64(raw + RAW_COLOR_TYPE_OFFSET) == 6) {
+                    if (load64(raw + _CHITRA_RAW_COLOR_TYPE_OFFSET) == 6) {
                         store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
                         return 0;
                     }
-                    store64(raw + RAW_TRNS_OFF_OFFSET, data_off);
-                    store64(raw + RAW_TRNS_LEN_OFFSET, chunk_len);
+                    store64(raw + _CHITRA_RAW_TRNS_OFF_OFFSET, data_off);
+                    store64(raw + _CHITRA_RAW_TRNS_LEN_OFFSET, chunk_len);
                     seen_trns = 1;
                 }
                 # The IDAT run ends at the first chunk that is not one. Note
@@ -592,14 +592,14 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
 
     # Surface whether an IEND closed the stream (vs a tolerated clean
     # IEND-less end) so the public image can carry it to the caller.
-    store64(raw + RAW_SEEN_IEND_OFFSET, seen_iend);
+    store64(raw + _CHITRA_RAW_SEEN_IEND_OFFSET, seen_iend);
 
     # ---- derive sizes (validated dims from IHDR) ----
-    var width = load64(raw + RAW_WIDTH_OFFSET);
-    var height = load64(raw + RAW_HEIGHT_OFFSET);
-    var channels = load64(raw + RAW_CHANNELS_OFFSET);
-    var bit_depth = load64(raw + RAW_BIT_DEPTH_OFFSET);
-    var interlace = load64(raw + RAW_INTERLACE_OFFSET);
+    var width = load64(raw + _CHITRA_RAW_WIDTH_OFFSET);
+    var height = load64(raw + _CHITRA_RAW_HEIGHT_OFFSET);
+    var channels = load64(raw + _CHITRA_RAW_CHANNELS_OFFSET);
+    var bit_depth = load64(raw + _CHITRA_RAW_BIT_DEPTH_OFFSET);
+    var interlace = load64(raw + _CHITRA_RAW_INTERLACE_OFFSET);
     # Dense, byte-padded output scanlines (channels*depth bits/pixel, each
     # row padded to a byte). filter_bpp is the unfilter stride: ceil(bits/8),
     # which is 1 for sub-byte depths and channels*bytes for depth >= 8.
@@ -679,9 +679,9 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
     # `has_trns`, because a zero-length tRNS means "no key" there and must mean it here too — so no
     # accept/reject outcome moves, only what the refusal costs. The colour-pass checks stay, as
     # defence in depth for its @internal entry, which can be handed a raw this walk never built.
-    var early_ct = load64(raw + RAW_COLOR_TYPE_OFFSET);
-    var early_entries = load64(raw + RAW_PLTE_LEN_OFFSET) / 3;
-    var early_trns = load64(raw + RAW_TRNS_LEN_OFFSET);
+    var early_ct = load64(raw + _CHITRA_RAW_COLOR_TYPE_OFFSET);
+    var early_entries = load64(raw + _CHITRA_RAW_PLTE_LEN_OFFSET) / 3;
+    var early_trns = load64(raw + _CHITRA_RAW_TRNS_LEN_OFFSET);
     if (early_ct == 3) {
         # § 11.2.3: PLTE is REQUIRED for colour type 3 (libpng: "Missing PLTE before IDAT").
         if (early_entries <= 0) {
@@ -769,7 +769,7 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
         if (fc != 0) { store64(err_out, chitra_err(CHITRA_ERR_FILTER)); return 0; }
     }
 
-    store64(raw + RAW_SCANLINES_OFFSET, pixels);
-    store64(raw + RAW_SCANLINES_LEN_OFFSET, pixel_size);
+    store64(raw + _CHITRA_RAW_SCANLINES_OFFSET, pixels);
+    store64(raw + _CHITRA_RAW_SCANLINES_LEN_OFFSET, pixel_size);
     return raw;
 }

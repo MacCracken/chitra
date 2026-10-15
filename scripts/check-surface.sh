@@ -15,7 +15,8 @@
 #     slipped through, or a manifest gone stale.
 #
 # It also fails when a member of `enum ChitraErrCode` has no chitra_err_name
-# arm, or no literal value pin in tests/tcyr/surface.tcyr (see below).
+# arm, or no literal value pin in tests/tcyr/surface.tcyr (see below), and when
+# the bundle declares a top-level `var` without a chitra prefix (cc-13, 1.1.2).
 #
 # It deliberately does NOT parse @public markers. Those are carried two
 # different ways (a file-level banner and a per-function marker), which is
@@ -101,13 +102,31 @@ else
     fi
 fi
 
+# Every top-level `var` in the bundle is a global in the CONSUMER'S program, so
+# its name must be chitra's: `_chitra_*`, `_CHITRA_*`, or the public `CHITRA_*`
+# constants. Through 1.1.1, 128 were not (RAW_*, CUR_*, IMAGE_*_OFFSET, HT_*,
+# BR_*, JF_*, BH_*, LZ_*, FIX_*, ...), and a consumer's own global of one of
+# those names — declared after chitra, or just assigned — rewrote the value
+# chitra decodes with: `CUR_POS_OFFSET` crashed the JPEG and PNG decoders,
+# `LZ_BIT` the GIF one. tests/tcyr/namespace.tcyr is that consumer.
+grep -E '^var ' "$BUNDLE" | grep -vE '^var _?(chitra|CHITRA)_' \
+    | sed -E 's/^var ([A-Za-z0-9_]+).*/\1/' > "$tmp/unprefixed" || true
+if [ -s "$tmp/unprefixed" ]; then
+    echo "check-surface: top-level globals without a chitra prefix — a consumer's"
+    echo "  global of the same name would silently rewrite them (cc-13):"
+    sed 's/^/    /' "$tmp/unprefixed"
+    rc=1
+fi
+
 if [ $rc -eq 0 ]; then
     frozen=$(awk '/^## FROZEN/,/^## INTERNAL_NAMES/' "$MANIFEST" \
         | awk '/^```/ { infence = !infence; next } infence { print }' \
         | grep -oE 'chitra_[a-z0-9_]+' | sort -u | wc -l)
     total=$(wc -l < "$tmp/bundle")
     codes=$(wc -l < "$tmp/enum")
+    globals=$(grep -cE '^var ' "$BUNDLE")
     echo "check-surface: bundle and manifest agree — ${total} exports, ${frozen} frozen;" \
-        "${codes} ChitraErrCode members, each named and value-pinned"
+        "${codes} ChitraErrCode members, each named and value-pinned;" \
+        "${globals} globals, all chitra-prefixed"
 fi
 exit $rc

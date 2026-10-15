@@ -38,13 +38,13 @@
 # DIB header starts at +14; its first u32 is its own size, which is how the
 # variant is identified.
 # ================================================================
-var BMP_FILE_HEADER_SIZE = 14;
-var BMP_CORE_HEADER_SIZE = 12;    # BITMAPCOREHEADER (OS/2 1.x)
-var BMP_INFO_HEADER_SIZE = 40;    # BITMAPINFOHEADER (the common case)
-var BMP_V2_HEADER_SIZE   = 52;    # INFO + RGB masks
-var BMP_V3_HEADER_SIZE   = 56;    # INFO + RGBA masks
-var BMP_V4_HEADER_SIZE   = 108;   # BITMAPV4HEADER  (masks + color space + gamma)
-var BMP_V5_HEADER_SIZE   = 124;   # BITMAPV5HEADER  (V4 + intent + ICC profile)
+var _CHITRA_BMP_FILE_HEADER_SIZE = 14;
+var _CHITRA_BMP_CORE_HEADER_SIZE = 12;    # BITMAPCOREHEADER (OS/2 1.x)
+var _CHITRA_BMP_INFO_HEADER_SIZE = 40;    # BITMAPINFOHEADER (the common case)
+var _CHITRA_BMP_V2_HEADER_SIZE   = 52;    # INFO + RGB masks
+var _CHITRA_BMP_V3_HEADER_SIZE   = 56;    # INFO + RGBA masks
+var _CHITRA_BMP_V4_HEADER_SIZE   = 108;   # BITMAPV4HEADER  (masks + color space + gamma)
+var _CHITRA_BMP_V5_HEADER_SIZE   = 124;   # BITMAPV5HEADER  (V4 + intent + ICC profile)
 # OS/2 2.x BITMAPCOREHEADER2. Its first 40 bytes are laid out EXACTLY like
 # BITMAPINFOHEADER — 32-bit width/height, unlike the 12-byte OS/2 1.x header —
 # and the remaining 24 are OS/2-only fields (units, recording, rendering,
@@ -58,16 +58,16 @@ var BMP_V5_HEADER_SIZE   = 124;   # BITMAPV5HEADER  (V4 + intent + ICC profile)
 # header and refuses a 16-byte one ("improper image header"). Inventing
 # behaviour for a size nothing writes and nothing else reads is the guess this
 # decoder is built to avoid.
-var BMP_OS22X_HEADER_SIZE = 64;
+var _CHITRA_BMP_OS22X_HEADER_SIZE = 64;
 
 # Compression values (BITMAPINFOHEADER +16).
-var BMP_BI_RGB       = 0;
-var BMP_BI_RLE8      = 1;
-var BMP_BI_RLE4      = 2;
-var BMP_BI_BITFIELDS = 3;
-var BMP_BI_JPEG      = 4;
-var BMP_BI_PNG       = 5;
-var BMP_BI_ALPHABITFIELDS = 6;    # RGBA masks following a 40-byte header
+var _CHITRA_BMP_BI_RGB       = 0;
+var _CHITRA_BMP_BI_RLE8      = 1;
+var _CHITRA_BMP_BI_RLE4      = 2;
+var _CHITRA_BMP_BI_BITFIELDS = 3;
+var _CHITRA_BMP_BI_JPEG      = 4;
+var _CHITRA_BMP_BI_PNG       = 5;
+var _CHITRA_BMP_BI_ALPHABITFIELDS = 6;    # RGBA masks following a 40-byte header
 
 # Output:input amplification ceiling for the RUN-LENGTH modes only.
 #
@@ -226,25 +226,25 @@ fn chitra_bmp_check_signature(src, len): i64 {
 # ================================================================
 # ChitraBmpHdr — the parsed header handoff (all fields i64, 8-byte slots).
 # ================================================================
-var BH_WIDTH       = 0;
-var BH_HEIGHT      = 8;     # absolute height (always positive)
-var BH_TOP_DOWN    = 16;    # 1 = first file row is the TOP image row
-var BH_BPP         = 24;
-var BH_PALETTE_OFF = 32;    # byte offset of the palette within src (0 = none)
-var BH_PALETTE_N   = 40;    # palette entry count
-var BH_PALETTE_STR = 48;    # palette entry stride: 4 (INFO) or 3 (CORE)
-var BH_DATA_OFF    = 56;    # byte offset of the pixel data within src
-var BH_STRIDE      = 64;    # row stride in bytes (4-byte aligned; BI_RGB only)
-var BH_COMPRESSION = 72;    # BMP_BI_RGB / BMP_BI_RLE8 / BMP_BI_RLE4 / BI_BITFIELDS
-var BH_MASK_R      = 80;    # BI_BITFIELDS channel masks (0 = channel absent)
-var BH_MASK_G      = 88;
-var BH_MASK_B      = 96;
-var BH_MASK_A      = 104;
-var BMP_HDR_SIZE   = 112;
+var _CHITRA_BH_WIDTH       = 0;
+var _CHITRA_BH_HEIGHT      = 8;     # absolute height (always positive)
+var _CHITRA_BH_TOP_DOWN    = 16;    # 1 = first file row is the TOP image row
+var _CHITRA_BH_BPP         = 24;
+var _CHITRA_BH_PALETTE_OFF = 32;    # byte offset of the palette within src (0 = none)
+var _CHITRA_BH_PALETTE_N   = 40;    # palette entry count
+var _CHITRA_BH_PALETTE_STR = 48;    # palette entry stride: 4 (INFO) or 3 (CORE)
+var _CHITRA_BH_DATA_OFF    = 56;    # byte offset of the pixel data within src
+var _CHITRA_BH_STRIDE      = 64;    # row stride in bytes (4-byte aligned; BI_RGB only)
+var _CHITRA_BH_COMPRESSION = 72;    # _CHITRA_BMP_BI_RGB / _CHITRA_BMP_BI_RLE8 / _CHITRA_BMP_BI_RLE4 / BI_BITFIELDS
+var _CHITRA_BH_MASK_R      = 80;    # BI_BITFIELDS channel masks (0 = channel absent)
+var _CHITRA_BH_MASK_G      = 88;
+var _CHITRA_BH_MASK_B      = 96;
+var _CHITRA_BH_MASK_A      = 104;
+var _CHITRA_BMP_HDR_SIZE   = 112;
 
-fn chitra_bmp_hdr_width(h): i64  { return load64(h + BH_WIDTH); }
-fn chitra_bmp_hdr_height(h): i64 { return load64(h + BH_HEIGHT); }
-fn chitra_bmp_hdr_bpp(h): i64    { return load64(h + BH_BPP); }
+fn chitra_bmp_hdr_width(h): i64  { return load64(h + _CHITRA_BH_WIDTH); }
+fn chitra_bmp_hdr_height(h): i64 { return load64(h + _CHITRA_BH_HEIGHT); }
+fn chitra_bmp_hdr_bpp(h): i64    { return load64(h + _CHITRA_BH_BPP); }
 
 # ================================================================
 # _bmp_parse_header — validate the file header + DIB header and fill a
@@ -259,13 +259,13 @@ fn _bmp_parse_header(src, len, err_out): i64 {
         return 0;
     }
     # File header + the DIB header's own size field must be present.
-    if (len < BMP_FILE_HEADER_SIZE + 4) {
+    if (len < _CHITRA_BMP_FILE_HEADER_SIZE + 4) {
         store64(err_out, chitra_err(CHITRA_ERR_TRUNCATED));
         return 0;
     }
 
     var data_off = _bmp_u32_le(src + 10);
-    var dib_size = _bmp_u32_le(src + BMP_FILE_HEADER_SIZE);
+    var dib_size = _bmp_u32_le(src + _CHITRA_BMP_FILE_HEADER_SIZE);
 
     # Header variants. All of V2/V3/V4/V5 are BITMAPINFOHEADER with fields
     # APPENDED — the first 40 bytes mean the same thing in every one — so the
@@ -276,40 +276,40 @@ fn _bmp_parse_header(src, len, err_out): i64 {
     # and does not do color management, so honouring a color space would mean
     # claiming a transform it does not perform.
     var is_core = 0;
-    if (dib_size == BMP_CORE_HEADER_SIZE) { is_core = 1; }
+    if (dib_size == _CHITRA_BMP_CORE_HEADER_SIZE) { is_core = 1; }
     # In-header channel masks exist in the V2..V5 headers only. This cannot be
     # a `>= 52` test: the 64-byte OS/2 header is larger than V2 and has no masks
     # at all — its +40 is `units`/`recording`/`rendering`, so reading masks
     # there would decode by a layout built from unrelated OS/2 fields.
     var has_mask_fields = 0;
-    if (dib_size == BMP_V2_HEADER_SIZE) { has_mask_fields = 1; }
-    if (dib_size == BMP_V3_HEADER_SIZE) { has_mask_fields = 1; }
-    if (dib_size == BMP_V4_HEADER_SIZE) { has_mask_fields = 1; }
-    if (dib_size == BMP_V5_HEADER_SIZE) { has_mask_fields = 1; }
+    if (dib_size == _CHITRA_BMP_V2_HEADER_SIZE) { has_mask_fields = 1; }
+    if (dib_size == _CHITRA_BMP_V3_HEADER_SIZE) { has_mask_fields = 1; }
+    if (dib_size == _CHITRA_BMP_V4_HEADER_SIZE) { has_mask_fields = 1; }
+    if (dib_size == _CHITRA_BMP_V5_HEADER_SIZE) { has_mask_fields = 1; }
     if (is_core == 0) {
         var known = 0;
-        if (dib_size == BMP_INFO_HEADER_SIZE) { known = 1; }
-        if (dib_size == BMP_V2_HEADER_SIZE) { known = 1; }
-        if (dib_size == BMP_V3_HEADER_SIZE) { known = 1; }
-        if (dib_size == BMP_V4_HEADER_SIZE) { known = 1; }
-        if (dib_size == BMP_V5_HEADER_SIZE) { known = 1; }
-        if (dib_size == BMP_OS22X_HEADER_SIZE) { known = 1; }
+        if (dib_size == _CHITRA_BMP_INFO_HEADER_SIZE) { known = 1; }
+        if (dib_size == _CHITRA_BMP_V2_HEADER_SIZE) { known = 1; }
+        if (dib_size == _CHITRA_BMP_V3_HEADER_SIZE) { known = 1; }
+        if (dib_size == _CHITRA_BMP_V4_HEADER_SIZE) { known = 1; }
+        if (dib_size == _CHITRA_BMP_V5_HEADER_SIZE) { known = 1; }
+        if (dib_size == _CHITRA_BMP_OS22X_HEADER_SIZE) { known = 1; }
         if (known == 0) {
             store64(err_out, chitra_err(CHITRA_ERR_BMP_HEADER));
             return 0;
         }
     }
-    if (len < BMP_FILE_HEADER_SIZE + dib_size) {
+    if (len < _CHITRA_BMP_FILE_HEADER_SIZE + dib_size) {
         store64(err_out, chitra_err(CHITRA_ERR_TRUNCATED));
         return 0;
     }
 
-    var dib = src + BMP_FILE_HEADER_SIZE;
+    var dib = src + _CHITRA_BMP_FILE_HEADER_SIZE;
     var w = 0;
     var h_signed = 0;
     var planes = 0;
     var bpp = 0;
-    var compression = BMP_BI_RGB;
+    var compression = _CHITRA_BMP_BI_RGB;
     var clr_used = 0;
     var pal_stride = 4;
 
@@ -350,21 +350,21 @@ fn _bmp_parse_header(src, len, err_out): i64 {
     # refuses it), and refused a real Huffman-1D file as a broken header rather
     # than as a compression chitra does not implement. Both are refused here
     # as BMP_COMPRESSION.
-    if (dib_size == BMP_OS22X_HEADER_SIZE) {
+    if (dib_size == _CHITRA_BMP_OS22X_HEADER_SIZE) {
         if (compression >= 3) {
             store64(err_out, chitra_err(CHITRA_ERR_BMP_COMPRESSION));
             return 0;
         }
     }
     var is_rle = 0;
-    if (compression == BMP_BI_RLE8) { is_rle = 1; }
-    if (compression == BMP_BI_RLE4) { is_rle = 1; }
+    if (compression == _CHITRA_BMP_BI_RLE8) { is_rle = 1; }
+    if (compression == _CHITRA_BMP_BI_RLE4) { is_rle = 1; }
     var is_bitfields = 0;
-    if (compression == BMP_BI_BITFIELDS) { is_bitfields = 1; }
-    if (compression == BMP_BI_ALPHABITFIELDS) { is_bitfields = 1; }
+    if (compression == _CHITRA_BMP_BI_BITFIELDS) { is_bitfields = 1; }
+    if (compression == _CHITRA_BMP_BI_ALPHABITFIELDS) { is_bitfields = 1; }
     if (is_rle == 0) {
         if (is_bitfields == 0) {
-            if (compression != BMP_BI_RGB) {
+            if (compression != _CHITRA_BMP_BI_RGB) {
                 store64(err_out, chitra_err(CHITRA_ERR_BMP_COMPRESSION));
                 return 0;
             }
@@ -374,13 +374,13 @@ fn _bmp_parse_header(src, len, err_out): i64 {
     # encodes 4-bpp nibbles. A mismatch is a malformed header, not a variant —
     # the run/absolute payloads mean different things at different depths, so
     # decoding one as the other would silently produce a different image.
-    if (compression == BMP_BI_RLE8) {
+    if (compression == _CHITRA_BMP_BI_RLE8) {
         if (bpp != 8) {
             store64(err_out, chitra_err(CHITRA_ERR_BMP_HEADER));
             return 0;
         }
     }
-    if (compression == BMP_BI_RLE4) {
+    if (compression == _CHITRA_BMP_BI_RLE4) {
         if (bpp != 4) {
             store64(err_out, chitra_err(CHITRA_ERR_BMP_HEADER));
             return 0;
@@ -461,7 +461,7 @@ fn _bmp_parse_header(src, len, err_out): i64 {
             store64(err_out, chitra_err(CHITRA_ERR_BMP_PALETTE));
             return 0;
         }
-        pal_off = BMP_FILE_HEADER_SIZE + dib_size;
+        pal_off = _CHITRA_BMP_FILE_HEADER_SIZE + dib_size;
         if (pal_off + pal_n * pal_stride > len) {
             store64(err_out, chitra_err(CHITRA_ERR_BMP_PALETTE));
             return 0;
@@ -504,9 +504,9 @@ fn _bmp_parse_header(src, len, err_out): i64 {
     # Through 0.7.1 such a file DECODED, silently opaque: mask_a stayed 0
     # because the in-header alpha read is gated on V3-or-later, so every
     # per-pixel alpha the file declared was discarded with no error.
-    if (compression == BMP_BI_ALPHABITFIELDS) {
+    if (compression == _CHITRA_BMP_BI_ALPHABITFIELDS) {
         if (has_mask_fields == 1) {
-            if (dib_size < BMP_V3_HEADER_SIZE) {
+            if (dib_size < _CHITRA_BMP_V3_HEADER_SIZE) {
                 store64(err_out, chitra_err(CHITRA_ERR_BMP_MASK));
                 return 0;
             }
@@ -517,12 +517,12 @@ fn _bmp_parse_header(src, len, err_out): i64 {
             mask_r = _bmp_u32_le(dib + 40);
             mask_g = _bmp_u32_le(dib + 44);
             mask_b = _bmp_u32_le(dib + 48);
-            if (dib_size >= BMP_V3_HEADER_SIZE) { mask_a = _bmp_u32_le(dib + 52); }
+            if (dib_size >= _CHITRA_BMP_V3_HEADER_SIZE) { mask_a = _bmp_u32_le(dib + 52); }
         } else {
             if (is_bitfields == 1) {
                 var nmask = 3;
-                if (compression == BMP_BI_ALPHABITFIELDS) { nmask = 4; }
-                if (BMP_FILE_HEADER_SIZE + dib_size + nmask * 4 > len) {
+                if (compression == _CHITRA_BMP_BI_ALPHABITFIELDS) { nmask = 4; }
+                if (_CHITRA_BMP_FILE_HEADER_SIZE + dib_size + nmask * 4 > len) {
                     store64(err_out, chitra_err(CHITRA_ERR_TRUNCATED));
                     return 0;
                 }
@@ -612,7 +612,7 @@ fn _bmp_parse_header(src, len, err_out): i64 {
     # must lie inside the buffer — this is the check that turns a lying header
     # into a clean rejection instead of an overread.
     if (data_off == 0) {
-        data_off = BMP_FILE_HEADER_SIZE + dib_size + pal_n * pal_stride;
+        data_off = _CHITRA_BMP_FILE_HEADER_SIZE + dib_size + pal_n * pal_stride;
         # At 16/24/32 bpp there is no palette, but a non-zero biClrUsed still
         # declares an optional colour table between the headers and the bits
         # (MS: "specifies the size of the color table used to optimize
@@ -628,7 +628,7 @@ fn _bmp_parse_header(src, len, err_out): i64 {
         # palette would occupy, so they push the implicit data start along too.
         if (has_mask_fields == 0) {
             if (is_bitfields == 1) {
-                if (compression == BMP_BI_ALPHABITFIELDS) {
+                if (compression == _CHITRA_BMP_BI_ALPHABITFIELDS) {
                     data_off = data_off + 16;
                 } else {
                     data_off = data_off + 12;
@@ -636,7 +636,7 @@ fn _bmp_parse_header(src, len, err_out): i64 {
             }
         }
     }
-    if (data_off < BMP_FILE_HEADER_SIZE + dib_size) {
+    if (data_off < _CHITRA_BMP_FILE_HEADER_SIZE + dib_size) {
         store64(err_out, chitra_err(CHITRA_ERR_BMP_HEADER));
         return 0;
     }
@@ -656,22 +656,22 @@ fn _bmp_parse_header(src, len, err_out): i64 {
         }
     }
 
-    var hdr = alloc(BMP_HDR_SIZE);
+    var hdr = alloc(_CHITRA_BMP_HDR_SIZE);
     if (hdr == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
-    store64(hdr + BH_WIDTH, w);
-    store64(hdr + BH_HEIGHT, h);
-    store64(hdr + BH_TOP_DOWN, top_down);
-    store64(hdr + BH_BPP, bpp);
-    store64(hdr + BH_PALETTE_OFF, pal_off);
-    store64(hdr + BH_PALETTE_N, pal_n);
-    store64(hdr + BH_PALETTE_STR, pal_stride);
-    store64(hdr + BH_DATA_OFF, data_off);
-    store64(hdr + BH_STRIDE, stride);
-    store64(hdr + BH_COMPRESSION, compression);
-    store64(hdr + BH_MASK_R, mask_r);
-    store64(hdr + BH_MASK_G, mask_g);
-    store64(hdr + BH_MASK_B, mask_b);
-    store64(hdr + BH_MASK_A, mask_a);
+    store64(hdr + _CHITRA_BH_WIDTH, w);
+    store64(hdr + _CHITRA_BH_HEIGHT, h);
+    store64(hdr + _CHITRA_BH_TOP_DOWN, top_down);
+    store64(hdr + _CHITRA_BH_BPP, bpp);
+    store64(hdr + _CHITRA_BH_PALETTE_OFF, pal_off);
+    store64(hdr + _CHITRA_BH_PALETTE_N, pal_n);
+    store64(hdr + _CHITRA_BH_PALETTE_STR, pal_stride);
+    store64(hdr + _CHITRA_BH_DATA_OFF, data_off);
+    store64(hdr + _CHITRA_BH_STRIDE, stride);
+    store64(hdr + _CHITRA_BH_COMPRESSION, compression);
+    store64(hdr + _CHITRA_BH_MASK_R, mask_r);
+    store64(hdr + _CHITRA_BH_MASK_G, mask_g);
+    store64(hdr + _CHITRA_BH_MASK_B, mask_b);
+    store64(hdr + _CHITRA_BH_MASK_A, mask_a);
     return hdr;
 }
 
@@ -897,20 +897,20 @@ fn chitra_bmp_decode(src, len, err_out): i64 {
     var hdr = _bmp_parse_header(src, len, err_out);
     if (hdr == 0) { return 0; }
 
-    var w = load64(hdr + BH_WIDTH);
-    var h = load64(hdr + BH_HEIGHT);
-    var top_down = load64(hdr + BH_TOP_DOWN);
-    var bpp = load64(hdr + BH_BPP);
-    var pal_off = load64(hdr + BH_PALETTE_OFF);
-    var pal_n = load64(hdr + BH_PALETTE_N);
-    var pal_str = load64(hdr + BH_PALETTE_STR);
-    var mask_r = load64(hdr + BH_MASK_R);
-    var mask_g = load64(hdr + BH_MASK_G);
-    var mask_b = load64(hdr + BH_MASK_B);
-    var mask_a = load64(hdr + BH_MASK_A);
-    var data_off = load64(hdr + BH_DATA_OFF);
-    var stride = load64(hdr + BH_STRIDE);
-    var compression = load64(hdr + BH_COMPRESSION);
+    var w = load64(hdr + _CHITRA_BH_WIDTH);
+    var h = load64(hdr + _CHITRA_BH_HEIGHT);
+    var top_down = load64(hdr + _CHITRA_BH_TOP_DOWN);
+    var bpp = load64(hdr + _CHITRA_BH_BPP);
+    var pal_off = load64(hdr + _CHITRA_BH_PALETTE_OFF);
+    var pal_n = load64(hdr + _CHITRA_BH_PALETTE_N);
+    var pal_str = load64(hdr + _CHITRA_BH_PALETTE_STR);
+    var mask_r = load64(hdr + _CHITRA_BH_MASK_R);
+    var mask_g = load64(hdr + _CHITRA_BH_MASK_G);
+    var mask_b = load64(hdr + _CHITRA_BH_MASK_B);
+    var mask_a = load64(hdr + _CHITRA_BH_MASK_A);
+    var data_off = load64(hdr + _CHITRA_BH_DATA_OFF);
+    var stride = load64(hdr + _CHITRA_BH_STRIDE);
+    var compression = load64(hdr + _CHITRA_BH_COMPRESSION);
 
     var out_size = w * h * 4;
     if (out_size > CHITRA_MAX_RAW_BYTES) {
@@ -929,8 +929,8 @@ fn chitra_bmp_decode(src, len, err_out): i64 {
     # would assert a value the file never encodes.
     var rle_idx = 0;
     var is_rle = 0;
-    if (compression == BMP_BI_RLE8) { is_rle = 1; }
-    if (compression == BMP_BI_RLE4) { is_rle = 1; }
+    if (compression == _CHITRA_BMP_BI_RLE8) { is_rle = 1; }
+    if (compression == _CHITRA_BMP_BI_RLE4) { is_rle = 1; }
     if (is_rle == 1) {
         # ⛔⛔ PRE-GATE (B-4, 1.0.3) — REFUSE BEFORE ALLOCATING, NOT AFTER.
         # The exact cap below can only run after the decode, because the only
@@ -958,7 +958,7 @@ fn chitra_bmp_decode(src, len, err_out): i64 {
         var zz = 0;
         while (zz < w * h) { store8(rle_idx + zz, 0); zz = zz + 1; }
         var is4 = 0;
-        if (compression == BMP_BI_RLE4) { is4 = 1; }
+        if (compression == _CHITRA_BMP_BI_RLE4) { is4 = 1; }
         var consumed = 0;
         if (_bmp_decode_rle(src, len, data_off, w, h, is4, rle_idx, err_out, &consumed) != 0) {
             return 0;
@@ -1035,10 +1035,10 @@ fn chitra_bmp_decode(src, len, err_out): i64 {
     }
     # A bitfields file that declared no alpha mask is opaque BY DECLARATION,
     # not by inspection — the padding heuristic must not speak for it.
-    if (compression == BMP_BI_BITFIELDS) {
+    if (compression == _CHITRA_BMP_BI_BITFIELDS) {
         if (mask_a == 0) { use_alpha = 0; }
     }
-    if (compression == BMP_BI_ALPHABITFIELDS) {
+    if (compression == _CHITRA_BMP_BI_ALPHABITFIELDS) {
         if (mask_a == 0) { use_alpha = 0; }
     }
 
@@ -1136,21 +1136,21 @@ fn chitra_bmp_decode(src, len, err_out): i64 {
 
     var img = alloc(CHITRA_IMAGE_SIZE);
     if (img == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
-    store64(img + IMAGE_WIDTH_OFFSET, w);
-    store64(img + IMAGE_HEIGHT_OFFSET, h);
-    store64(img + IMAGE_PIXELS_OFFSET, rgba);
-    store64(img + IMAGE_CHANNELS_OFFSET, 4);
+    store64(img + _CHITRA_IMAGE_WIDTH_OFFSET, w);
+    store64(img + _CHITRA_IMAGE_HEIGHT_OFFSET, h);
+    store64(img + _CHITRA_IMAGE_PIXELS_OFFSET, rgba);
+    store64(img + _CHITRA_IMAGE_CHANNELS_OFFSET, 4);
     # BMP has no stream terminator to have seen — no IEND, no EOI, no trailer.
     # The whole `data_off + stride * height` span is validated against the input
     # length before a single pixel is read, so if the decode got this far the
     # pixel data was entirely present. 1 is therefore the honest answer here,
     # not a placeholder: unlike the JPEG and GIF paths before 0.7.0, there is no
     # incomplete-but-decoded state for this field to be hiding.
-    store64(img + IMAGE_SEEN_IEND_OFFSET, 1);
+    store64(img + _CHITRA_IMAGE_SEEN_IEND_OFFSET, 1);
     # src_ctype sentinel: 0x200 | bpp — so 0x201/0x204/0x208 indexed,
     # 0x218 for 24 bpp, 0x220 for 32 bpp. Distinct from PNG's raw color_type
     # (0/2/3/4/6) and JPEG's 0x100 | ncomp.
-    store64(img + IMAGE_SRC_CTYPE_OFFSET, 512 + bpp);
+    store64(img + _CHITRA_IMAGE_SRC_CTYPE_OFFSET, 512 + bpp);
     # Bits per CHANNEL as stored, not bits per pixel. 8 for 24/32 bpp and for
     # palette entries (which are BGRA bytes whatever the index width); for the
     # packed 16-bpp layouts it is the widest declared channel, so 5-5-5 reports
@@ -1168,7 +1168,7 @@ fn chitra_bmp_decode(src, len, err_out): i64 {
         if (wd_g > src_depth) { src_depth = wd_g; }
         if (wd_b > src_depth) { src_depth = wd_b; }
     }
-    store64(img + IMAGE_SRC_DEPTH_OFFSET, src_depth);
+    store64(img + _CHITRA_IMAGE_SRC_DEPTH_OFFSET, src_depth);
     return img;
 }
 

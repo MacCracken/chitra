@@ -1165,13 +1165,13 @@ fn test_chitra_image_record_layout_is_append_only() {
     # mabda reads width/height/pixels through accessors compiled against the
     # 0.1.x offsets. Every field added since has gone on the END, and this cell
     # is what would catch a reordering that looks harmless in source.
-    assert_eq(IMAGE_WIDTH_OFFSET, 0, "width stays at +0");
-    assert_eq(IMAGE_HEIGHT_OFFSET, 8, "height stays at +8");
-    assert_eq(IMAGE_PIXELS_OFFSET, 16, "pixels stays at +16");
-    assert_eq(IMAGE_CHANNELS_OFFSET, 24, "channels stays at +24");
-    assert_eq(IMAGE_SEEN_IEND_OFFSET, 32, "seen_iend stays at +32");
-    assert_eq(IMAGE_SRC_CTYPE_OFFSET, 40, "src_ctype stays at +40");
-    assert_eq(IMAGE_SRC_DEPTH_OFFSET, 48, "src_depth appended at +48");
+    assert_eq(_CHITRA_IMAGE_WIDTH_OFFSET, 0, "width stays at +0");
+    assert_eq(_CHITRA_IMAGE_HEIGHT_OFFSET, 8, "height stays at +8");
+    assert_eq(_CHITRA_IMAGE_PIXELS_OFFSET, 16, "pixels stays at +16");
+    assert_eq(_CHITRA_IMAGE_CHANNELS_OFFSET, 24, "channels stays at +24");
+    assert_eq(_CHITRA_IMAGE_SEEN_IEND_OFFSET, 32, "seen_iend stays at +32");
+    assert_eq(_CHITRA_IMAGE_SRC_CTYPE_OFFSET, 40, "src_ctype stays at +40");
+    assert_eq(_CHITRA_IMAGE_SRC_DEPTH_OFFSET, 48, "src_depth appended at +48");
     assert_eq(CHITRA_IMAGE_SIZE, 56, "ChitraImage is 56 bytes");
     return 0;
 }

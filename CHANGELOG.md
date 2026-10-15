@@ -9,6 +9,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 _Nothing yet._
 
+## [1.1.2] - 2026-10-15 — a consumer's globals can no longer reach inside chitra
+
+Closes **cc-13**, the one confirmed finding the 1.1.1 P(-1) sweep deferred
+([audit § 6](docs/audit/2026-10-15-audit.md)). ⛔ **Nothing frozen changed** —
+no function was renamed, and the record offsets' *values* are what the 1.0.0
+promise covers, not the variables that hold them. Decode output is
+byte-identical to 1.1.1.
+
+### Fixed — 128 bundle globals had no chitra prefix
+
+`dist/chitra.cyr` is a strip-concatenation, so every top-level `var` in `src/`
+becomes a global in the **consumer's** program. 128 of them carried no prefix —
+`RAW_*`, `CUR_*`, `IMAGE_*_OFFSET`, `HT_*`, `BR_*`, `JF_*`, `BH_*`, `LZ_*`, the
+IDCT `FIX_*` constants, the BMP/GIF header constants and `_jpeg_zz_*` (three more
+than the audit's 125: 1.1.1 added `BR_RSTNEXT`, `BR_DAMAGED` and `JF_DQT16`).
+
+The audit rated it LOW because no consumer collides today. Measured before the
+fix, it was worse than a name clash: a consumer that declared its own global of
+one of those names **after** linking chitra — or merely assigned one — rewrote
+the value chitra decodes with. With the value 0, `CUR_POS_OFFSET` made the JPEG
+and PNG decoders **SIGSEGV**, `LZ_BIT` made the GIF decoder SIGSEGV, and
+`HT_SIZE` broke every JPEG. A declaration earned only a "duplicate symbol"
+warning; an assignment earned nothing. (A declaration *before* the include was
+harmless — chitra's own initialiser re-ran — which is why it read as cosmetic.)
+
+**Repair**: every one is now `_CHITRA_*` (constants) or `_chitra_*`
+(`_chitra_jpeg_zz_*`) — 590 replacements across `src/` and four suites, purely
+mechanical. Seven one-line internal accessors in `jpeg_markers.cyr` were reflowed
+to stay inside lint's 120 columns. `build/chitra_smoke` is byte-for-byte the same
+size (347,912 B). The live docs that cite these names (CLAUDE.md, ADRs 0006 and
+0008, architecture/004) follow; released CHANGELOG entries and dated audits keep
+the names they were written with. kii mentions `IMAGE_SEEN_IEND_OFFSET` only in a
+comment; no consumer references any of the names in code.
+
+### Added — `tests/tcyr/namespace.tcyr` (22 assertions), and a gate
+
+- **The suite is the consumer.** It declares 127 of the pre-1.1.2 names *after*
+  `src/lib.cyr`, each set to 3 (a misaligned offset, a nonsense size, a corrupt
+  IDCT constant), decodes a 7×5 PNG, JPEG (4:2:0 with a restart interval), RLE8
+  BMP and interlaced GIF, and checks every pixel sum against ImageMagick /
+  `djpeg -nosmooth`. Then it checks the consumer's globals still read 3 —
+  chitra neither reads nor writes them. ⚠ **Checked against the 1.1.1 sources:
+  all four decodes fail.** The 128th name, `_jpeg_zz_tbl`, was an array, and
+  redeclaring it as a scalar is a hard compile error — loud, never the hazard.
+- **`check-surface.sh`** (run by `make lint` and CI) now fails on any top-level
+  `var` in the bundle without a `_chitra_` / `_CHITRA_` / `CHITRA_` prefix, and
+  names it. Proven: a probe `var HT_SIZE_PROBE` in the bundle fails it with
+  exactly that message. It reports **146 globals, all chitra-prefixed**.
+
+### Not in this release
+
+⚠ **The same class exists for functions.** 84 internal helpers (`_jpeg_*`,
+`_bmp_*`, `_cur_*`, `_gif_*`, `_chunk_*`, `_adam7_*`, `_png_*`) carry no chitra
+prefix, and a consumer function of the same name **replaces** chitra's: measured,
+a consumer `_jpeg_descale` made a JPEG decode to different pixels with only a
+"duplicate fn … last definition wins" warning. Outside cc-13's scope; it is the
+next 1.1.x item on the roadmap.
+
+### Numbers
+
+**3,971 assertions across 14 suites** (3,949 + the new 22) and **11,185,700
+fuzz assertions** under `--poison` (unchanged from 1.1.1 — a pure rename moves no
+case), 0 failures. The 53-file reference corpus decodes byte-identically to
+1.1.1, refusal codes included. `dist/chitra.cyr` 336,016 B.
+
 ## [1.1.1] - 2026-10-15 — a P(-1) sweep after the dependency boundary moved
 
 The sixth security audit: [`docs/audit/2026-10-15-audit.md`](docs/audit/2026-10-15-audit.md).

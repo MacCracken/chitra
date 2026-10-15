@@ -507,14 +507,14 @@ fn test_reject_dht_oversub() {
 # Build a DC test table: 2 codes of length 1 -> symbol 0 = code "0", symbol 1 =
 # code "1" (so DC size 0 = bit 0, DC size 1 = bit 1).
 fn fx_dc_table(): i64 {
-    var t = alloc(HT_SIZE);
+    var t = alloc(_CHITRA_HT_SIZE);
     var bits[136];
     var i = 0;
     while (i <= 16) { store64(&bits + i * 8, 0); i = i + 1; }
     store64(&bits + 1 * 8, 2);
-    store64(t + HT_COUNT, 2);
-    store64(t + HT_HUFFVAL + 0 * 8, 0);
-    store64(t + HT_HUFFVAL + 1 * 8, 1);
+    store64(t + _CHITRA_HT_COUNT, 2);
+    store64(t + _CHITRA_HT_HUFFVAL + 0 * 8, 0);
+    store64(t + _CHITRA_HT_HUFFVAL + 1 * 8, 1);
     _jpeg_huff_build(t, &bits);
     return t;
 }
@@ -522,14 +522,14 @@ fn fx_dc_table(): i64 {
 # Build an AC test table: 2 codes of length 2 -> symbol 0x00 (EOB) = code "00",
 # symbol 0x01 (run 0, size 1) = code "01".
 fn fx_ac_table(): i64 {
-    var t = alloc(HT_SIZE);
+    var t = alloc(_CHITRA_HT_SIZE);
     var bits[136];
     var i = 0;
     while (i <= 16) { store64(&bits + i * 8, 0); i = i + 1; }
     store64(&bits + 2 * 8, 2);
-    store64(t + HT_COUNT, 2);
-    store64(t + HT_HUFFVAL + 0 * 8, 0);
-    store64(t + HT_HUFFVAL + 1 * 8, 1);
+    store64(t + _CHITRA_HT_COUNT, 2);
+    store64(t + _CHITRA_HT_HUFFVAL + 0 * 8, 0);
+    store64(t + _CHITRA_HT_HUFFVAL + 1 * 8, 1);
     _jpeg_huff_build(t, &bits);
     return t;
 }
@@ -557,7 +557,7 @@ fn test_extend() {
 fn test_bitreader() {
     var buf[4];
     store8(&buf + 0, 0xB5);   # 1011 0101
-    var rdr[72];   # BR_SIZE
+    var rdr[72];   # _CHITRA_BR_SIZE
     _jpeg_br_init(&rdr, &buf, 1);
     assert_eq(_jpeg_br_bit(&rdr), 1, "bit0");
     assert_eq(_jpeg_br_bit(&rdr), 0, "bit1");
@@ -572,7 +572,7 @@ fn test_bitreader_stuffing() {
     store8(&buf + 0, 0xFF);
     store8(&buf + 1, 0x00);   # stuffed -> 0xFF is real data
     store8(&buf + 2, 0x80);   # 1000 0000
-    var rdr[72];   # BR_SIZE
+    var rdr[72];   # _CHITRA_BR_SIZE
     _jpeg_br_init(&rdr, &buf, 3);
     assert_eq(_jpeg_br_bits(&rdr, 8), 255, "stuffed 0xFF reads as 255");
     assert_eq(_jpeg_br_bit(&rdr), 1, "next bit from 0x80 = 1");
@@ -585,7 +585,7 @@ fn test_bitreader_marker() {
     store8(&buf + 0, 0x80);   # 1000 0000
     store8(&buf + 1, 0xFF);
     store8(&buf + 2, 0xD9);   # EOI marker
-    var rdr[72];   # BR_SIZE
+    var rdr[72];   # _CHITRA_BR_SIZE
     _jpeg_br_init(&rdr, &buf, 3);
     assert_eq(_jpeg_br_bit(&rdr), 1, "first data bit");
     assert_eq(_jpeg_br_bits(&rdr, 7), 0, "rest of 0x80");
@@ -599,7 +599,7 @@ fn test_decode_block() {
     var act = fx_ac_table();
     var lo = 0;
     var ent = fx_entropy_block(&lo);
-    var rdr[72];   # BR_SIZE
+    var rdr[72];   # _CHITRA_BR_SIZE
     _jpeg_br_init(&rdr, ent, lo);
     var zz = alloc(512);
     var err = 0;
@@ -619,7 +619,7 @@ fn test_decode_block_dc_predictor() {
     var act = fx_ac_table();
     var lo = 0;
     var ent = fx_entropy_block(&lo);
-    var rdr[72];   # BR_SIZE
+    var rdr[72];   # _CHITRA_BR_SIZE
     _jpeg_br_init(&rdr, ent, lo);
     var zz = alloc(512);
     var err = 0;
@@ -1534,39 +1534,39 @@ fn test_image_decode_dispatch() {
 
 # DC table whose single symbol is category 12 (out of 8-bit baseline range 0..11).
 fn fx_dc_table_cat12(): i64 {
-    var t = alloc(HT_SIZE);
+    var t = alloc(_CHITRA_HT_SIZE);
     var bits[136];
     var i = 0;
     while (i <= 16) { store64(&bits + i * 8, 0); i = i + 1; }
     store64(&bits + 1 * 8, 1);
-    store64(t + HT_COUNT, 1);
-    store64(t + HT_HUFFVAL + 0 * 8, 12);
+    store64(t + _CHITRA_HT_COUNT, 1);
+    store64(t + _CHITRA_HT_HUFFVAL + 0 * 8, 12);
     _jpeg_huff_build(t, &bits);
     return t;
 }
 
 # DC table with a single size-0 symbol (code "0").
 fn fx_dc_table_size0(): i64 {
-    var t = alloc(HT_SIZE);
+    var t = alloc(_CHITRA_HT_SIZE);
     var bits[136];
     var i = 0;
     while (i <= 16) { store64(&bits + i * 8, 0); i = i + 1; }
     store64(&bits + 1 * 8, 1);
-    store64(t + HT_COUNT, 1);
-    store64(t + HT_HUFFVAL + 0 * 8, 0);
+    store64(t + _CHITRA_HT_COUNT, 1);
+    store64(t + _CHITRA_HT_HUFFVAL + 0 * 8, 0);
     _jpeg_huff_build(t, &bits);
     return t;
 }
 
 # AC table whose single symbol is 0x0B (run 0, size 11 — out of baseline range).
 fn fx_ac_table_s11(): i64 {
-    var t = alloc(HT_SIZE);
+    var t = alloc(_CHITRA_HT_SIZE);
     var bits[136];
     var i = 0;
     while (i <= 16) { store64(&bits + i * 8, 0); i = i + 1; }
     store64(&bits + 1 * 8, 1);
-    store64(t + HT_COUNT, 1);
-    store64(t + HT_HUFFVAL + 0 * 8, 0x0B);
+    store64(t + _CHITRA_HT_COUNT, 1);
+    store64(t + _CHITRA_HT_HUFFVAL + 0 * 8, 0x0B);
     _jpeg_huff_build(t, &bits);
     return t;
 }
@@ -1576,7 +1576,7 @@ fn test_reject_dc_oversize() {
     var act = fx_ac_table();
     var buf[2];
     store8(&buf + 0, 0x00);
-    var rdr[72];   # BR_SIZE
+    var rdr[72];   # _CHITRA_BR_SIZE
     _jpeg_br_init(&rdr, &buf, 2);
     var zz = alloc(512);
     var err = 0;
@@ -1590,7 +1590,7 @@ fn test_reject_ac_oversize() {
     var act = fx_ac_table_s11();
     var buf[2];
     store8(&buf + 0, 0x00);
-    var rdr[72];   # BR_SIZE
+    var rdr[72];   # _CHITRA_BR_SIZE
     _jpeg_br_init(&rdr, &buf, 2);
     var zz = alloc(512);
     var err = 0;
@@ -3953,7 +3953,7 @@ fn test_sos_before_sof_is_a_misplaced_marker() {
 # every fuzz harness stayed green; only a poison-redzone build saw the writes.
 #   DQT Tq < 4      quant store is 4 x 64 x 8 = 2,048 B; Tq = 15 writes ~5.6 KB
 #                   past it.
-#   DHT sum <= 256  each table is HT_SIZE = 2,464 B with room for 256 symbols;
+#   DHT sum <= 256  each table is _CHITRA_HT_SIZE = 2,464 B with room for 256 symbols;
 #                   slot 7 (Tc 1, Th 3) ends the 19,712-B block, so symbol 256
 #                   lands in the next allocation.
 #   AC k <= 63      zz is 64 x 8 = 512 B; a run that reaches k = 64 writes past.
@@ -4008,13 +4008,13 @@ fn test_dht_symbol_count_past_the_table_rejected() {
 
 # AC table whose single 1-bit code '0' is symbol 0xF1 (run 15, size 1).
 fn fx_ac_table_run15(): i64 {
-    var t = alloc(HT_SIZE);
+    var t = alloc(_CHITRA_HT_SIZE);
     var bits[136];
     var i = 0;
     while (i <= 16) { store64(&bits + i * 8, 0); i = i + 1; }
     store64(&bits + 1 * 8, 1);
-    store64(t + HT_COUNT, 1);
-    store64(t + HT_HUFFVAL + 0 * 8, 0xF1);
+    store64(t + _CHITRA_HT_COUNT, 1);
+    store64(t + _CHITRA_HT_HUFFVAL + 0 * 8, 0xF1);
     _jpeg_huff_build(t, &bits);
     return t;
 }
@@ -4028,7 +4028,7 @@ fn test_ac_run_past_coefficient_63_rejected() {
     var buf[2];
     store8(&buf + 0, 0x2A);
     store8(&buf + 1, 0x80);
-    var rdr[72];   # BR_SIZE
+    var rdr[72];   # _CHITRA_BR_SIZE
     _jpeg_br_init(&rdr, &buf, 2);
     var zz = alloc(1024);       # slack: a neutered guard writes zz[64]
     var err = 0;
@@ -4225,13 +4225,13 @@ fn test_sos_fields_pinned() {
 
 # AC table whose single 1-bit code '0' is ZRL (0xF0).
 fn fx_ac_table_zrl(): i64 {
-    var t = alloc(HT_SIZE);
+    var t = alloc(_CHITRA_HT_SIZE);
     var bits[136];
     var i = 0;
     while (i <= 16) { store64(&bits + i * 8, 0); i = i + 1; }
     store64(&bits + 1 * 8, 1);
-    store64(t + HT_COUNT, 1);
-    store64(t + HT_HUFFVAL + 0 * 8, 0xF0);
+    store64(t + _CHITRA_HT_COUNT, 1);
+    store64(t + _CHITRA_HT_HUFFVAL + 0 * 8, 0xF0);
     _jpeg_huff_build(t, &bits);
     return t;
 }
@@ -4245,7 +4245,7 @@ fn test_zrl_past_the_block_rejected() {
     var buf[2];
     store8(&buf + 0, 0x00);
     store8(&buf + 1, 0x00);
-    var rdr[72];   # BR_SIZE
+    var rdr[72];   # _CHITRA_BR_SIZE
     _jpeg_br_init(&rdr, &buf, 2);
     var zz = alloc(512);
     var err = 0;

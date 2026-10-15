@@ -22,7 +22,7 @@ surface of roughly eight names. 0.6.1 ships the prerequisite and a surface of
 Three corrections to 0007's numbers, all re-measured on this tree:
 
 - The refusal cost was **22,160**, not 22,096. 0.6.1's own APP14 repair grew
-  `CHITRA_JPEG_FRAME_SIZE` from 320 to 384 for `JF_ADOBE_TRANSFORM`.
+  `CHITRA_JPEG_FRAME_SIZE` from 320 to 384 for `_CHITRA_JF_ADOBE_TRANSFORM`.
 - Its "~336 byte" lazy floor is really **400** (frame 384 + `ChitraErr` 16).
 - Its exclusion list omitted that **sankoch allocates 32 bytes per
   `zlib_decompress` call, permanently** — `br_init` at `lib/sankoch.cyr:715`,
@@ -48,7 +48,7 @@ not a guarantee:**
 > GIF, and **128** for BMP.
 >
 > ⚠ *Corrected at 1.1.1: this read **144** from 0.6.1 until the 2026-10-15
-> sweep measured it. It has been 128 (`BMP_HDR_SIZE` 112 + the 16-byte
+> sweep measured it. It has been 128 (`_CHITRA_BMP_HDR_SIZE` 112 + the 16-byte
 > `ChitraErr`) since 0.5.2 — the figure was a misquote, not a regression.*
 
 What it does **not** cover, named rather than glossed:

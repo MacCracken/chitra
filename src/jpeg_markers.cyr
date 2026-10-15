@@ -64,36 +64,36 @@ var CHITRA_MAX_JPEG_RATIO     = 4096;
 #   +96  huff_present     (i64 — bitmask of Huffman tables seen, bit Tc*4+Th)
 #   +104 components       (4 × 32-byte specs: +0 id, +8 H, +16 V, +24 Tq.
 #                          Td/Ta are NOT here — 0.8.0 moved the Huffman
-#                          selectors to the per-scan block; see JF_SCAN)
+#                          selectors to the per-scan block; see _CHITRA_JF_SCAN)
 # ================================================================
-var JF_WIDTH            = 0;
-var JF_HEIGHT           = 8;
-var JF_PRECISION        = 16;
-var JF_NCOMP            = 24;
-var JF_SEEN_SOF         = 32;
-var JF_MAX_H            = 40;
-var JF_MAX_V            = 48;
-var JF_RESTART_INTERVAL = 56;
-var JF_QUANT            = 64;
-var JF_QUANT_PRESENT    = 72;
-var JF_SOS_OFFSET       = 80;    # byte offset of the SOS length field (set at SOS)
-var JF_HUFF             = 88;    # ptr to 8 HuffTable records (slots 0..3 DC, 4..7 AC)
-var JF_HUFF_PRESENT     = 96;    # bitmask of Huffman tables seen (bit = class*4 + id)
-var JF_COMP             = 104;   # 4 × JF_COMP_STRIDE component specs
-var JF_COMP_STRIDE      = 32;
-var JF_COMP_ID          = 0;     # SOF fields
-var JF_COMP_H           = 8;
-var JF_COMP_V           = 16;
-var JF_COMP_TQ          = 24;
+var _CHITRA_JF_WIDTH            = 0;
+var _CHITRA_JF_HEIGHT           = 8;
+var _CHITRA_JF_PRECISION        = 16;
+var _CHITRA_JF_NCOMP            = 24;
+var _CHITRA_JF_SEEN_SOF         = 32;
+var _CHITRA_JF_MAX_H            = 40;
+var _CHITRA_JF_MAX_V            = 48;
+var _CHITRA_JF_RESTART_INTERVAL = 56;
+var _CHITRA_JF_QUANT            = 64;
+var _CHITRA_JF_QUANT_PRESENT    = 72;
+var _CHITRA_JF_SOS_OFFSET       = 80;    # byte offset of the SOS length field (set at SOS)
+var _CHITRA_JF_HUFF             = 88;    # ptr to 8 HuffTable records (slots 0..3 DC, 4..7 AC)
+var _CHITRA_JF_HUFF_PRESENT     = 96;    # bitmask of Huffman tables seen (bit = class*4 + id)
+var _CHITRA_JF_COMP             = 104;   # 4 × _CHITRA_JF_COMP_STRIDE component specs
+var _CHITRA_JF_COMP_STRIDE      = 32;
+var _CHITRA_JF_COMP_ID          = 0;     # SOF fields
+var _CHITRA_JF_COMP_H           = 8;
+var _CHITRA_JF_COMP_V           = 16;
+var _CHITRA_JF_COMP_TQ          = 24;
 # JF_COMP_TD / JF_COMP_TA are GONE as of 0.8.0. Huffman selectors are a
 # property of the SCAN, not of the component: a component absent from scan 2
 # retained scan 1's selectors here, which is a silent wrong-table decode the
-# moment more than one scan exists. They live in JF_SCAN now, and deleting them
+# moment more than one scan exists. They live in _CHITRA_JF_SCAN now, and deleting them
 # shrinks the component stride from 48 to 32.
 # +232 adobe_transform — the APP14 Adobe colour-transform code, or -1 when no
 # Adobe marker was seen. Sits after the 4 x 32-byte component specs
 # (104 + 128 = 232); it was +296 while the stride was 48.
-var JF_ADOBE_TRANSFORM  = 232;
+var _CHITRA_JF_ADOBE_TRANSFORM  = 232;
 # ---- per-SCAN state (0.8.0, multi-scan) ------------------------------------
 # A baseline file may carry several scans, each naming a SUBSET of the frame's
 # components (T.81 § A.2.3 composes an interleaved MCU from the scan's own
@@ -101,35 +101,35 @@ var JF_ADOBE_TRANSFORM  = 232;
 # jpeg-12). None of that had anywhere to live: _jpeg_parse_sos built a selector
 # list locally and discarded it, and the MCU loop iterated frame components.
 #
-# JF_SCAN is that ordered list — the frame-component index plus the Huffman
+# _CHITRA_JF_SCAN is that ordered list — the frame-component index plus the Huffman
 # selectors THIS scan chose for it. Selectors live here rather than on the
 # component because they are a property of the scan: a component absent from
 # scan 2 would otherwise retain scan 1's, which is a silent wrong-table decode.
-var JF_SCAN_NS          = 240;   # component count of the scan currently parsed
-var JF_SCAN             = 248;   # 4 x 24-byte entries
-var JF_SCAN_STRIDE      = 24;
-var JF_SCAN_COMP        = 0;     # frame component index (0..3)
-var JF_SCAN_TD          = 8;     # DC Huffman selector for THIS scan
-var JF_SCAN_TA          = 16;    # AC Huffman selector for THIS scan
+var _CHITRA_JF_SCAN_NS          = 240;   # component count of the scan currently parsed
+var _CHITRA_JF_SCAN             = 248;   # 4 x 24-byte entries
+var _CHITRA_JF_SCAN_STRIDE      = 24;
+var _CHITRA_JF_SCAN_COMP        = 0;     # frame component index (0..3)
+var _CHITRA_JF_SCAN_TD          = 8;     # DC Huffman selector for THIS scan
+var _CHITRA_JF_SCAN_TA          = 16;    # AC Huffman selector for THIS scan
 # Bitmask of frame components already decoded. It is the loop bound for the
 # whole multi-scan driver: every successful scan sets at least one new bit and
 # a component may be covered only once, so the driver terminates on the INDEX
 # itself rather than on a scan counter that stands in for it. It is also what
 # makes an omitted component detectable — Y=Cb=Cr=0 is solid green through the
 # BT.601 constants, which decodes cleanly and looks plausible.
-var JF_COVERED          = 344;
+var _CHITRA_JF_COVERED          = 344;
 # 1 once a JFIF APP0 has been seen (B-2, 1.0.3). JFIF § 4.1 defines the sample
 # space: one component is greyscale, three are Y/Cb/Cr. So a file that DECLARES
 # itself JFIF has already answered the colour question, and nothing weaker may
 # override it — see the authority order in _jpeg_build_image.
-var JF_SAW_JFIF         = 352;
+var _CHITRA_JF_SAW_JFIF         = 352;
 # 1 once a 16-bit (Pq = 1) quantization table has been seen ahead of the frame
 # header (jpeg-3, 1.1.1). Such a table is not malformed — T.81 § B.2.4.1 gives
 # it to the extended, progressive and lossless processes — it is only illegal
 # in a BASELINE frame, so it is judged against the frame header when one
 # arrives: SOF0 refuses it as CHITRA_ERR_JPEG_DQT, a non-baseline SOF reports
 # its own mode code. See _jpeg_parse_dqt.
-var JF_DQT16            = 360;
+var _CHITRA_JF_DQT16            = 360;
 # Grown 320 -> 384 in 0.6.1 for the field above. This record is @internal and
 # heap-allocated per decode, so growing it costs 8 bytes a decode and nothing
 # else — but the 0.7.0 multi-scan work needs a per-component coverage bitmask
@@ -137,45 +137,59 @@ var JF_DQT16            = 360;
 # rather than shaved to fit.
 var CHITRA_JPEG_FRAME_SIZE = 384;   # 368 used, 16 B spare
 
-fn chitra_jpeg_frame_width(f): i64          { return load64(f + JF_WIDTH); }
-fn chitra_jpeg_frame_height(f): i64         { return load64(f + JF_HEIGHT); }
-fn chitra_jpeg_frame_precision(f): i64      { return load64(f + JF_PRECISION); }
-fn chitra_jpeg_frame_num_components(f): i64 { return load64(f + JF_NCOMP); }
-fn chitra_jpeg_frame_seen_sof(f): i64       { return load64(f + JF_SEEN_SOF); }
-fn chitra_jpeg_frame_max_h(f): i64          { return load64(f + JF_MAX_H); }
-fn chitra_jpeg_frame_max_v(f): i64          { return load64(f + JF_MAX_V); }
-fn chitra_jpeg_frame_restart_interval(f): i64 { return load64(f + JF_RESTART_INTERVAL); }
-fn chitra_jpeg_frame_quant_present(f): i64  { return load64(f + JF_QUANT_PRESENT); }
-fn chitra_jpeg_frame_huff_present(f): i64   { return load64(f + JF_HUFF_PRESENT); }
+fn chitra_jpeg_frame_width(f): i64          { return load64(f + _CHITRA_JF_WIDTH); }
+fn chitra_jpeg_frame_height(f): i64         { return load64(f + _CHITRA_JF_HEIGHT); }
+fn chitra_jpeg_frame_precision(f): i64      { return load64(f + _CHITRA_JF_PRECISION); }
+fn chitra_jpeg_frame_num_components(f): i64 { return load64(f + _CHITRA_JF_NCOMP); }
+fn chitra_jpeg_frame_seen_sof(f): i64       { return load64(f + _CHITRA_JF_SEEN_SOF); }
+fn chitra_jpeg_frame_max_h(f): i64          { return load64(f + _CHITRA_JF_MAX_H); }
+fn chitra_jpeg_frame_max_v(f): i64          { return load64(f + _CHITRA_JF_MAX_V); }
+fn chitra_jpeg_frame_restart_interval(f): i64 { return load64(f + _CHITRA_JF_RESTART_INTERVAL); }
+fn chitra_jpeg_frame_quant_present(f): i64  { return load64(f + _CHITRA_JF_QUANT_PRESENT); }
+fn chitra_jpeg_frame_huff_present(f): i64   { return load64(f + _CHITRA_JF_HUFF_PRESENT); }
 
 # Per-component accessors. `i` is the component index (0..num_components-1).
-fn chitra_jpeg_frame_comp_id(f, i): i64 { return load64(f + JF_COMP + i * JF_COMP_STRIDE + JF_COMP_ID); }
-fn chitra_jpeg_frame_comp_h(f, i): i64  { return load64(f + JF_COMP + i * JF_COMP_STRIDE + JF_COMP_H); }
-fn chitra_jpeg_frame_comp_v(f, i): i64  { return load64(f + JF_COMP + i * JF_COMP_STRIDE + JF_COMP_V); }
-fn chitra_jpeg_frame_comp_tq(f, i): i64 { return load64(f + JF_COMP + i * JF_COMP_STRIDE + JF_COMP_TQ); }
-fn chitra_jpeg_frame_sos_offset(f): i64  { return load64(f + JF_SOS_OFFSET); }
+fn chitra_jpeg_frame_comp_id(f, i): i64 {
+    return load64(f + _CHITRA_JF_COMP + i * _CHITRA_JF_COMP_STRIDE + _CHITRA_JF_COMP_ID);
+}
+fn chitra_jpeg_frame_comp_h(f, i): i64 {
+    return load64(f + _CHITRA_JF_COMP + i * _CHITRA_JF_COMP_STRIDE + _CHITRA_JF_COMP_H);
+}
+fn chitra_jpeg_frame_comp_v(f, i): i64 {
+    return load64(f + _CHITRA_JF_COMP + i * _CHITRA_JF_COMP_STRIDE + _CHITRA_JF_COMP_V);
+}
+fn chitra_jpeg_frame_comp_tq(f, i): i64 {
+    return load64(f + _CHITRA_JF_COMP + i * _CHITRA_JF_COMP_STRIDE + _CHITRA_JF_COMP_TQ);
+}
+fn chitra_jpeg_frame_sos_offset(f): i64  { return load64(f + _CHITRA_JF_SOS_OFFSET); }
 # -1 = no Adobe APP14 segment was present; otherwise the raw transform byte of
 # the LAST one before the first SOS: 0 = RGB (or CMYK at 4 components),
 # 1 = YCbCr, 2 = YCCK, anything else undefined (jpeg-8, 1.1.1 — values above 1
 # are refused at the first SOS, and only where they would decide the colour).
-fn chitra_jpeg_frame_adobe_transform(f): i64 { return load64(f + JF_ADOBE_TRANSFORM); }
-fn chitra_jpeg_frame_scan_ns(f): i64   { return load64(f + JF_SCAN_NS); }
-fn chitra_jpeg_frame_covered(f): i64   { return load64(f + JF_COVERED); }
-fn chitra_jpeg_frame_saw_jfif(f): i64  { return load64(f + JF_SAW_JFIF); }
-fn chitra_jpeg_scan_comp(f, j): i64 { return load64(f + JF_SCAN + j * JF_SCAN_STRIDE + JF_SCAN_COMP); }
-fn chitra_jpeg_scan_td(f, j): i64   { return load64(f + JF_SCAN + j * JF_SCAN_STRIDE + JF_SCAN_TD); }
-fn chitra_jpeg_scan_ta(f, j): i64   { return load64(f + JF_SCAN + j * JF_SCAN_STRIDE + JF_SCAN_TA); }
+fn chitra_jpeg_frame_adobe_transform(f): i64 { return load64(f + _CHITRA_JF_ADOBE_TRANSFORM); }
+fn chitra_jpeg_frame_scan_ns(f): i64   { return load64(f + _CHITRA_JF_SCAN_NS); }
+fn chitra_jpeg_frame_covered(f): i64   { return load64(f + _CHITRA_JF_COVERED); }
+fn chitra_jpeg_frame_saw_jfif(f): i64  { return load64(f + _CHITRA_JF_SAW_JFIF); }
+fn chitra_jpeg_scan_comp(f, j): i64 {
+    return load64(f + _CHITRA_JF_SCAN + j * _CHITRA_JF_SCAN_STRIDE + _CHITRA_JF_SCAN_COMP);
+}
+fn chitra_jpeg_scan_td(f, j): i64 {
+    return load64(f + _CHITRA_JF_SCAN + j * _CHITRA_JF_SCAN_STRIDE + _CHITRA_JF_SCAN_TD);
+}
+fn chitra_jpeg_scan_ta(f, j): i64 {
+    return load64(f + _CHITRA_JF_SCAN + j * _CHITRA_JF_SCAN_STRIDE + _CHITRA_JF_SCAN_TA);
+}
 
 # Quant-table entry t (0..3), zig-zag position k (0..63). De-zig-zag happens at
 # dequant time (bite 5); this stores the raw spec order.
 fn chitra_jpeg_frame_quant(f, t, k): i64 {
-    return load64(load64(f + JF_QUANT) + (t * 64 + k) * 8);
+    return load64(load64(f + _CHITRA_JF_QUANT) + (t * 64 + k) * 8);
 }
 
 # HuffTable ptr for class (0=DC, 1=AC) and id (0..3). The HuffTable layout +
 # accessors (_jpeg_huff_*) live in jpeg_huffman.cyr.
 fn chitra_jpeg_frame_huff(f, class, id): i64 {
-    return load64(f + JF_HUFF) + (class * 4 + id) * HT_SIZE;
+    return load64(f + _CHITRA_JF_HUFF) + (class * 4 + id) * _CHITRA_HT_SIZE;
 }
 
 # Bump-allocator no-op (matches chitra_raw_free / chitra_image_free). Safe on 0.
@@ -267,7 +281,7 @@ fn _jpeg_marker_action(m): i64 {
 fn _jpeg_alloc_quant(frame): i64 {
     var quant = alloc(CHITRA_MAX_QUANT_TABLES * 64 * 8);
     if (quant == 0) { return 0; }
-    store64(frame + JF_QUANT, quant);
+    store64(frame + _CHITRA_JF_QUANT, quant);
     var z = 0;
     while (z < CHITRA_MAX_QUANT_TABLES * 64) {
         store64(quant + z * 8, 0);
@@ -277,17 +291,17 @@ fn _jpeg_alloc_quant(frame): i64 {
 }
 
 fn _jpeg_alloc_huff(frame): i64 {
-    var huff = alloc(8 * HT_SIZE);
+    var huff = alloc(8 * _CHITRA_HT_SIZE);
     if (huff == 0) { return 0; }
-    store64(frame + JF_HUFF, huff);
+    store64(frame + _CHITRA_JF_HUFF, huff);
     # Zero the Huffman storage exactly as the quant storage above is zeroed.
-    # JF_HUFF_PRESENT already gates every table selector against a table a DHT
+    # _CHITRA_JF_HUFF_PRESENT already gates every table selector against a table a DHT
     # actually defined, so this is defence in depth rather than a live bug — but
     # an un-zeroed table reached through any future path would decode from
-    # whatever the bump allocator last left there. 8 * HT_SIZE bytes is
-    # 8 * 2464 = 19712, i.e. HT_SIZE i64 slots.
+    # whatever the bump allocator last left there. 8 * _CHITRA_HT_SIZE bytes is
+    # 8 * 2464 = 19712, i.e. _CHITRA_HT_SIZE i64 slots.
     var z = 0;
-    while (z < HT_SIZE) {
+    while (z < _CHITRA_HT_SIZE) {
         store64(huff + z * 8, 0);
         z = z + 1;
     }
@@ -298,7 +312,7 @@ fn _jpeg_alloc_huff(frame): i64 {
 # Parse a DQT segment (T.81 § B.2.4.1). Cursor is at the 2-byte length field.
 # A DQT may carry multiple tables. Baseline decodes 8-bit tables only (Pq=0);
 # a 16-bit one (Pq=1) is accepted SYNTACTICALLY ahead of the frame header and
-# judged against it (jpeg-3, 1.1.1 — see JF_DQT16). Values are stored in spec
+# judged against it (jpeg-3, 1.1.1 — see _CHITRA_JF_DQT16). Values are stored in spec
 # (zig-zag) order; de-zig-zag is done at dequant.
 # Returns 0 on success, or a CHITRA_ERR_* code.
 # ================================================================
@@ -321,7 +335,7 @@ fn _jpeg_parse_dqt(cur, frame): i64 {
     # retired — ~1,847:1 on the refusal path, every call. It now happens below,
     # immediately before the first store, once Pq, Tq and the 64-byte body have
     # all been validated.
-    var quant = load64(frame + JF_QUANT);
+    var quant = load64(frame + _CHITRA_JF_QUANT);
     var rc = 0;
     var done = 0;
     var pqtq = 0;
@@ -358,14 +372,14 @@ fn _jpeg_parse_dqt(cur, frame): i64 {
                 # decodes from one) and recorded, and the frame header decides:
                 # SOF0 refuses it as JPEG_DQT, SOF1 / SOF2 / SOF9 / ... report
                 # their own mode code (chitra_jpeg_scan_markers).
-                if (load64(frame + JF_SEEN_SOF) == 1) { rc = CHITRA_ERR_JPEG_DQT; done = 1; }
+                if (load64(frame + _CHITRA_JF_SEEN_SOF) == 1) { rc = CHITRA_ERR_JPEG_DQT; done = 1; }
                 if (done == 0) {
                     if (remaining < 128) { rc = CHITRA_ERR_JPEG_DQT; done = 1; }
                 }
                 if (done == 0) {
                     _cur_skip(cur, 128);
                     remaining = remaining - 128;
-                    store64(frame + JF_DQT16, 1);
+                    store64(frame + _CHITRA_JF_DQT16, 1);
                 }
             }
         }
@@ -386,9 +400,9 @@ fn _jpeg_parse_dqt(cur, frame): i64 {
                         k = k + 1;
                     }
                     remaining = remaining - 64;
-                    present = load64(frame + JF_QUANT_PRESENT);
+                    present = load64(frame + _CHITRA_JF_QUANT_PRESENT);
                     present = present | (1 << tq);
-                    store64(frame + JF_QUANT_PRESENT, present);
+                    store64(frame + _CHITRA_JF_QUANT_PRESENT, present);
                 }
             }
         }
@@ -421,7 +435,7 @@ fn _jpeg_parse_dht(cur, frame): i64 {
     # the loop below. Allocating here, on segment entry, charged an empty DHT
     # (Lh = 2) or a malformed one the full 19,712 bytes: the 7-byte file
     # FF D8 FF C4 00 03 00 spent 20,112 B to be refused (2,873:1).
-    var huff = load64(frame + JF_HUFF);
+    var huff = load64(frame + _CHITRA_JF_HUFF);
     var bits[136];           # 17 i64 (index 1..16 = BITS counts)
     var rc = 0;
     var done = 0;
@@ -478,21 +492,21 @@ fn _jpeg_parse_dht(cur, frame): i64 {
         }
         if (done == 0) {
             slot = tc * 4 + th;
-            table = huff + slot * HT_SIZE;
-            store64(table + HT_COUNT, total);
+            table = huff + slot * _CHITRA_HT_SIZE;
+            store64(table + _CHITRA_HT_COUNT, total);
             i = 0;
             while (i < total) {
                 v = _cur_u8(cur);
-                store64(table + HT_HUFFVAL + i * 8, v);
+                store64(table + _CHITRA_HT_HUFFVAL + i * 8, v);
                 i = i + 1;
             }
             remaining = remaining - total;
             rc = _jpeg_huff_build(table, &bits);
             if (rc != 0) { done = 1; }
             if (done == 0) {
-                present = load64(frame + JF_HUFF_PRESENT);
+                present = load64(frame + _CHITRA_JF_HUFF_PRESENT);
                 present = present | (1 << slot);
-                store64(frame + JF_HUFF_PRESENT, present);
+                store64(frame + _CHITRA_JF_HUFF_PRESENT, present);
             }
         }
     }
@@ -567,7 +581,7 @@ fn _jpeg_parse_app0(cur, frame): i64 {
         if (b1 == 0x46) {
             if (b2 == 0x49) {
                 if (b3 == 0x46) {
-                    if (b4 == 0x00) { store64(frame + JF_SAW_JFIF, 1); }
+                    if (b4 == 0x00) { store64(frame + _CHITRA_JF_SAW_JFIF, 1); }
                 }
             }
         }
@@ -624,7 +638,7 @@ fn _jpeg_parse_app14(cur, frame): i64 {
     # CHITRA_ERR_JPEG_COMPONENTS (23) its four components earn at SOF0. The
     # raw value is recorded and judged at the first SOS — see
     # chitra_jpeg_scan_markers.
-    store64(frame + JF_ADOBE_TRANSFORM, transform);
+    store64(frame + _CHITRA_JF_ADOBE_TRANSFORM, transform);
     return 0;
 }
 
@@ -637,7 +651,7 @@ fn _jpeg_parse_dri(cur, frame): i64 {
     var seglen = _cur_u16_be(cur);
     if (seglen != 4) { return CHITRA_ERR_JPEG_MARKER; }
     if (_cur_can_read(cur, 2) == 0) { return CHITRA_ERR_TRUNCATED; }
-    store64(frame + JF_RESTART_INTERVAL, _cur_u16_be(cur));
+    store64(frame + _CHITRA_JF_RESTART_INTERVAL, _cur_u16_be(cur));
     return 0;
 }
 
@@ -685,6 +699,7 @@ fn _jpeg_parse_sof0(cur, frame): i64 {
     var blocks = 0;
     var j = 0;
     var dup = 0;
+    var other_id = 0;
     var base = 0;
     while (done == 0) {
         if (i >= ncomp) { done = 1; }
@@ -706,17 +721,18 @@ fn _jpeg_parse_sof0(cur, frame): i64 {
                 dup = 0;
                 j = 0;
                 while (j < i) {
-                    if (load64(frame + JF_COMP + j * JF_COMP_STRIDE + JF_COMP_ID) == cid) { dup = 1; }
+                    other_id = load64(frame + _CHITRA_JF_COMP + j * _CHITRA_JF_COMP_STRIDE + _CHITRA_JF_COMP_ID);
+                    if (other_id == cid) { dup = 1; }
                     j = j + 1;
                 }
                 if (dup == 1) { rc = CHITRA_ERR_JPEG_SOF; done = 1; }
             }
             if (done == 0) {
-                base = JF_COMP + i * JF_COMP_STRIDE;
-                store64(frame + base + JF_COMP_ID, cid);
-                store64(frame + base + JF_COMP_H, ch);
-                store64(frame + base + JF_COMP_V, cv);
-                store64(frame + base + JF_COMP_TQ, ctq);
+                base = _CHITRA_JF_COMP + i * _CHITRA_JF_COMP_STRIDE;
+                store64(frame + base + _CHITRA_JF_COMP_ID, cid);
+                store64(frame + base + _CHITRA_JF_COMP_H, ch);
+                store64(frame + base + _CHITRA_JF_COMP_V, cv);
+                store64(frame + base + _CHITRA_JF_COMP_TQ, ctq);
                 if (ch > max_h) { max_h = ch; }
                 if (cv > max_v) { max_v = cv; }
                 blocks = blocks + ch * cv;
@@ -736,13 +752,13 @@ fn _jpeg_parse_sof0(cur, frame): i64 {
     # _jpeg_parse_sos, over the scan's components, where it can be conditioned
     # on Ns as § B.2.3 conditions it — and still ahead of every allocation,
     # because planes are allocated per scan after the header is parsed.
-    store64(frame + JF_WIDTH, width);
-    store64(frame + JF_HEIGHT, height);
-    store64(frame + JF_PRECISION, precision);
-    store64(frame + JF_NCOMP, ncomp);
-    store64(frame + JF_MAX_H, max_h);
-    store64(frame + JF_MAX_V, max_v);
-    store64(frame + JF_SEEN_SOF, 1);
+    store64(frame + _CHITRA_JF_WIDTH, width);
+    store64(frame + _CHITRA_JF_HEIGHT, height);
+    store64(frame + _CHITRA_JF_PRECISION, precision);
+    store64(frame + _CHITRA_JF_NCOMP, ncomp);
+    store64(frame + _CHITRA_JF_MAX_H, max_h);
+    store64(frame + _CHITRA_JF_MAX_V, max_v);
+    store64(frame + _CHITRA_JF_SEEN_SOF, 1);
     return 0;
 }
 
@@ -857,7 +873,7 @@ fn _jpeg_resume_to_next_scan(frame, src, len, resume, err_out): i64 {
             if (act == 8) { act = 4; }
             if (act == 9) { act = 4; }
             if (act == 2) {
-                store64(frame + JF_SOS_OFFSET, _cur_pos(&cur));
+                store64(frame + _CHITRA_JF_SOS_OFFSET, _cur_pos(&cur));
                 found = _cur_pos(&cur);
                 done = 1;
             }
@@ -896,9 +912,9 @@ fn _jpeg_resume_to_next_scan(frame, src, len, resume, err_out): i64 {
 # CHITRA_ERR_JPEG_COMPONENTS, the code ADR 0004 gives CMYK/YCCK.
 # ================================================================
 fn _jpeg_colour_evidence_ok(frame): i64 {
-    if (load64(frame + JF_NCOMP) != 3) { return 0; }
-    if (load64(frame + JF_SAW_JFIF) != 0) { return 0; }
-    if (load64(frame + JF_ADOBE_TRANSFORM) > 1) { return CHITRA_ERR_UNSUPPORTED; }
+    if (load64(frame + _CHITRA_JF_NCOMP) != 3) { return 0; }
+    if (load64(frame + _CHITRA_JF_SAW_JFIF) != 0) { return 0; }
+    if (load64(frame + _CHITRA_JF_ADOBE_TRANSFORM) > 1) { return CHITRA_ERR_UNSUPPORTED; }
     return 0;
 }
 
@@ -919,27 +935,27 @@ fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
     }
     var frame = alloc(CHITRA_JPEG_FRAME_SIZE);
     if (frame == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
-    store64(frame + JF_WIDTH, 0);
-    store64(frame + JF_HEIGHT, 0);
-    store64(frame + JF_PRECISION, 0);
-    store64(frame + JF_NCOMP, 0);
-    store64(frame + JF_SEEN_SOF, 0);
-    store64(frame + JF_MAX_H, 0);
-    store64(frame + JF_MAX_V, 0);
-    store64(frame + JF_RESTART_INTERVAL, 0);
-    store64(frame + JF_QUANT_PRESENT, 0);
-    store64(frame + JF_HUFF_PRESENT, 0);
-    store64(frame + JF_SOS_OFFSET, 0);
-    store64(frame + JF_ADOBE_TRANSFORM, 0 - 1);   # -1 = no Adobe APP14 seen
-    store64(frame + JF_SCAN_NS, 0);
-    store64(frame + JF_COVERED, 0);
-    store64(frame + JF_SAW_JFIF, 0);
-    store64(frame + JF_DQT16, 0);
+    store64(frame + _CHITRA_JF_WIDTH, 0);
+    store64(frame + _CHITRA_JF_HEIGHT, 0);
+    store64(frame + _CHITRA_JF_PRECISION, 0);
+    store64(frame + _CHITRA_JF_NCOMP, 0);
+    store64(frame + _CHITRA_JF_SEEN_SOF, 0);
+    store64(frame + _CHITRA_JF_MAX_H, 0);
+    store64(frame + _CHITRA_JF_MAX_V, 0);
+    store64(frame + _CHITRA_JF_RESTART_INTERVAL, 0);
+    store64(frame + _CHITRA_JF_QUANT_PRESENT, 0);
+    store64(frame + _CHITRA_JF_HUFF_PRESENT, 0);
+    store64(frame + _CHITRA_JF_SOS_OFFSET, 0);
+    store64(frame + _CHITRA_JF_ADOBE_TRANSFORM, 0 - 1);   # -1 = no Adobe APP14 seen
+    store64(frame + _CHITRA_JF_SCAN_NS, 0);
+    store64(frame + _CHITRA_JF_COVERED, 0);
+    store64(frame + _CHITRA_JF_SAW_JFIF, 0);
+    store64(frame + _CHITRA_JF_DQT16, 0);
     # The quantization and Huffman stores are NOT allocated here — see
     # _jpeg_alloc_quant / _jpeg_alloc_huff. A file that never defines a table
     # never pays for one, which is what makes the refusal path cheap.
-    store64(frame + JF_QUANT, 0);
-    store64(frame + JF_HUFF, 0);
+    store64(frame + _CHITRA_JF_QUANT, 0);
+    store64(frame + _CHITRA_JF_HUFF, 0);
 
     var cur[24];
     _cur_init(&cur, src, len);
@@ -982,13 +998,13 @@ fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
             act = _jpeg_marker_action(m);
             if (act >= 13) { rc = act; done = 1; }
             if (act == 1) {
-                if (load64(frame + JF_SEEN_SOF) == 1) { rc = CHITRA_ERR_JPEG_SOF; done = 1; }
+                if (load64(frame + _CHITRA_JF_SEEN_SOF) == 1) { rc = CHITRA_ERR_JPEG_SOF; done = 1; }
                 # jpeg-3 (1.1.1): a BASELINE frame after a 16-bit table. The
                 # table, not this header, is what chitra refuses — exactly the
                 # code a 16-bit DQT earned through 1.1.0, when it was refused on
                 # sight. Tested before the SOF0 parse for the same reason.
                 if (done == 0) {
-                    if (load64(frame + JF_DQT16) == 1) { rc = CHITRA_ERR_JPEG_DQT; done = 1; }
+                    if (load64(frame + _CHITRA_JF_DQT16) == 1) { rc = CHITRA_ERR_JPEG_DQT; done = 1; }
                 }
                 if (done == 0) {
                     rc = _jpeg_parse_sof0(&cur, frame);
@@ -1021,9 +1037,9 @@ fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
                 # libjpeg's "Invalid JPEG file structure: SOS before SOF". There
                 # is no SOF0 here to be invalid, which is what JPEG_SOF reported
                 # through 1.1.0 (jpeg-11, 1.1.1).
-                if (load64(frame + JF_SEEN_SOF) == 0) { rc = CHITRA_ERR_JPEG_MARKER; }
+                if (load64(frame + _CHITRA_JF_SEEN_SOF) == 0) { rc = CHITRA_ERR_JPEG_MARKER; }
                 if (rc == 0) { rc = _jpeg_colour_evidence_ok(frame); }
-                if (rc == 0) { store64(frame + JF_SOS_OFFSET, _cur_pos(&cur)); }
+                if (rc == 0) { store64(frame + _CHITRA_JF_SOS_OFFSET, _cur_pos(&cur)); }
                 done = 1;   # SOS reached; entropy data follows (decoded by jpeg.cyr)
             }
             if (act == 4) {
@@ -1047,7 +1063,7 @@ fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
     # code it was refused with through 1.1.0. A non-baseline SOF never reaches
     # here as 0: its classifier code is the answer.
     if (rc != 0) {
-        if (load64(frame + JF_DQT16) == 1) {
+        if (load64(frame + _CHITRA_JF_DQT16) == 1) {
             if (rc < CHITRA_ERR_JPEG_PROGRESSIVE || rc > CHITRA_ERR_JPEG_COMPONENTS) {
                 rc = CHITRA_ERR_JPEG_DQT;
             }

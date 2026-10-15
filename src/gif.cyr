@@ -29,7 +29,7 @@
 # chitra did not decode those pixels; alpha 0 says exactly that, where a
 # background fill would assert a color the frame never specified.
 
-var GIF_MAX_COLORS = 256;
+var _CHITRA_GIF_MAX_COLORS = 256;
 
 # Output:input amplification ceiling, the GIF analogue of PNG's inflate ratio
 # and JPEG's output:input cap. Without it a ~800-byte file declaring a
@@ -60,16 +60,16 @@ var GIF_MAX_COLORS = 256;
 var CHITRA_MAX_GIF_RATIO = 16384;
 
 # Block introducers (spec § 15-27).
-var GIF_BLOCK_IMAGE     = 0x2C;   # Image Descriptor
-var GIF_BLOCK_EXTENSION = 0x21;   # Extension Introducer
-var GIF_BLOCK_TRAILER   = 0x3B;   # end of stream
-var GIF_EXT_GRAPHIC_CTL = 0xF9;   # Graphic Control Extension (carries transparency)
+var _CHITRA_GIF_BLOCK_IMAGE     = 0x2C;   # Image Descriptor
+var _CHITRA_GIF_BLOCK_EXTENSION = 0x21;   # Extension Introducer
+var _CHITRA_GIF_BLOCK_TRAILER   = 0x3B;   # end of stream
+var _CHITRA_GIF_EXT_GRAPHIC_CTL = 0xF9;   # Graphic Control Extension (carries transparency)
 # Spec § 25. Skipped like any other extension — chitra renders no text — but it
 # is a GRAPHIC-RENDERING block, and that distinction is not cosmetic: a Graphic
 # Control Extension governs the graphic-rendering block that FOLLOWS it, so a
 # Plain Text block consumes the pending GCE rather than letting it fall through
 # to the next image descriptor.
-var GIF_EXT_PLAINTEXT   = 0x01;
+var _CHITRA_GIF_EXT_PLAINTEXT   = 0x01;
 #
 # EXAMINED IN 0.7.2 AND DELIBERATELY NOT ACTED ON. By § 23 a GCE's scope is
 # "the first Graphic-Rendering Block to follow", and § 25 makes Plain Text one
@@ -251,16 +251,16 @@ fn chitra_gif_decode(src, len, err_out): i64 {
         if (pos >= len) { rcode = CHITRA_ERR_GIF_NO_IMAGE; walking = 0; }
         if (walking == 1) {
             b = load8(src + pos);
-            if (b == GIF_BLOCK_TRAILER) {
+            if (b == _CHITRA_GIF_BLOCK_TRAILER) {
                 rcode = CHITRA_ERR_GIF_NO_IMAGE;
                 walking = 0;
             }
             if (walking == 1) {
-                if (b == GIF_BLOCK_EXTENSION) {
+                if (b == _CHITRA_GIF_BLOCK_EXTENSION) {
                     if (pos + 2 > len) { rcode = CHITRA_ERR_TRUNCATED; walking = 0; }
                     if (walking == 1) {
                         label = load8(src + pos + 1);
-                        if (label == GIF_EXT_GRAPHIC_CTL) {
+                        if (label == _CHITRA_GIF_EXT_GRAPHIC_CTL) {
                             # GCE layout (spec § 23): block size, packed,
                             # delay(2), transparent index, terminator. The
                             # block size is fixed at 4 and IS CHECKED — every
@@ -299,7 +299,7 @@ fn chitra_gif_decode(src, len, err_out): i64 {
                         }
                     }
                 } else {
-                    if (b == GIF_BLOCK_IMAGE) {
+                    if (b == _CHITRA_GIF_BLOCK_IMAGE) {
                         found = 1;
                         walking = 0;
                     } else {
@@ -531,20 +531,20 @@ fn chitra_gif_decode(src, len, err_out): i64 {
 
     var img = alloc(CHITRA_IMAGE_SIZE);
     if (img == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
-    store64(img + IMAGE_WIDTH_OFFSET, screen_w);
-    store64(img + IMAGE_HEIGHT_OFFSET, screen_h);
-    store64(img + IMAGE_PIXELS_OFFSET, rgba);
-    store64(img + IMAGE_CHANNELS_OFFSET, 4);
+    store64(img + _CHITRA_IMAGE_WIDTH_OFFSET, screen_w);
+    store64(img + _CHITRA_IMAGE_HEIGHT_OFFSET, screen_h);
+    store64(img + _CHITRA_IMAGE_PIXELS_OFFSET, rgba);
+    store64(img + _CHITRA_IMAGE_CHANNELS_OFFSET, 4);
     # 0.7.0 — the GIF analogue of PNG's IEND question: did the stream deliver
     # the frame it promised? Hardcoded to 1 through 0.6.1, so a truncated GIF
     # reported a clean end while handing back a prefix. chitra still returns
     # the partial image (ADR 0005's posture: decode what is there), but the
     # caller can now tell.
-    store64(img + IMAGE_SEEN_IEND_OFFSET, frame_complete);
+    store64(img + _CHITRA_IMAGE_SEEN_IEND_OFFSET, frame_complete);
     # src_ctype sentinel: 0x300 | (bits per palette index). Distinct from PNG's
     # raw color_type, JPEG's 0x100 | ncomp, and BMP's 0x200 | bpp.
-    store64(img + IMAGE_SRC_CTYPE_OFFSET, 768 + min_code_size);
-    store64(img + IMAGE_SRC_DEPTH_OFFSET, 8);   # palette entries are bytes
+    store64(img + _CHITRA_IMAGE_SRC_CTYPE_OFFSET, 768 + min_code_size);
+    store64(img + _CHITRA_IMAGE_SRC_DEPTH_OFFSET, 8);   # palette entries are bytes
     return img;
 }
 

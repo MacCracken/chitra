@@ -4628,15 +4628,15 @@ fn _colour_pass_refuses(w, depth, ct, plte_len, trns_len, poke_off, poke_val, la
 }
 
 fn test_colour_pass_trns_checks_are_live() {
-    _colour_pass_refuses(2, 1, 0, 0 - 1, 2, RAW_TRNS_LEN_OFFSET, 3,
+    _colour_pass_refuses(2, 1, 0, 0 - 1, 2, _CHITRA_RAW_TRNS_LEN_OFFSET, 3,
       "colour pass: depth-1 greyscale tRNS of length 3 refused");
-    _colour_pass_refuses(2, 8, 0, 0 - 1, 2, RAW_TRNS_LEN_OFFSET, 1,
+    _colour_pass_refuses(2, 8, 0, 0 - 1, 2, _CHITRA_RAW_TRNS_LEN_OFFSET, 1,
       "colour pass: depth-8 greyscale tRNS of length 1 refused");
-    _colour_pass_refuses(2, 8, 2, 0 - 1, 6, RAW_TRNS_LEN_OFFSET, 3,
+    _colour_pass_refuses(2, 8, 2, 0 - 1, 6, _CHITRA_RAW_TRNS_LEN_OFFSET, 3,
       "colour pass: RGB tRNS of length 3 refused");
-    _colour_pass_refuses(2, 1, 3, 3, 1, RAW_TRNS_LEN_OFFSET, 2,
+    _colour_pass_refuses(2, 1, 3, 3, 1, _CHITRA_RAW_TRNS_LEN_OFFSET, 2,
       "colour pass: depth-1 palette tRNS longer than PLTE refused");
-    _colour_pass_refuses(2, 8, 3, 3, 1, RAW_TRNS_LEN_OFFSET, 2,
+    _colour_pass_refuses(2, 8, 3, 3, 1, _CHITRA_RAW_TRNS_LEN_OFFSET, 2,
       "colour pass: depth-8 palette tRNS longer than PLTE refused");
     return 0;
 }

@@ -76,7 +76,7 @@ factors with a non-interleaved scan script.
 `CHITRA_ERR_JPEG_SOS` (17) it used through 0.5.3. *(Superseded: that rejection
 existed from 0.6.0 through 0.7.3 only. **0.8.0 decodes `Ns < Nf`**, and what
 replaced the gate as the bound is the per-component coverage bitmask
-`JF_COVERED` — a component may be decoded exactly once.)* Seventeen said *"your file is
+`_CHITRA_JF_COVERED` — a component may be decoded exactly once.)* Seventeen said *"your file is
 malformed"* about a file libjpeg writes on request; four says *"chitra
 declines"*, which is what is true and what the house already uses for
 progressive, arithmetic, CMYK and `BI_JPEG`. No new error code: the existing
@@ -100,7 +100,7 @@ What a correct implementation actually needs, all of it new:
    field — the first time in chitra's history a parser cursor is steered by
    what the entropy decoder consumed. The reader's position is unreliable in
    several states, at least three of them attacker-reachable: a planted `FF DA`
-   inside entropy data latches `BR_MARKER` and freezes `BR_POS` there
+   inside entropy data latches `_CHITRA_BR_MARKER` and freezes `_CHITRA_BR_POS` there
    (`_jpeg_br_load_byte`, [jpeg_huffman.cyr:297](../../src/jpeg_huffman.cyr)).
 2. **Tables redefined between scans.** Real `cjpeg -scans` output declares DHT
    segments *between* scans, and its third scan carries none of its own,
@@ -123,7 +123,7 @@ What a correct implementation actually needs, all of it new:
    walk must reject at the resume point rather than searching forward for the
    next marker.
 6. **SOF-once across resumes.** `chitra_jpeg_scan_markers` re-zeroes
-   `JF_SEEN_SOF` on entry, so resumption must re-enter a walk on the *existing*
+   `_CHITRA_JF_SEEN_SOF` on entry, so resumption must re-enter a walk on the *existing*
    frame or a post-scan SOF0 will redefine geometry after allocation.
 
 That is a cut, not a bite. It should start from the verified non-interleaved

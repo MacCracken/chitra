@@ -66,35 +66,35 @@ var CHITRA_MAX_INFLATE_RATIO = 1100;
 #                      surfaced so consumers can warn while still decoding)
 #   +96  interlace    (i64 — 0 = none, 1 = Adam7; chitra 0.2.1)
 # ================================================================
-var RAW_WIDTH_OFFSET        = 0;
-var RAW_HEIGHT_OFFSET       = 8;
-var RAW_BIT_DEPTH_OFFSET    = 16;
-var RAW_COLOR_TYPE_OFFSET   = 24;
-var RAW_CHANNELS_OFFSET     = 32;
-var RAW_SCANLINES_OFFSET    = 40;
-var RAW_SCANLINES_LEN_OFFSET = 48;
-var RAW_PLTE_OFF_OFFSET     = 56;
-var RAW_PLTE_LEN_OFFSET     = 64;
-var RAW_TRNS_OFF_OFFSET     = 72;
-var RAW_TRNS_LEN_OFFSET     = 80;
-var RAW_SEEN_IEND_OFFSET    = 88;
-var RAW_INTERLACE_OFFSET    = 96;   # 0 = none, 1 = Adam7 (chitra 0.2.1)
+var _CHITRA_RAW_WIDTH_OFFSET        = 0;
+var _CHITRA_RAW_HEIGHT_OFFSET       = 8;
+var _CHITRA_RAW_BIT_DEPTH_OFFSET    = 16;
+var _CHITRA_RAW_COLOR_TYPE_OFFSET   = 24;
+var _CHITRA_RAW_CHANNELS_OFFSET     = 32;
+var _CHITRA_RAW_SCANLINES_OFFSET    = 40;
+var _CHITRA_RAW_SCANLINES_LEN_OFFSET = 48;
+var _CHITRA_RAW_PLTE_OFF_OFFSET     = 56;
+var _CHITRA_RAW_PLTE_LEN_OFFSET     = 64;
+var _CHITRA_RAW_TRNS_OFF_OFFSET     = 72;
+var _CHITRA_RAW_TRNS_LEN_OFFSET     = 80;
+var _CHITRA_RAW_SEEN_IEND_OFFSET    = 88;
+var _CHITRA_RAW_INTERLACE_OFFSET    = 96;   # 0 = none, 1 = Adam7 (chitra 0.2.1)
 var CHITRA_PNG_RAW_SIZE     = 104;
 
 # ---- ChitraPngRaw accessors -------------------------------------
-fn chitra_raw_width(raw): i64       { return load64(raw + RAW_WIDTH_OFFSET); }
-fn chitra_raw_height(raw): i64      { return load64(raw + RAW_HEIGHT_OFFSET); }
-fn chitra_raw_bit_depth(raw): i64   { return load64(raw + RAW_BIT_DEPTH_OFFSET); }
-fn chitra_raw_color_type(raw): i64  { return load64(raw + RAW_COLOR_TYPE_OFFSET); }
-fn chitra_raw_channels(raw): i64    { return load64(raw + RAW_CHANNELS_OFFSET); }
-fn chitra_raw_scanlines(raw): i64   { return load64(raw + RAW_SCANLINES_OFFSET); }
-fn chitra_raw_scanlines_len(raw): i64 { return load64(raw + RAW_SCANLINES_LEN_OFFSET); }
-fn chitra_raw_plte_off(raw): i64    { return load64(raw + RAW_PLTE_OFF_OFFSET); }
-fn chitra_raw_plte_len(raw): i64    { return load64(raw + RAW_PLTE_LEN_OFFSET); }
-fn chitra_raw_trns_off(raw): i64    { return load64(raw + RAW_TRNS_OFF_OFFSET); }
-fn chitra_raw_trns_len(raw): i64    { return load64(raw + RAW_TRNS_LEN_OFFSET); }
-fn chitra_raw_seen_iend(raw): i64   { return load64(raw + RAW_SEEN_IEND_OFFSET); }
-fn chitra_raw_interlace(raw): i64   { return load64(raw + RAW_INTERLACE_OFFSET); }
+fn chitra_raw_width(raw): i64       { return load64(raw + _CHITRA_RAW_WIDTH_OFFSET); }
+fn chitra_raw_height(raw): i64      { return load64(raw + _CHITRA_RAW_HEIGHT_OFFSET); }
+fn chitra_raw_bit_depth(raw): i64   { return load64(raw + _CHITRA_RAW_BIT_DEPTH_OFFSET); }
+fn chitra_raw_color_type(raw): i64  { return load64(raw + _CHITRA_RAW_COLOR_TYPE_OFFSET); }
+fn chitra_raw_channels(raw): i64    { return load64(raw + _CHITRA_RAW_CHANNELS_OFFSET); }
+fn chitra_raw_scanlines(raw): i64   { return load64(raw + _CHITRA_RAW_SCANLINES_OFFSET); }
+fn chitra_raw_scanlines_len(raw): i64 { return load64(raw + _CHITRA_RAW_SCANLINES_LEN_OFFSET); }
+fn chitra_raw_plte_off(raw): i64    { return load64(raw + _CHITRA_RAW_PLTE_OFF_OFFSET); }
+fn chitra_raw_plte_len(raw): i64    { return load64(raw + _CHITRA_RAW_PLTE_LEN_OFFSET); }
+fn chitra_raw_trns_off(raw): i64    { return load64(raw + _CHITRA_RAW_TRNS_OFF_OFFSET); }
+fn chitra_raw_trns_len(raw): i64    { return load64(raw + _CHITRA_RAW_TRNS_LEN_OFFSET); }
+fn chitra_raw_seen_iend(raw): i64   { return load64(raw + _CHITRA_RAW_SEEN_IEND_OFFSET); }
+fn chitra_raw_interlace(raw): i64   { return load64(raw + _CHITRA_RAW_INTERLACE_OFFSET); }
 
 # Release a ChitraPngRaw. The stdlib `alloc` is a bump allocator with no
 # per-block free, so this is a no-op kept for API symmetry / a future
@@ -114,22 +114,22 @@ fn chitra_raw_free(raw): i64 {
 # a 24-byte cursor instead:
 #   +0  base, +8 pos, +16 len.
 # ================================================================
-var CUR_BASE_OFFSET = 0;
-var CUR_POS_OFFSET  = 8;
-var CUR_LEN_OFFSET  = 16;
+var _CHITRA_CUR_BASE_OFFSET = 0;
+var _CHITRA_CUR_POS_OFFSET  = 8;
+var _CHITRA_CUR_LEN_OFFSET  = 16;
 
 # Init a stack cursor: caller passes a >=24-byte buffer.
 fn _cur_init(cur, base, len): i64 {
-    store64(cur + CUR_BASE_OFFSET, base);
-    store64(cur + CUR_POS_OFFSET, 0);
-    store64(cur + CUR_LEN_OFFSET, len);
+    store64(cur + _CHITRA_CUR_BASE_OFFSET, base);
+    store64(cur + _CHITRA_CUR_POS_OFFSET, 0);
+    store64(cur + _CHITRA_CUR_LEN_OFFSET, len);
     return 0;
 }
 
-fn _cur_pos(cur): i64       { return load64(cur + CUR_POS_OFFSET); }
-fn _cur_len(cur): i64       { return load64(cur + CUR_LEN_OFFSET); }
+fn _cur_pos(cur): i64       { return load64(cur + _CHITRA_CUR_POS_OFFSET); }
+fn _cur_len(cur): i64       { return load64(cur + _CHITRA_CUR_LEN_OFFSET); }
 fn _cur_remaining(cur): i64 {
-    return load64(cur + CUR_LEN_OFFSET) - load64(cur + CUR_POS_OFFSET);
+    return load64(cur + _CHITRA_CUR_LEN_OFFSET) - load64(cur + _CHITRA_CUR_POS_OFFSET);
 }
 
 # True (1) iff `n` bytes can be read from the current position without
@@ -146,9 +146,9 @@ fn _cur_can_read(cur, n): i64 {
 # out of bounds (never an OOB load).
 fn _cur_u8(cur): i64 {
     if (_cur_can_read(cur, 1) == 0) { return 0; }
-    var p = load64(cur + CUR_BASE_OFFSET) + load64(cur + CUR_POS_OFFSET);
+    var p = load64(cur + _CHITRA_CUR_BASE_OFFSET) + load64(cur + _CHITRA_CUR_POS_OFFSET);
     var v = load8(p);
-    store64(cur + CUR_POS_OFFSET, load64(cur + CUR_POS_OFFSET) + 1);
+    store64(cur + _CHITRA_CUR_POS_OFFSET, load64(cur + _CHITRA_CUR_POS_OFFSET) + 1);
     return v;
 }
 
@@ -157,12 +157,12 @@ fn _cur_u8(cur): i64 {
 # Masked to 32 bits so a high bit can't sign-extend into a negative i64.
 fn _cur_u32_be(cur): i64 {
     if (_cur_can_read(cur, 4) == 0) { return 0; }
-    var p = load64(cur + CUR_BASE_OFFSET) + load64(cur + CUR_POS_OFFSET);
+    var p = load64(cur + _CHITRA_CUR_BASE_OFFSET) + load64(cur + _CHITRA_CUR_POS_OFFSET);
     var b0 = load8(p + 0);
     var b1 = load8(p + 1);
     var b2 = load8(p + 2);
     var b3 = load8(p + 3);
-    store64(cur + CUR_POS_OFFSET, load64(cur + CUR_POS_OFFSET) + 4);
+    store64(cur + _CHITRA_CUR_POS_OFFSET, load64(cur + _CHITRA_CUR_POS_OFFSET) + 4);
     return ((b0 << 24) | (b1 << 16) | (b2 << 8) | b3) & 4294967295;
 }
 
@@ -171,22 +171,22 @@ fn _cur_u32_be(cur): i64 {
 # _cur_can_read(cur, 2) first; returns 0 defensively on OOB (never an OOB load).
 fn _cur_u16_be(cur): i64 {
     if (_cur_can_read(cur, 2) == 0) { return 0; }
-    var p = load64(cur + CUR_BASE_OFFSET) + load64(cur + CUR_POS_OFFSET);
+    var p = load64(cur + _CHITRA_CUR_BASE_OFFSET) + load64(cur + _CHITRA_CUR_POS_OFFSET);
     var b0 = load8(p + 0);
     var b1 = load8(p + 1);
-    store64(cur + CUR_POS_OFFSET, load64(cur + CUR_POS_OFFSET) + 2);
+    store64(cur + _CHITRA_CUR_POS_OFFSET, load64(cur + _CHITRA_CUR_POS_OFFSET) + 2);
     return ((b0 << 8) | b1) & 65535;
 }
 
 # Absolute pointer at the cursor's current position (for chunk-data
 # scanning without copying). Caller validates the span via _cur_can_read.
 fn _cur_ptr(cur): i64 {
-    return load64(cur + CUR_BASE_OFFSET) + load64(cur + CUR_POS_OFFSET);
+    return load64(cur + _CHITRA_CUR_BASE_OFFSET) + load64(cur + _CHITRA_CUR_POS_OFFSET);
 }
 
 # Skip `n` bytes forward (no bounds clamp — caller pre-validates).
 fn _cur_skip(cur, n): i64 {
-    store64(cur + CUR_POS_OFFSET, load64(cur + CUR_POS_OFFSET) + n);
+    store64(cur + _CHITRA_CUR_POS_OFFSET, load64(cur + _CHITRA_CUR_POS_OFFSET) + n);
     return 0;
 }
 

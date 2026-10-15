@@ -78,7 +78,7 @@ flat-module / strip-concatenation invariant ([item 002](002-flat-modules-distlib
    `_jpeg_huff_build` builds a canonical decode table from a DHT's `BITS` +
    `HUFFVAL` into caller-owned storage; it knows nothing about `ChitraJpegFrame`.
    But `jpeg_markers.cyr`'s DHT parser (`_jpeg_parse_dht`) *calls* `_jpeg_huff_build`
-   and references `HT_SIZE` / `HT_*` field offsets to allocate and index the
+   and references `_CHITRA_HT_SIZE` / `HT_*` field offsets to allocate and index the
    frame's 8-table storage. Since concatenation puts a use after its declaration
    only if the declaring module is listed first, `jpeg_huffman.cyr` must come
    before `jpeg_markers.cyr`.
@@ -98,17 +98,17 @@ topology that orders the PNG five orders these four.
 
 `chitra_jpeg_scan_markers` walks SOI→SOS once and produces a heap `ChitraJpegFrame`
 (`CHITRA_JPEG_FRAME_SIZE = 384` bytes, deliberately over-reserved so the alloc
-size stays stable as fields are added). It grew from 320 for `JF_ADOBE_TRANSFORM`
-@232 (0.6.1) and the per-scan block 0.8.0 added — `JF_SCAN_NS` @240, `JF_SCAN`
-@248 (4 × 24-byte entries) and the coverage bitmask `JF_COVERED` @344 — while
-`JF_COMP_STRIDE` *shrank* 48 → 32 in the same cut, when the Huffman selectors
+size stays stable as fields are added). It grew from 320 for `_CHITRA_JF_ADOBE_TRANSFORM`
+@232 (0.6.1) and the per-scan block 0.8.0 added — `_CHITRA_JF_SCAN_NS` @240, `_CHITRA_JF_SCAN`
+@248 (4 × 24-byte entries) and the coverage bitmask `_CHITRA_JF_COVERED` @344 — while
+`_CHITRA_JF_COMP_STRIDE` *shrank* 48 → 32 in the same cut, when the Huffman selectors
 moved off the component record, so the net allocation cost of 0.8.0 was zero. Two flags have
-since taken 16 of the spare bytes — `JF_SAW_JFIF` @352 (1.0.3) and `JF_DQT16` @360 (1.1.1, a
+since taken 16 of the spare bytes — `_CHITRA_JF_SAW_JFIF` @352 (1.0.3) and `_CHITRA_JF_DQT16` @360 (1.1.1, a
 16-bit DQT seen ahead of the frame header) — leaving 368 used. It is the JPEG
 analog of `ChitraPngRaw`: a parse-output record passed by pointer between stages,
 not a shared scratch buffer. The frame owns two side allocations referenced by
-pointer fields — `JF_QUANT` (4×64 i64 quant tables, stored in **zig-zag/spec
-order**; de-zig-zag is deferred to dequant time) and `JF_HUFF` (8 `HuffTable`
+pointer fields — `_CHITRA_JF_QUANT` (4×64 i64 quant tables, stored in **zig-zag/spec
+order**; de-zig-zag is deferred to dequant time) and `_CHITRA_JF_HUFF` (8 `HuffTable`
 records: slots 0–3 DC, 4–7 AC, slot = `class*4 + id`), each allocated at most once per frame
 and only once a table header has validated (1.1.1 — an empty or malformed DQT/DHT allocates
 nothing). `quant_present` /
@@ -119,13 +119,13 @@ The handoff crosses three functions in `jpeg.cyr`:
 
 - `chitra_jpeg_scan_markers` fills the SOF fields (width/height/precision/ncomp/
   max_h/max_v, per-component `id`/`H`/`V`/`Tq`), the tables, the restart
-  interval, and records `JF_SOS_OFFSET` (the byte offset of the SOS length field).
-- `_jpeg_parse_sos` re-opens a cursor at `JF_SOS_OFFSET`, matches each scan
+  interval, and records `_CHITRA_JF_SOS_OFFSET` (the byte offset of the SOS length field).
+- `_jpeg_parse_sos` re-opens a cursor at `_CHITRA_JF_SOS_OFFSET`, matches each scan
   component back to a frame component by `Cs == id` — requiring each to come later in the
   frame than the one before it, since T.81 § B.2.3 keeps a scan's list in frame order and
   libjpeg refuses any other (1.1.1) — and writes the **per-scan**
-  entries `JF_SCAN_COMP` / `JF_SCAN_TD` / `JF_SCAN_TA` (`JF_SCAN_STRIDE` = 24
-  bytes, up to 4 entries) plus `JF_SCAN_NS`. It also applies the § B.2.3
+  entries `_CHITRA_JF_SCAN_COMP` / `_CHITRA_JF_SCAN_TD` / `_CHITRA_JF_SCAN_TA` (`_CHITRA_JF_SCAN_STRIDE` = 24
+  bytes, up to 4 entries) plus `_CHITRA_JF_SCAN_NS`. It also applies the § B.2.3
   `ΣHj·Vj ≤ 10` cap, conditioned on `Ns > 1` and summed over the *scan's* own
   components. It enforces the baseline spectral selection (`Ss=0`, `Se=63`,
   `Ah=Al=0`) and returns the byte offset where entropy-coded data begins.
@@ -220,7 +220,7 @@ was false, and the amendment records why).
 
 **Termination is the coverage bitmask, not a counter.** A component may be
 decoded exactly once, so a file gets at most `Nf` scans and every scan must name
-something new; `_jpeg_decode_scans` terminates on `JF_COVERED` rather than on a
+something new; `_jpeg_decode_scans` terminates on `_CHITRA_JF_COVERED` rather than on a
 scan limit standing in for it. No scan cap and no resume tripwire were added,
 because neither could fire before coverage does.
 
@@ -230,7 +230,7 @@ MCUs.
 
 ## The entropy bit-reader's marker / restart handling
 
-The bit-reader (`BR_SIZE = 72` bytes: base/pos/end/buf/cnt/marker/**eod**, plus
+The bit-reader (`_CHITRA_BR_SIZE = 72` bytes: base/pos/end/buf/cnt/marker/**eod**, plus
 **rstnext**/**damaged** since 1.1.1) pulls bits
 MSB-first over the entropy-coded segment after SOS, and it is where the byte
 stream's framing intrudes on the bit stream — a thing a reader cannot derive from
@@ -247,17 +247,17 @@ the DECODE algorithm alone:
   the asymmetry is the thing worth remembering here.
 - **Embedded markers stop the reader.** A `0xFF xx` with `xx` neither `0x00` nor
   `0xFF` (an RSTn, EOI, or any marker) is *not* consumed as data: the marker code
-  is recorded in `BR_MARKER`, `pos` is left pointing **at the last `0xFF`** (so a
-  later resync can re-read it), and `BR_CNT` is left 0 so all subsequent bit reads
+  is recorded in `_CHITRA_BR_MARKER`, `pos` is left pointing **at the last `0xFF`** (so a
+  later resync can re-read it), and `_CHITRA_BR_CNT` is left 0 so all subsequent bit reads
   **pad with zeros**. A trailing lone `0xFF` at end-of-data synthesizes an EOI
   (`0xD9`). This zero-padding-past-marker behavior is what lets a truncated or
   marker-terminated scan finish the current block deterministically instead of
   reading out of bounds — but note the same property is what makes the JPEG
   amplification cap necessary (see *Error codes and security ceilings*): a scan
   needs no payload at all to drive a full-size decode.
-- **`BR_EOD` — "ran out of scan" (0.7.0/0.8.0).** Zero-padding past a marker is
+- **`_CHITRA_BR_EOD` — "ran out of scan" (0.7.0/0.8.0).** Zero-padding past a marker is
   indistinguishable from zero-padding past a real EOI, so the marker alone
-  cannot say whether the scan actually delivered its data. A separate `BR_EOD`
+  cannot say whether the scan actually delivered its data. A separate `_CHITRA_BR_EOD`
   flag is set when the reader exhausts its span, read back through
   `_jpeg_br_eod` and folded into the `ChitraImage`'s `seen_iend`. **The reader
   is bounded to the scan's own entropy span**, not to the end of the file —
@@ -268,18 +268,18 @@ the DECODE algorithm alone:
   `restart_interval > 0` and `mi % ri == 0` (and `mi > 0`), it calls
   `_jpeg_br_restart`, which discards the partial byte (byte-aligns), requires the
   next two bytes to be `0xFF` followed by `0xD0..0xD7` (RSTn), advances past them,
-  clears `BR_MARKER`, and the caller resets all DC predictors to 0. Something
+  clears `_CHITRA_BR_MARKER`, and the caller resets all DC predictors to 0. Something
   other than an RSTn at that point returns −1, surfaced as
   `CHITRA_ERR_JPEG_ENTROPY`. Two cases are deliberately **not** that (1.1.1):
   a span that has simply **run out** at the restart point is truncation, so the
-  call succeeds, the next bit read fabricates and sets `BR_EOD`, and the file
+  call succeeds, the next bit read fabricates and sets `_CHITRA_BR_EOD`, and the file
   decodes partially with `seen_iend = 0` exactly as a truncated non-DRI file
   does (through 1.1.0 it refused); and an RSTn **out of its modulo-8 sequence**
   (T.81 § B.2.1 — an interval lost or repeated) is still resynced on, but sets
-  `BR_DAMAGED`, a flag of its own because nothing was fabricated.
+  `_CHITRA_BR_DAMAGED`, a flag of its own because nothing was fabricated.
 - **What "closed cleanly" means for a scan (1.1.1).** Three independent
   conditions, any one of which makes the driver report `seen_iend = 0` — never
-  an error: `BR_EOD` (a bit was fabricated), `BR_DAMAGED` (a restart out of
+  an error: `_CHITRA_BR_EOD` (a bit was fabricated), `_CHITRA_BR_DAMAGED` (a restart out of
   sequence), and entropy bytes left in the span that no MCU consumed
   (`_jpeg_br_tail_clean`; only a trailing RSTn is tolerated — libjpeg's
   "extraneous bytes"). The file must also end its last scan at a real EOI.
@@ -327,8 +327,8 @@ These three are pure Cyrius/representation quirks — the IDCT and color math ar
    component, because a plane outlives the scan that fills it (0.8.0: a
    multi-scan file fills each plane in a different scan). Likewise
    `ChitraJpegFrame`'s per-component specs are a flat block of
-   4 × `JF_COMP_STRIDE` (32-byte since 0.8.0, when the Huffman selectors moved
-   to the scan) records addressed by `JF_COMP + i*JF_COMP_STRIDE + field`. The
+   4 × `_CHITRA_JF_COMP_STRIDE` (32-byte since 0.8.0, when the Huffman selectors moved
+   to the scan) records addressed by `_CHITRA_JF_COMP + i*_CHITRA_JF_COMP_STRIDE + field`. The
    accessor functions (`chitra_jpeg_frame_comp_*`) exist precisely so the rest
    of the code never open-codes that arithmetic.
 

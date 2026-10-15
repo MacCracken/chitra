@@ -1410,7 +1410,7 @@ fn test_bmp_has_no_terminator_and_says_so() {
 
 # The shape that defeated 0.7.0's seen_iend signal: entropy data cut in half,
 # with a GENUINE FF D9 appended. The bit reader stopped at that real marker
-# rather than running out, so BR_EOD never fired and both of the 0.7.0
+# rather than running out, so _CHITRA_BR_EOD never fired and both of the 0.7.0
 # conditions passed — the file reported a cleanly closed stream while decoding
 # to sum 232,762 against a correct 223,824. djpeg calls it "premature end of
 # data segment".
@@ -2086,7 +2086,7 @@ fn fx_se_jpeg_trunc_eoi(len_out): i64 {
 fn test_jpeg_truncated_with_real_eoi_reports_not_closed() {
     # The regression cell for the 0.7.0 hole. It is not enough to notice that
     # the entropy decoder zero-padded: a truncated file can still end at a real
-    # EOI marker, and then the marker test passes and the BR_EOD test passes
+    # EOI marker, and then the marker test passes and the _CHITRA_BR_EOD test passes
     # because the reader stopped at a marker rather than running out. The fix is
     # to bound the reader to the scan's own entropy span, so "ran out of scan"
     # and "ran out of data" become the same event.
@@ -2111,7 +2111,7 @@ fn test_jpeg_truncated_with_real_eoi_reports_not_closed() {
 # decoder never asked for. `_jpeg_entropy_span` deliberately walks PAST RSTn
 # (they are legal mid-scan when DRI is in force), so the injected bytes stay
 # INSIDE the reader's span; `_jpeg_br_load_byte` latches the marker and every
-# subsequent bit is invented. Through 1.0.2 that latch did not set BR_EOD, so
+# subsequent bit is invented. Through 1.0.2 that latch did not set _CHITRA_BR_EOD, so
 # an image whose bottom is fabricated reported a cleanly closed stream —
 # `seen_iend` is the consumer's ONLY channel here, because chitra deliberately
 # does not raise an error for a partial JPEG.
@@ -2119,7 +2119,7 @@ fn test_jpeg_truncated_with_real_eoi_reports_not_closed() {
 # ⚠ MUTATION-CHECKED. Against the pre-repair `if (cnt == 0) { return 0; }` in
 # `_jpeg_br_bit`, seen_iend comes back **1** and both assertions below fail.
 # ⚠ The companion direction is `test_jpeg_restart_markers_still_report_closed`
-# below: setting BR_EOD at the LATCH instead of at the fabrication would make
+# below: setting _CHITRA_BR_EOD at the LATCH instead of at the fabrication would make
 # every legitimate restart-interval JPEG report 0, and that test would catch it.
 # ================================================================
 fn fx_se_jpeg_rst_injected(len_out): i64 {
@@ -2176,7 +2176,7 @@ fn test_jpeg_unexpected_rstn_reports_not_closed() {
 fn test_jpeg_restart_markers_still_report_closed() {
     # ⛔ THE GUARD ON THE GUARD. A well-formed restart-interval JPEG latches
     # RSTn markers too — `_jpeg_br_restart` then consumes each one and clears
-    # BR_MARKER, and nothing is ever fabricated. If B-5's flag were set at the
+    # _CHITRA_BR_MARKER, and nothing is ever fabricated. If B-5's flag were set at the
     # latch rather than at the fabrication, every such file would wrongly
     # report an unclosed stream. The complete no-DRI fixture covers the same
     # invariant from the other side and is asserted in
@@ -2208,7 +2208,7 @@ fn test_jpeg_restart_markers_still_report_closed() {
 # bytes were never noticed, so a scan with an interval lost, repeated or
 # renumbered — djpeg: "found marker 0xd2 instead of RST3", "9 extraneous bytes
 # before marker 0xd9" — still reported seen_iend = 1. Neither is fabrication,
-# so neither touches BR_EOD (CLAUDE.md JPEG item 5); BR_DAMAGED and the tail
+# so neither touches _CHITRA_BR_EOD (CLAUDE.md JPEG item 5); _CHITRA_BR_DAMAGED and the tail
 # check carry them.
 #
 # ⚠ BOTH DIRECTIONS ARE PINNED. The intact cell and the trailing-RSTn cell are
@@ -2216,7 +2216,7 @@ fn test_jpeg_restart_markers_still_report_closed() {
 # a stray RSTn after the last interval, which libjpeg passes silently.
 # ⚠ MUTATION-CHECKED: the truncation cells fail (err 18) without the
 # `pos >= end` return; the out-of-sequence cells fail (seen_iend 1) without the
-# BR_DAMAGED store; the extraneous-bytes cells fail without the tail check; the
+# _CHITRA_BR_DAMAGED store; the extraneous-bytes cells fail without the tail check; the
 # trailing-RSTn cell fails if the tail check refuses markers.
 # ================================================================
 # 24x16 baseline grayscale JPEG with a restart interval of ONE MCU (jpeg-5 / jpeg-6,
