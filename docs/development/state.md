@@ -1,11 +1,25 @@
 # chitra — Current State
 
-> **Last refresh**: 2026-09-10 (1.0.3) | **Refresh cadence**: every release.
+> **Last refresh**: 2026-10-15 (1.0.4) | **Refresh cadence**: every release.
 > [`CLAUDE.md`](../../CLAUDE.md) is preferences / process / architecture
 > (durable); this file is **state** (volatile) — it is the home for the
 > version, sizes, and counts `CLAUDE.md` must not inline.
 
 ## Version
+
+**1.0.4** — cut 2026-10-15. ⭐ **A toolchain cut that also shrinks every consumer's link.** The pin
+goes `6.6.2` → **`6.6.20`**, `lib/` is re-vendored (110 → **113** `.cyr` files) and sankoch moves
+2.7.14 → **2.8.1**. ⛔ **No decode code changed** — `git diff dist/chitra.cyr` is the header stamp,
+the `chitra_version()` literal, and the new `Requires` block; `check-surface` still reports 75
+exports / 29 frozen, and a 53-file corpus decodes **byte-identically** on 1.0.3@6.6.2 and
+1.0.4@6.6.20.
+⭐ **`dist/chitra.deps` is 3 leaves, not 10** (`sankoch`, `alloc`, `string`): 6.6.20's distlib derives
+the sidecar from what the fold *references*, not from the `src/lib.cyr` include list. That closes the
+2026-08-31 issue's class for good — `assert`, `bench`, `fmt`, `io` and `str` were still in the
+sidecar at 6.6.2 and are not now. A consumer measured **811,608 → 756,368 B** (DCE off).
+⚠ One test was coupled to sankoch internals: sankoch 2.8.x arms its arena canary with a plain
+`alloc(8)`, so the B-1 CRC-table injection moved from index 1 to 0. Re-pointed, made self-checking
+(`crc32_table` asserted before and after), and mutation re-checked.
 
 **1.0.3** — cut 2026-09-10. ⭐ **The fifth security audit, and the first since the freeze** —
 [`docs/audit/2026-09-10-audit.md`](../audit/2026-09-10-audit.md). Eleven adversarial lenses, every
@@ -90,34 +104,35 @@ Adam7; **JPEG** JFIF baseline including the full T.81 § A.2 scan model;
 **BMP** with an empty deferral list; **GIF** first frame ([ADR 0005](../adr/0005-gif-first-frame-only.md)).
 Four security audits, every format line-by-line reviewed.
 
-`chitra_version()` → **10003**. **3,084 test assertions** across **13 suites**,
+`chitra_version()` → **10004**. **3,086 test assertions** across **13 suites**,
 **10,732,113 fuzz assertions**, 17 benchmarks — 0 failures throughout.
 
 Released tags: 0.1.0, 0.2.0, 0.2.1, 0.3.0, 0.3.1, 0.3.2, 0.3.3, 0.4.0, 0.5.0,
 0.5.1, 0.5.2, 0.5.3, 0.6.0, 0.6.1, 0.7.0, 0.7.1, 0.7.2, 0.7.3, 0.8.0, 0.9.0,
-1.0.0, 1.0.1, 1.0.2 (1.0.3 is cut but not yet tagged)
+1.0.0, 1.0.1, 1.0.2, 1.0.3 (1.0.4 is cut but not yet tagged)
 (SemVer; **the public surface is frozen as of 1.0.0** — see
 [`public-surface.md`](public-surface.md) for what that covers and
 [ADR 0010](../adr/0010-the-v1-surface.md) for the calls made to get there).
 
 ## Toolchain
 
-- **Cyrius pin**: `6.6.2` (in [`cyrius.cyml`](../../cyrius.cyml)
+- **Cyrius pin**: `6.6.20` (in [`cyrius.cyml`](../../cyrius.cyml)
   `[package].cyrius`). This pin is the **only** source of truth — CI and the
   release workflow both read it; no toolchain version is hardcoded in YAML.
-  Bumped from `6.5.35` at 1.0.2.
-- **`lib/`**: vendored by `cyrius lib sync --full` from the 6.6.2 stdlib
-  snapshot — **110 `.cyr` files** (103 top-level + 7 under `lib/unicode`);
-  `boxed.cyr` and `hashseed.cyr` are new in 6.6.2, nothing was removed, and 40
-  carried-over files differ. It is a **real directory, never a symlink** —
+  Bumped from `6.5.35` at 1.0.2 and from `6.6.2` at 1.0.4.
+- **`lib/`**: vendored by `cyrius lib sync --full` from the 6.6.20 stdlib
+  snapshot — **113 `.cyr` files** (106 top-level + 7 under `lib/unicode`),
+  `diff -rq`-identical to the snapshot; `alloc_cx.cyr`, `poison.cyr` and
+  `tls_hostid.cyr` are new in 6.6.20, nothing was removed, and 97
+  carried-over files differ. Vendors **sankoch 2.8.1**. It is a **real directory, never a symlink** —
   distlib concatenation depends on it (see
   [architecture/001](../architecture/001-lib-must-not-be-symlink.md)).
   `lib/` is gitignored: it is a build artifact, not source.
   ⚠ **`cyrius deps` and `cyrius lib sync --full` do not leave the same tree.**
   `deps` resolves only the declared-leaf transitive closure — a fresh
-  `rm -rf lib && mkdir lib && cyrius deps` yields **32 files**, none under
-  `lib/unicode` — which is what CI does, and it builds a byte-identical binary.
-  The 110-file snapshot is the local convention. The difference is not cosmetic:
+  `rm -rf lib && mkdir lib && cyrius deps` yields **35 files** at 6.6.20 (32 at
+  6.6.2), none under `lib/unicode` — which is what CI does, and it builds a
+  byte-identical binary. The 113-file snapshot is the local convention. The difference is not cosmetic:
   refreshing only the closure at a pin bump leaves the rest of the snapshot at
   the old version, which is exactly the `./lib/ shadows version-pinned …` build
   warning 1.0.2 had to clear.
@@ -127,7 +142,18 @@ Released tags: 0.1.0, 0.2.0, 0.2.1, 0.3.0, 0.3.1, 0.3.2, 0.3.3, 0.4.0, 0.5.0,
   a modified stdlib file, copy it *outside* `lib/` and include it from there,
   and drop the leaf from `[deps].stdlib` so only one copy links (linking two
   leaves which definition wins ambiguous, and the experiment meaningless).
-- **Toolchain notes (re-verified on 6.6.2 at the 1.0.2 cut)**:
+- **`cyrius.lock`** (new at 1.0.4): 6.6.20's `cyrius deps` writes it whenever
+  `lib/` gains a file it does not cover. ⚠ **The committed lock is the 35-file
+  CI closure, not the snapshot.** A first `cyrius lib sync --full` writes a
+  113-entry lock, and `cyrius deps --verify` against CI's closure-only `lib/`
+  then fails **78 of 113**. The closure lock verifies 35/35 there and a local
+  `cyrius deps` / `cyrius build` over the full snapshot leaves it untouched.
+  ⚠ At the next pin bump, regenerate it from a closure-only `lib/`
+  (`rm -rf lib cyrius.lock && mkdir lib && cyrius deps`), then
+  `cyrius lib sync --full` — not the other way round. Not gated: CI does not
+  run `cyrius deps --verify`.
+- **Toolchain notes (re-verified on 6.6.2 at the 1.0.2 cut; `fmt --check`
+  re-verified on 6.6.20 at 1.0.4)**:
   - Canonical continuation indent is **2 spaces per open paren**, not a flat
     +2. Almost every wrapped line in the tree is at depth 1, which is why "+2"
     described it; the exception is `src/jpeg.cyr:801`, a depth-2 continuation
@@ -141,17 +167,20 @@ Released tags: 0.1.0, 0.2.0, 0.2.1, 0.3.0, 0.3.1, 0.3.2, 0.3.3, 0.4.0, 0.5.0,
   - Since 6.5.28 `cyrius fmt` **rewrites in place** (it was stdout-only
     before). The `make fmt-check` target relies on the exit code with the
     file argument *before* `--check`, and redirects stdout. ⭐ **Contract
-    re-verified on 6.6.2**: `--check` still reports through the exit code, still
-    does not rewrite, and still fires on real drift — the gate is not silently
-    passing. Re-verify on any future pin bump.
+    re-verified on 6.6.2, and again on 6.6.20**: `--check` still reports through
+    the exit code, still does not rewrite, and still fires on real drift — the
+    gate is not silently passing. Re-verify on any future pin bump.
   - ⚠ **`cyrlint` has a second diagnostic class neither gate catches.**
     Alongside `warn` lines it emits `deferral line N: untracked '<word>'`,
     summarised as "N untracked deferrals". Both the Makefile's `^\s*warn ` and
-    ci.yml's `^[[:space:]]*warn ` miss them, and 11 are live in the tree — all
-    **false positives** on prose keywords (most starkly `tests/tcyr/bmp.tcyr`'s
+    ci.yml's `^[[:space:]]*warn ` miss them, and **13** are live in the tree
+    at 6.6.20 (11 at 6.6.2 — the newer linter flags two more lines of unchanged
+    prose, `tests/tcyr/bmp.tcyr:1319` and
+    `tests/tcyr/jpeg_noninterleaved.tcyr:3224`) — all **false positives** on
+    prose keywords (most starkly `tests/tcyr/bmp.tcyr`'s
     `# PERMANENTLY, not deferred: …`). ⛔ Do not switch the gate to
-    `--strict-deferrals` without first clearing those eleven: it would fail the
-    build on eleven non-deferrals. And note the flag is **argument-order
+    `--strict-deferrals` without first clearing those thirteen: it would fail
+    the build on thirteen non-deferrals. And note the flag is **argument-order
     sensitive** — `cyrius lint <file> --strict-deferrals` silently drops it and
     exits 0, so a maintainer can believe the strict gate ran when it did not.
 - **Cyrius note**: `>>` is a **logical** shift. The JPEG IDCT and the
@@ -483,9 +512,9 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
 
 ## Sizes
 
-- `dist/chitra.cyr` — **~285 KB** (291,537 bytes / 6,340 lines; `cyrius
+- `dist/chitra.cyr` — **~285 KB** (291,676 bytes / 6,345 lines; `cyrius
   distlib` reports 6,300 code lines), regenerated by `cyrius distlib`
-  (= `make dist`). This is the artifact consumers link, and it **exports 74
+  (= `make dist`). This is the artifact consumers link, and it **exports 75
   `chitra_*` names, of which 29 are frozen** — the split is
   [`public-surface.md`](public-surface.md), gated by `scripts/check-surface.sh`
   on every `make lint`.
@@ -499,10 +528,21 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
   **1.0.2 adds neither** — its bundle differs from 1.0.1's by two lines, the
   header stamp and the `chitra_version()` literal; **1.0.3 adds one internal
   name** (`chitra_jpeg_frame_saw_jfif`) and no error code, so the bundle exports
-  75 with the frozen 29 unchanged.
+  75 with the frozen 29 unchanged; **1.0.4 adds neither** — its bundle
+  differs from 1.0.3's by the stamp, the `chitra_version()` literal and the
+  five-line `Requires` header 6.6.20's distlib now writes.
   Consumers re-pin mechanically.
-- `dist/chitra.deps` — the **10**-leaf stdlib sidecar consumers resolve against.
-  ⚠ **Was 13 until 1.0.1.** `args`, `flags` and `vec` were `include`d in
+- `dist/chitra.deps` — the **3**-leaf stdlib sidecar consumers resolve against:
+  `sankoch`, `alloc`, `string`. ⭐ **10 → 3 at 1.0.4, with no change to
+  `src/lib.cyr`**: cyrius 6.6.20's distlib derives the sidecar from the leaves
+  the fold *references* and compile-verifies the bundle against exactly those
+  (also written as `include` lines at the head of `dist/chitra.cyr`). Proved
+  reference-derived by trimming `src/lib.cyr` to five includes and getting the
+  identical sidecar. `thread` arrives through sankoch's own
+  `include "lib/thread.cyr"`. A consumer with an empty `[deps].stdlib` resolves
+  28 stdlib files instead of 35 and links **811,608 → 756,368 B** (DCE off),
+  **246,360 → 244,368 B** (DCE on). ⚠ The rest of this bullet is the history
+  that 6.6.20 made moot: **Was 13 until 1.0.1.** `args`, `flags` and `vec` were `include`d in
   `src/lib.cyr` and referenced nowhere in the repo — and since `cyrius deps`
   treats this sidecar as **authoritative**, every consumer linked them and could
   not decline. Measured by crab: `flags` alone cost **+8,320 B**, and
@@ -510,16 +550,23 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
   6.5.x line, and at the `6.6.2` pin DCE does reclaim most of `flags`. ⚠ The
   trim still stands regardless: the sidecar is authoritative, a default build
   has DCE off, and a consumer that knew better could not decline.
-  ⛔ **An unused include in `src/lib.cyr` is not free and is not local.**
-- `build/chitra_smoke` — **~583 KB** (597,256 bytes on cyrius 6.6.2; was
-  601,408 on 6.5.35), built from `programs/smoke.cyr` (19 L) via `make build`. It only proves the include
-  chain compiles and links clean — chitra is a library, there is no real CLI
-  behind it.
+  ⚠ Through 6.6.2, an unused include in `src/lib.cyr` was not free and not
+  local. At 6.6.20 it costs only chitra's own builds — `assert`, `bench`,
+  `fmt`, `io` and `str` are still included and called by nothing in `src/`.
+- `build/chitra_smoke` — **~785 KB** (803,448 bytes on cyrius 6.6.20; was
+  597,256 on 6.6.2 and 601,408 on 6.5.35), built from `programs/smoke.cyr`
+  (19 L) via `make build`; **184,952 B** with `CYRIUS_DCE=1`, as CI builds it
+  (44,296 on 6.6.2). It only proves the include chain compiles and links clean
+  — chitra is a library, there is no real CLI behind it.
+  ⚠ **The growth is sankoch 2.8.x, not chitra**: a program that only
+  *includes* sankoch and calls nothing in it goes 37,224 → 172,336 B under DCE
+  between the two toolchains, while `string` + `alloc` alone is flat
+  (8,808 → 8,840).
 
 ## Tests + bench
 
 - `make test` (globs `tests/tcyr/*.tcyr`; each is a standalone `main()`) →
-  **3,084 assertions, all pass** across 13 suites:
+  **3,086 assertions, all pass** across 13 suites:
   - `alloc_reset.tcyr` — **15** (1.0.2). The
     [architecture/005](../architecture/005-alloc-reset-sankoch-hazard.md)
     reproduction as an assertion: decode → `alloc_reset()` → decode succeeds,
@@ -574,7 +621,7 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
     corrected grid asks for three, so the reader zero-pads and it proves the
     guard is gone rather than proving conformance; the conformance weight lives
     in `jpeg_noninterleaved.tcyr` on real encoder output).
-  - `png.tcyr` — **408** (cursor bounds, all five unfilter predictors, one
+  - `png.tcyr` — **410** (cursor bounds, all five unfilter predictors, one
     embedded fixture per color type at depth 8/16, palette+tRNS / keyed-color
     fixtures, `_rgba8` wrapper, adversarial rejections, and the 0.3.3
     chunk-ordering / § 5.4 regressions incl. the unknown-ancillary control;
@@ -701,19 +748,20 @@ path in the library (no chroma planes, no upsample, no color convert).
 
 ## Quality gates
 
-All green at 1.0.3 on cyrius 6.6.2:
+All green at 1.0.4 on cyrius 6.6.20:
 
 | gate | command | result |
 |---|---|---|
-| link check | `make build` | OK, 597,256 bytes, no warnings |
-| tests | `make test` | 3,084/3,084, 0 failures, 13 suites |
+| link check | `make build` | OK, 803,448 bytes (184,952 with `CYRIUS_DCE=1`), no warnings |
+| tests | `make test` | 3,086/3,086, 0 failures, 13 suites |
 | fuzz | `make fuzz` | 10,732,113/10,732,113, 0 failures (~2.6 M cases) |
 | bench | `make bench` | 17 benchmarks, fixtures self-verified, ~2 s |
-| lint | `make lint` | 0 warnings (incl. `fuzz/*.fcyr` + `tests/bcyr/*.bcyr`) |
+| lint | `make lint` | 0 warnings (incl. `fuzz/*.fcyr` + `tests/bcyr/*.bcyr`); 13 untracked-deferral notes, all prose false positives |
 | fmt | `make fmt-check` | clean |
 | vet | `make vet` | 1 dep, 0 untrusted, 0 missing |
 | version | `make version-check` | consistent across VERSION, cyrius.cyml, CHANGELOG.md, README.md, `chitra_version()` |
-| dist | `make dist` + `cyrius check --with-deps dist/chitra.cyr` | compiles clean |
+| dist | `make dist` + `cyrius check --with-deps dist/chitra.cyr` | compiles clean; sidecar 3 leaves |
+| oracle | out-of-tree, 53-file corpus | 53/53 byte-identical to 1.0.3@6.6.2; exact vs `djpeg -nosmooth` / ImageMagick except BMP 565/555 bit replication (ffmpeg exact) |
 | anchors | `./scripts/check-anchors.sh --suspect` | **90** anchors, 0 suspicious (was 66 — B-13 taught it the bare `:NNN` shorthand, which immediately surfaced 5 rotted anchors). ⚠ **Weaker than it reads** — the script matches only citations that repeat the filename (`grep -rnoE "[a-z_]+\.cyr:[0-9]+"`), so every bare `:NNN` continuation anchor the ADRs use is invisible to it, and it cannot see an anchor that lands on a real line that simply says something else |
 | surface | `./scripts/check-surface.sh` | 75 exports, 29 frozen — bundle and manifest agree. ⭐ Now also run by CI (B-9): it ran in no workflow until 1.0.3 |
 
@@ -724,7 +772,8 @@ and it is exactly what drifted in 0.3.1.
 
 ## Dependencies
 
-- **stdlib** (**10** leaves): `string`, `fmt`, `alloc`, `io`, `str`,
+- **stdlib** (**10** leaves in `[deps].stdlib`; consumers get only the **3**
+  in `dist/chitra.deps` — see *Sizes*): `string`, `fmt`, `alloc`, `io`, `str`,
   `syscalls`, `assert`, `bench`, `sankoch`, `thread`. ⚠ **Was 13 until 1.0.1**,
   which dropped `args`, `flags` and `vec` — declared and referenced nowhere,
   and billed to every consumer because `cyrius deps` treats the dist sidecar as
@@ -741,21 +790,17 @@ and it is exactly what drifted in 0.3.1.
   kii's `src/png.cyr` with **no live dependency** — bugfixes are manual
   backports in both directions. Every name any of the five calls is inside the
   frozen 29.
-- **Downstream pins are behind** (chitra does not push, and no pin
-  auto-follows):
-  - mabda `[deps.chitra] tag = "0.3.1"` → 1.0.2
-  - kii `[deps.chitra] tag = "1.0.0"` → 1.0.2 (re-pinned at kii v1.5.0)
-  - ⛔ **kii and aethersafha also carry `path = "../chitra"`, which wins
-    locally** — so their `tag` is inert for a local build and only a fresh
-    clone or CI ever sees it. Bumping the tag alone changes nothing for them.
+- **Downstream pins** (chitra does not push, and no pin auto-follows): as of
+  2026-10-15 all five — mabda, kii, jalwa, aethersafha, crab — pin
+  `tag = "1.0.3"`, one behind 1.0.4. aethersafha's `path = "../chitra"` is now
+  commented out, so its tag is live again.
 
   Every cut since 0.3.1 has been ABI-additive — nothing removed, no offset
-  moved — so the bumps are mechanical.
-  ⚠ **But 1.0.1's error code 35 (`CHITRA_ERR_INFLATE_LIMIT`) is unmapped
-  everywhere.** kii's `_kii_map_chitra_err` falls through to `PNG_ERR_HEADER`
-  and crab falls through to `CRAB_TH_BAD`, so both report an ordinary valid PNG
-  as malformed — the exact confusion code 35 exists to remove. Route it where
-  each already routes `CHITRA_ERR_BUDGET` when re-pinning.
+  moved — so the bumps are mechanical. ⭐ The 1.0.4 bump also shrinks each
+  consumer's resolved stdlib (the 3-leaf sidecar).
+  Error code 35 (`CHITRA_ERR_INFLATE_LIMIT`) is now mapped by kii
+  (`PNG_ERR_INFLATE_LIMIT`, kii v1.6.0); crab's 4 MB per-thumbnail budget
+  keeps it below the ceiling that produces code 35.
 
 ## Next
 
@@ -785,9 +830,9 @@ Per [`docs/development/roadmap.md`](roadmap.md):
   amplification cap, PNG's § 5.4 unknown-critical-chunk abort, and the § 5.6 /
   § 11.3.2 tRNS/PLTE ordering rules).
 - **What is left after 1.0.0** is not decode coverage. The roadmap's remaining
-  items are the sankoch pin bump below, downstream consumer pins (mabda `0.3.1`
-  and kii `0.3.0`, both far behind and both mechanical since every cut has been
-  ABI-additive), and post-1.0 possibilities that need a *major* bump or a new
+  items are downstream consumer pins (all five at `1.0.3` as of 2026-10-15,
+  mechanical since every cut has been ABI-additive; the sankoch pin bump closed
+  in 1.0.2), and post-1.0 possibilities that need a *major* bump or a new
   name rather than a minor: multi-frame GIF ([ADR 0005](../adr/0005-gif-first-frame-only.md)),
   progressive JPEG, and encoding — which chitra does not do, in both directions
   of that sentence.

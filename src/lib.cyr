@@ -13,18 +13,17 @@
 # produce a compile-clean `dist/chitra.cyr`. Don't add stdlib includes
 # in individual src/*.cyr files.
 #
-# ⛔⛔ THIS LIST IS A BILL EVERY CONSUMER PAYS, AND IT IS THE ONE THAT MATTERS — NOT `[deps].stdlib`.
-# `cyrius distlib` derives `dist/chitra.deps` from the `include "lib/*.cyr"` lines RIGHT HERE, and
-# `cyrius deps` then treats that sidecar as authoritative: a consumer links every leaf named below
-# and cannot decline one it knows it does not need.
-# ⚠ TRIMMED 1.0.1 — `args`, `flags` and `vec` were included here and referenced NOWHERE in the repo
-# (0 hits across src/, programs/, tests/ and fuzz/). Measured by crab on cyrius 6.5.35: `flags` alone
-# cost **+8,320 B** in a consumer binary, and `CYRIUS_DCE=1` reclaimed none of it — it NOPed without
-# moving the byte count.
-# ⚠ THAT HALF CHANGED AT THE 6.6.2 PIN: DCE now actually eliminates (smoke 597,248 B -> 44,288 B).
-# The trim still stands, and for the reason above rather than that measurement — the sidecar is
-# authoritative, a default build has DCE OFF, and a consumer that knows better cannot decline.
-# ⇒ **An unused include here is not free and is not local.** Add one only when a symbol needs it.
+# ⚠ THIS LIST NO LONGER DECIDES WHAT A CONSUMER LINKS (1.0.4, cyrius 6.6.20 pin).
+# Through 6.6.2, `cyrius distlib` copied the `include "lib/*.cyr"` lines RIGHT HERE into
+# `dist/chitra.deps`, `cyrius deps` treated that sidecar as authoritative, and every consumer linked
+# every leaf named below — 1.0.1 trimmed `args`, `flags` and `vec` for exactly that reason (crab
+# measured `flags` alone at +8,320 B). At 6.6.20 distlib derives the sidecar from the leaves the fold
+# actually REFERENCES and compile-verifies the bundle against them: it is `sankoch`, `alloc`,
+# `string` whatever this list says (proved by trimming this list to five and getting the identical
+# sidecar). `assert`, `bench`, `fmt`, `io` and `str` below are called by nothing in src/ and now cost
+# only chitra's own builds. See docs/development/issues/2026-08-31-*.md.
+# ⇒ Still add an include only when a symbol needs it — and if a future pin reverts the derivation,
+# CI's dist-sync step diffs `dist/chitra.deps` and fails before a consumer is re-billed.
 
 # ================================================================
 # Standard library

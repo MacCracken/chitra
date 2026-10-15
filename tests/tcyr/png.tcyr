@@ -3985,24 +3985,33 @@ fn test_bomb_still_reports_as_a_bomb() {
 # already built, the injected failure never fires, the decode SUCCEEDS, and
 # the first assertion below fails loudly rather than passing vacuously.
 #
-# ⚠ Injection index 1, not 0: on the first call `_sankoch_arena_guard()` arms
-# the arena canary with `_sankoch_alloc(8)` (alloc #0) BEFORE the table
-# allocation (alloc #1). Failing #0 only skips the canary; the table still
-# builds and the decode succeeds.
+# ⚠ THE INJECTION INDEX IS SANKOCH'S INTERNAL ORDER, NOT OURS — AND IT HAS
+# ALREADY MOVED ONCE. Through sankoch 2.7.x the arena canary was armed with
+# `_sankoch_alloc(8)`, which consumed injection index 0, so the table was #1.
+# sankoch 2.8.x (the 6.6.20 pin, 1.0.4) arms it with a plain `alloc(8)`, so
+# the table is now #0 — and index 1 landed inside zlib_decompress, refusing
+# the decode as CHITRA_ERR_INFLATE (5) while the CRC table built fine.
+# ⇒ The `crc32_table` assertions below pin WHICH allocation failed, so the
+# next reorder fails as "the injection missed the table", not as a code
+# mismatch that reads like a chitra regression.
 #
-# ⚠ MUTATION-CHECKED. Against the pre-repair line (`crc32_init_table();`,
-# return discarded) this does not fail — it SIGSEGVs, exit 139, reading
-# through a NULL table base from _chitra_parse_ihdr's crc32() call.
+# ⚠ MUTATION-CHECKED (1.0.3 at index 1; re-checked 1.0.4 at index 0). Against
+# the pre-repair line (`crc32_init_table();`, return discarded) this does not
+# fail — it SIGSEGVs, exit 139, reading through a NULL table base from
+# _chitra_parse_ihdr's crc32() call.
 # ================================================================
 fn test_crc_table_oom_is_reported_not_dereferenced() {
     var lo = 0;
     var bytes = fx_rgba8_2x2(&lo);
-    # Fail the SECOND sankoch allocation of this process: the CRC table.
-    _sankoch_alloc_set_fail_at(1);
+    assert_eq(crc32_table, 0,
+      "the CRC table is unbuilt before the first decode (if this fails, the test is no longer first in main())");
+    # Fail the FIRST fault-injectable sankoch allocation of this process: the CRC table.
+    _sankoch_alloc_set_fail_at(0);
     var err = 0;
     var img = chitra_png_decode(bytes, lo, &err);
-    assert_eq(img, 0,
-      "CRC-table OOM refuses the decode (if this fails, the test is no longer first in main())");
+    assert_eq(crc32_table, 0,
+      "...and the injected failure landed on the CRC table (else sankoch's alloc order moved)");
+    assert_eq(img, 0, "CRC-table OOM refuses the decode");
     assert_eq(chitra_err_code(err), CHITRA_ERR_OOM,
       "...as CHITRA_ERR_OOM, the documented allocation-failure contract");
     # Leave the injector disarmed so the rest of the suite is unaffected.

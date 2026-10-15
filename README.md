@@ -1,6 +1,6 @@
 # chitra
 
-Version: 1.0.3
+Version: 1.0.4
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder, a sibling AGNOS package in the mould of `sakshi` /
@@ -151,21 +151,24 @@ is a bug fix — the § 13.13 depth-16 rescaling change in 0.7.x changed every
 
 ## Dependencies
 
-- **Cyrius stdlib** (10 leaves) — `string`, `fmt`, `alloc`, `io`, `str`,
-  `syscalls`, `assert`, `bench`, plus **`sankoch`** (zlib inflate + CRC32)
-  and **`thread`** (sankoch's mutex pair). Resolved by `cyrius deps` into
-  `lib/`. `args`, `flags` and `vec` were dropped at 1.0.1 — unused, and
-  billed to every consumer.
+- **Cyrius stdlib** (10 leaves to build chitra itself) — `string`, `fmt`,
+  `alloc`, `io`, `str`, `syscalls`, `assert`, `bench`, plus **`sankoch`**
+  (zlib inflate + CRC32) and **`thread`** (sankoch's mutex pair). Resolved by
+  `cyrius deps` into `lib/`.
+- **What a consumer links** is only the **3** leaves in `dist/chitra.deps` —
+  `sankoch`, `alloc`, `string` (`thread` arrives through sankoch). Since 1.0.4
+  `cyrius distlib` derives that list from what the bundle references, so the
+  test and bench leaves chitra builds with are not billed to anyone else.
 
 All deps are pinned in `cyrius.cyml`; the toolchain pin is
-`cyrius = "6.6.2"`.
+`cyrius = "6.6.20"`.
 
 ## Quick Start
 
 ```bash
 cyrius deps          # resolve stdlib + sankoch + thread into lib/
 make build           # link-check the include chain (→ build/chitra_smoke)
-make test            # 3084 assertions across tests/tcyr/
+make test            # 3086 assertions across tests/tcyr/
 make fuzz            # ~2.6 M adversarial decode cases (fuzz/*.fcyr)
 make bench           # 17 decode benchmarks (tests/bcyr/chitra.bcyr)
 make dist            # regenerate dist/chitra.cyr — the artifact consumers link

@@ -9,6 +9,110 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 _Nothing yet._
 
+## [1.0.4] - 2026-10-15 — cyrius 6.6.20, and consumers stop linking what chitra never calls
+
+⛔ **No decode code changed.** `git diff dist/chitra.cyr` against 1.0.3 is the header stamp, the
+`chitra_version()` literal (→ **10004**), and a five-line `Requires` block the new `cyrius distlib`
+writes (below). `scripts/check-surface.sh` reports **75 exports, 29 frozen** — unchanged.
+
+### Changed — cyrius pin `6.6.2` → `6.6.20`, `lib/` re-vendored
+
+`lib/` goes **110 `.cyr` files → 113** (103 + 7 under `lib/unicode` → 106 + 7) via
+`cyrius lib sync --full`, and now matches the 6.6.20 snapshot exactly (`diff -rq` clean). New:
+`alloc_cx.cyr`, `poison.cyr`, `tls_hostid.cyr`. Nothing removed; **97** carried-over files differ.
+**sankoch 2.7.14 → 2.8.1.** CI's `rm -rf lib && mkdir lib && cyrius deps` closure grows **32 → 35**
+files.
+
+⚠ **Size, measured, and none of it is chitra's.** `build/chitra_smoke` **597,256 → 803,448 B** with
+DCE off, and **44,296 → 184,952 B** with `CYRIUS_DCE=1` (the CI build). Isolated: a program that
+merely *includes* sankoch and calls nothing in it goes **37,224 → 172,336 B** under DCE between the
+two toolchains, while the same program with only `string` + `alloc` is flat (8,808 → 8,840). ⇒ The
+growth is sankoch 2.8.x code DCE can no longer prove dead — an upstream matter; recorded so the next
+reader does not go looking for it in `src/`.
+
+### Changed — `dist/chitra.deps` is **3** leaves, not 10
+
+⭐ **The toolchain closed the class the 2026-08-31 issue was about.** Re-reviewed at this cut, that
+issue's own method showed it still open: `src/lib.cyr` includes `assert`, `bench`, `fmt`, `io` and
+`str`, which nothing in `src/` calls (nor `sankoch`, nor `thread`), and at 6.6.2 every one was in the
+sidecar every consumer resolves. **6.6.20's `cyrius distlib` derives the sidecar from what the fold
+references**, compile-verifies the bundle against exactly those leaves, and writes them into the
+bundle head:
+
+```
+# Requires (compile-verified; the leaves of dist/chitra.deps):
+include "lib/sankoch.cyr"
+include "lib/alloc.cyr"
+include "lib/string.cyr"
+```
+
+It is reference-derived, not include-derived: `src/lib.cyr` as shipped and a copy trimmed to five
+includes produce the identical sidecar. `thread` is absent and does not need to be — sankoch's bundle
+carries its own `include "lib/thread.cyr"` (2.7.14's did too).
+
+Measured with one scratch consumer whose own `[deps].stdlib` is **empty**, decoding a 3×2 PNG:
+
+| chitra sidecar | stdlib files resolved | bytes, DCE off | bytes, `CYRIUS_DCE=1` |
+|---|---:|---:|---:|
+| 1.0.3 (10 leaves) | 35 | 811,608 | 246,360 |
+| **1.0.4 (3 leaves)** | **28** | **756,368** (−55,240) | **244,368** (−1,992) |
+
+Both decode correctly. A kii-shaped consumer that also declares `sankoch` and `thread` itself links
+clean with no duplicate-definition warning. The five unused includes stay in `src/lib.cyr`: removing
+them would change nothing a consumer links, and its header comment — which said this list *was* the
+consumer's bill — is corrected. [The issue](docs/development/issues/2026-08-31-manifest-over-declares-unused-stdlib-leaves.md)
+is closed with the re-review appended.
+
+### Fixed — the B-1 regression test was pinned to sankoch's allocation order
+
+⚠ **Not a chitra defect; a test that would have stopped proving anything.** 1.0.3's
+`test_crc_table_oom_is_reported_not_dereferenced` failed the second fault-injectable sankoch
+allocation (index 1), because 2.7.x armed its arena canary through `_sankoch_alloc(8)` first.
+**2.8.x arms it with a plain `alloc(8)`**, so the CRC table became index 0 and index 1 landed inside
+`zlib_decompress`: the decode was still refused, but as `CHITRA_ERR_INFLATE` (5), with the CRC table
+built fine — the B-1 path never ran. The suite caught it only because the error code was asserted.
+The test now injects at index 0 and asserts `crc32_table == 0` **before and after** the decode, so
+the next reorder fails as *"the injected failure landed elsewhere"* rather than as a code mismatch
+that reads like a chitra regression. **Mutation re-checked at index 0**: with the B-1 guard reverted
+in a scratch copy, the suite SIGSEGVs (exit 139), exactly as 1.0.3 recorded.
+
+### Added — `cyrius.lock`
+
+6.6.20's `cyrius deps` writes a lock whenever `lib/` gains a file it does not cover, chitra's
+included. ⚠ **The committed lock is the 35-file CI closure, not the 113-file snapshot.** The lock a
+first `cyrius lib sync --full` writes covers all 113 files, and `cyrius deps --verify` against CI's
+closure-only `lib/` then **fails 78 of 113** — a lock CI could never verify. The closure lock
+verifies clean there (35/35) and is left untouched by a local `cyrius deps` or `cyrius build` over the
+full snapshot. ⚠ Not yet gated: CI does not run `cyrius deps --verify`.
+
+### Verification
+
+Re-verified on 6.6.20, because a toolchain bump changes codegen and **fuzzing does not find wrong
+output**:
+
+- **53-file corpus, 1.0.3 on 6.6.2 vs 1.0.4 on 6.6.20: 53/53 byte-identical**, refusals included.
+  Every spec-legal PNG depth × colour type (16-bit cells from genuinely 16-bit content, so the
+  § 13.13 reduction is exercised), Adam7 twins, palette and RGB tRNS; JPEG gray / 4:4:4 / 4:2:0 /
+  4:2:2 / 4:4:0 / RGB / restart-interval / q100 / three-scan 4×4,1×1,1×1 / partially-interleaved;
+  BMP 1/4/8/24/32 bpp, RLE8, RGB565, RGB555; GIF incl. interlaced and transparent.
+- Against the oracles — `djpeg -nosmooth` for JPEG, ImageMagick for the rest — **every cell
+  byte-exact** except the documented BMP sub-8-bit case (565: 165 bytes, 555: 100 bytes, max 1,
+  ImageMagick the outlier; **ffmpeg agrees byte-for-byte**). One refusal, identical on both builds:
+  `cjpeg -quality 5` writes 16-bit DQT (Pq=1) under SOF1, which is outside baseline scope.
+- **3,086 assertions across 13 suites** (+2, the table pin), **10,732,113 fuzz assertions** across 4
+  harnesses, lint / fmt / vet / surface clean, 90 anchors with 0 suspicious, 0 failures throughout.
+- Benchmarks (best of two each, same host): PNG rows **3–5 % faster**, JPEG/BMP/GIF rows within ±2 %,
+  the two fixed-cost rows within a few µs. No performance claim is made on that.
+- ⚠ `cyrlint` 6.6.20 reports **13** untracked deferrals where 6.6.2 reported 11 — two more false
+  positives on unchanged prose (`tests/tcyr/bmp.tcyr:1319`, `tests/tcyr/jpeg_noninterleaved.tcyr:3224`).
+  The gate keys on `warn` lines only and is unaffected.
+
+### Not in this release
+
+⛔ **sankoch's 16 MiB ceiling is still not raised** — `DECOMPRESS_MAX_OUTPUT` is `16777216` at 2.8.1,
+so `CHITRA_ERR_INFLATE_LIMIT` is unchanged and chitra still calls plain `zlib_decompress`.
+⛔ **The downstream pins are not bumped** — that happens after the tag lands.
+
 ## [1.0.3] - 2026-09-10 — a P-1 sweep of all four formats, and the first audit of the gate stack
 
 The fifth security audit, and the first since the freeze:
