@@ -54,13 +54,40 @@ jobs:
         # result is the 26-file closure the lock records. chitra is
         # pure-Cyrius — no external C libs to fetch. Do NOT replace lib/ with
         # a symlink to a cyrius checkout (cross-repo writes).
+        #
+        # gate-10 (1.1.1): THE LOCK IS CHECKED HERE, NOT REWRITTEN. A plain
+        # `cyrius deps` writes cyrius.lock to whatever it resolves, so a stale
+        # hash, a lock missing a line, a re-pointed sankoch tag and a DELETED
+        # lock (re-pinned to whatever the tag now names) all went green — and a
+        # `--verify` afterwards checks lib/ against the lock that same run had
+        # just written. `--locked` resolves the tags against the COMMITTED lock
+        # and writes nothing; lib/ is still empty here, so it compares the lock
+        # alone, and it must run BEFORE the resolve that populates lib/. The
+        # committed-lock and unchanged-lock checks are the same property seen
+        # from git, so a regression in `--locked` itself is not a silent pass.
+        # No `--verify`: after a fresh resolve into an empty lib/ there is
+        # nothing left for it to disagree with (it passed every case above).
         run: |
           rm -rf lib
           mkdir lib
+          git ls-files --error-unmatch cyrius.lock > /dev/null || {
+            echo "ERROR: cyrius.lock is not committed."; exit 1; }
+          cyrius deps --locked
           cyrius deps
+          git diff --exit-code -- cyrius.lock || {
+            echo "ERROR: resolving rewrote cyrius.lock — commit the lock the tags resolve to."
+            exit 1; }
 
       - name: Lint
-        # Hard gate: any `warn` line (warning or untracked-deferral) fails CI.
+        # Hard gate: a `warn` line fails CI, and so does lint's OWN non-zero
+        # exit. gate-9 (1.1.1): lint exits 1 on a file it cannot compile, having
+        # run NO checks ("lint checks were NOT run"), and this loop used to
+        # discard that status (`|| true`) and grep only for `warn` — so a file
+        # that does not even parse passed as lint-clean.
+        # `--strict-deferrals` (gate-14, 1.1.1): an untracked deferral note
+        # fails lint's own exit, which the status check above catches. It was
+        # turned on only once every linted file had zero of them — the 13 that
+        # cyrius 6.7.9 reported were reworded, not silenced with #skip-lint.
         run: |
           fail=0
           # Globs MUST match the Makefile's. They did not until 0.7.3:
@@ -69,13 +96,17 @@ jobs:
           # the developer's own gate.
           for f in src/*.cyr programs/*.cyr tests/tcyr/*.tcyr fuzz/*.fcyr tests/bcyr/*.bcyr; do
             [ -e "$f" ] || continue
-            out=$(cyrius lint "$f" 2>&1 || true)
+            rc=0
+            out=$(cyrius lint --strict-deferrals "$f" 2>&1) || rc=$?
             echo "$out"
+            if [ $rc -ne 0 ]; then
+              echo "lint: $f exited $rc — it was NOT linted"; fail=1
+            fi
             if echo "$out" | grep -qE '^[[:space:]]*warn '; then
               echo "lint: warnings in $f"; fail=1
             fi
           done
-          [ $fail -eq 0 ] || { echo "lint: warnings present"; exit 1; }
+          [ $fail -eq 0 ] || { echo "lint: warnings or lint failures present"; exit 1; }
 
       - name: Format check
         # cyrius 6.x's `cyrfmt <file> --check` reports formatting via the EXIT
@@ -134,6 +165,13 @@ jobs:
       - name: Verify ELF
         run: xxd -l 4 build/chitra_smoke | grep -q "7f45 4c46"
 
+      - name: Compile bench harness (not run)
+        # gate-9 (1.1.1): tests/bcyr/chitra.bcyr was compiled by NO step, so
+        # lint and fmt were its only gates — and lint passed a file it could
+        # not compile. Benchmarks are still not RUN here (host-dependent
+        # numbers); building the harness is what keeps `make bench` working.
+        run: make bench-build
+
       - name: Test (CPU-only suite)
         run: |
           # Functionality-grouped domain suites under tests/tcyr/ — globbed
@@ -144,14 +182,20 @@ jobs:
         # CLAUDE.md names `make test-all` (version-check + dist + test + fuzz)
         # as the pre-release gate, but through 0.7.2 no workflow ran `make
         # fuzz` — so the gate existed only on a developer's machine, and the
-        # ~2.6 M-case harnesses (10.7 M assertions) could rot without CI
-        # noticing. ~20 s here.
+        # harnesses could rot without CI noticing.
+        #
+        # gate-16 (1.1.1): this step and `make fuzz` used to be two different
+        # loops over two different harness sets (bare `cyrius fuzz` also walks
+        # tests/). It now IS `make fuzz`, so there is one definition.
+        # gate-2 (1.1.1): and that definition runs under `--poison` —
+        # allocator redzones, exit 86 on an overwrite. Without it fuzzing sees
+        # only crashes, and a small overflow into the next bump allocation does
+        # not crash: four audit mutants passed plain fuzz and fail poisoned.
         #
         # Benchmarks stay OUT deliberately: their numbers are host- and
         # load-dependent, so gating correctness on them manufactures flakes.
         # That exclusion is a decision; this one was an oversight.
-        run: |
-          for f in fuzz/*.fcyr; do cyrius fuzz "$f" || exit 1; done
+        run: make fuzz
 
       - name: Version check
         run: ./scripts/version-check.sh

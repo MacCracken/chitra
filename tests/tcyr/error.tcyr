@@ -44,8 +44,11 @@ fn test_chitra_err_no_detail() {
 # ================================================================
 fn test_chitra_err_name() {
     assert(streq(chitra_err_name(CHITRA_OK), "ok"), "ok name");
-    assert(streq(chitra_err_name(CHITRA_ERR_SIGNATURE), "bad PNG signature"),
-      "signature name");
+    # cc-7 (1.1.1): every decoder AND the router's unknown-format refusal report
+    # CHITRA_ERR_SIGNATURE, so its name must not tell a TIFF, or a GIF handed to
+    # the JPEG decoder, that it holds a bad PNG. Strings are not frozen; codes are.
+    assert(streq(chitra_err_name(CHITRA_ERR_SIGNATURE), "unrecognised image signature"),
+      "signature name is format-neutral");
     assert(streq(chitra_err_name(CHITRA_ERR_OOM), "out of memory"), "oom name");
     assert(streq(chitra_err_name(CHITRA_ERR_NO_IDAT), "no IDAT chunks"), "no_idat name");
     # Unknown code → the non-null fallback, never a null deref.
@@ -59,7 +62,7 @@ fn test_chitra_err_name() {
 fn test_chitra_version() {
     # ⚠ THIS PIN FIRED at the 1.0.1 cut, which is what it is for — a version constant that is not
     # asserted drifts from `VERSION` silently, and it is the only thing a consumer can probe.
-    assert_eq(chitra_version(), 10100, "version 1.1.0 packs to 10100");
+    assert_eq(chitra_version(), 10101, "version 1.1.1 packs to 10101");
     return 0;
 }
 

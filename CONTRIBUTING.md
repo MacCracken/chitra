@@ -137,10 +137,10 @@ send a decode change:
 > change moved the surface before you find out the hard way. Everything else is
 > as open as it was.
 >
-> What is left is post-1.0 and mostly needs a major bump or a new name rather
-> than a minor: multi-frame GIF
-> ([ADR 0005](docs/adr/0005-gif-first-frame-only.md)), progressive JPEG, and
-> the downstream pin bumps. **Encoding is out of scope permanently** — chitra
+> What is left is additive — a new entry point or a wider decode, never a
+> renamed frozen name: PNG past 16 MiB, SOF1 JPEG, multi-frame GIF
+> ([ADR 0005](docs/adr/0005-gif-first-frame-only.md)), APNG and progressive
+> JPEG, roughly in that order. **Encoding is out of scope permanently** — chitra
 > decodes. See [`docs/development/roadmap.md`](docs/development/roadmap.md),
 > and open an issue first to agree on shape.
 >

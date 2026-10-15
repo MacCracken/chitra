@@ -557,7 +557,7 @@ fn test_extend() {
 fn test_bitreader() {
     var buf[4];
     store8(&buf + 0, 0xB5);   # 1011 0101
-    var rdr[56];   # BR_SIZE
+    var rdr[72];   # BR_SIZE
     _jpeg_br_init(&rdr, &buf, 1);
     assert_eq(_jpeg_br_bit(&rdr), 1, "bit0");
     assert_eq(_jpeg_br_bit(&rdr), 0, "bit1");
@@ -572,7 +572,7 @@ fn test_bitreader_stuffing() {
     store8(&buf + 0, 0xFF);
     store8(&buf + 1, 0x00);   # stuffed -> 0xFF is real data
     store8(&buf + 2, 0x80);   # 1000 0000
-    var rdr[56];   # BR_SIZE
+    var rdr[72];   # BR_SIZE
     _jpeg_br_init(&rdr, &buf, 3);
     assert_eq(_jpeg_br_bits(&rdr, 8), 255, "stuffed 0xFF reads as 255");
     assert_eq(_jpeg_br_bit(&rdr), 1, "next bit from 0x80 = 1");
@@ -585,7 +585,7 @@ fn test_bitreader_marker() {
     store8(&buf + 0, 0x80);   # 1000 0000
     store8(&buf + 1, 0xFF);
     store8(&buf + 2, 0xD9);   # EOI marker
-    var rdr[56];   # BR_SIZE
+    var rdr[72];   # BR_SIZE
     _jpeg_br_init(&rdr, &buf, 3);
     assert_eq(_jpeg_br_bit(&rdr), 1, "first data bit");
     assert_eq(_jpeg_br_bits(&rdr, 7), 0, "rest of 0x80");
@@ -599,7 +599,7 @@ fn test_decode_block() {
     var act = fx_ac_table();
     var lo = 0;
     var ent = fx_entropy_block(&lo);
-    var rdr[56];   # BR_SIZE
+    var rdr[72];   # BR_SIZE
     _jpeg_br_init(&rdr, ent, lo);
     var zz = alloc(512);
     var err = 0;
@@ -619,7 +619,7 @@ fn test_decode_block_dc_predictor() {
     var act = fx_ac_table();
     var lo = 0;
     var ent = fx_entropy_block(&lo);
-    var rdr[56];   # BR_SIZE
+    var rdr[72];   # BR_SIZE
     _jpeg_br_init(&rdr, ent, lo);
     var zz = alloc(512);
     var err = 0;
@@ -1576,7 +1576,7 @@ fn test_reject_dc_oversize() {
     var act = fx_ac_table();
     var buf[2];
     store8(&buf + 0, 0x00);
-    var rdr[56];   # BR_SIZE
+    var rdr[72];   # BR_SIZE
     _jpeg_br_init(&rdr, &buf, 2);
     var zz = alloc(512);
     var err = 0;
@@ -1590,7 +1590,7 @@ fn test_reject_ac_oversize() {
     var act = fx_ac_table_s11();
     var buf[2];
     store8(&buf + 0, 0x00);
-    var rdr[56];   # BR_SIZE
+    var rdr[72];   # BR_SIZE
     _jpeg_br_init(&rdr, &buf, 2);
     var zz = alloc(512);
     var err = 0;
@@ -2553,10 +2553,14 @@ fn test_dht_table_storage_allocated_at_most_once() {
 # CHITRA_ERR_DIMENSIONS, on an allocator that never frees. ~40 such files
 # exhaust the stdlib's 2 GiB ALLOC_MAX.
 #
-# ⚠ MUTATION-CHECKED: with GATE 0 deleted the verdict and the error code are
-# unchanged and ONLY the byte count moves, 22,160 -> 50,354,832. The cost
-# assertion is therefore the whole test; asserting the refusal alone would pass
-# against both versions.
+# ⚠ MUTATION-CHECKED (1.0.3): with GATE 0 deleted the verdict and the error
+# code were unchanged and ONLY the byte count moved, 22,160 -> 50,354,832. The
+# cost assertion is therefore the whole test; asserting the refusal alone would
+# pass against both versions.
+# ⚠ 1.1.1 (jpeg-7): GATE 2 now also runs ahead of the planes, on the structural
+# span sum, and refuses this file at the same 22,160 bytes — so deleting GATE 0
+# ALONE no longer moves the count. Deleting both does (50,354,832). The padded
+# cells further down are the ones GATE 0 cannot see.
 #
 # ⚠ The residual 22,160 bytes is the per-FRAME DQT/DHT table allocation from
 # `chitra_jpeg_scan_markers` — 0.6.1's lazy-allocation cost, which is expected
@@ -3167,7 +3171,1170 @@ fn test_jpeg_rgba8_wrapper_distinguishes_w_from_h() {
     return 0;
 }
 
+# ================================================================
+# 1.1.1 P(-1) sweep — shared helpers for the cells below.
+# ================================================================
+
+# Copy `src` (`lo` bytes) with `seglen` bytes of `seg` inserted at offset `at`.
+fn _fx_splice(src, lo, at, seg, seglen, len_out): i64 {
+    var out = alloc(lo + seglen);
+    store64(len_out, lo + seglen);
+    var i = 0;
+    while (i < at) {
+        store8(out + i, load8(src + i));
+        i = i + 1;
+    }
+    i = 0;
+    while (i < seglen) {
+        store8(out + at + i, load8(seg + i));
+        i = i + 1;
+    }
+    i = at;
+    while (i < lo) {
+        store8(out + seglen + i, load8(src + i));
+        i = i + 1;
+    }
+    return out;
+}
+
+# Differing RGBA bytes between two decodes of the same geometry; -1 if the
+# geometry itself differs.
+fn _px_diff(a, b): i64 {
+    if (chitra_image_width(a) != chitra_image_width(b)) { return 0 - 1; }
+    if (chitra_image_height(a) != chitra_image_height(b)) { return 0 - 1; }
+    var n = chitra_image_width(a) * chitra_image_height(a) * 4;
+    var pa = chitra_image_pixels(a);
+    var pb = chitra_image_pixels(b);
+    var d = 0;
+    var i = 0;
+    while (i < n) {
+        if (load8(pa + i) != load8(pb + i)) { d = d + 1; }
+        i = i + 1;
+    }
+    return d;
+}
+
+# A JFIF APP0 whose payload is the first `n` bytes of a real 14-byte JFIF
+# header ("JFIF\0", version 1.1, units 0, densities 1/1, no thumbnail). Written
+# to `seg`, which must hold 4 + 14 bytes; returns the segment length (4 + n).
+fn _fx_jfif_app0(seg, n): i64 {
+    var hdr[14];
+    store8(&hdr + 0, 0x4A);
+    store8(&hdr + 1, 0x46);
+    store8(&hdr + 2, 0x49);
+    store8(&hdr + 3, 0x46);
+    store8(&hdr + 4, 0x00);
+    store8(&hdr + 5, 0x01);
+    store8(&hdr + 6, 0x01);
+    store8(&hdr + 7, 0x00);
+    store8(&hdr + 8, 0x00);
+    store8(&hdr + 9, 0x01);
+    store8(&hdr + 10, 0x00);
+    store8(&hdr + 11, 0x01);
+    store8(&hdr + 12, 0x00);
+    store8(&hdr + 13, 0x00);
+    store8(seg + 0, 0xFF);
+    store8(seg + 1, 0xE0);
+    store8(seg + 2, ((n + 2) >> 8) & 255);
+    store8(seg + 3, (n + 2) & 255);
+    var i = 0;
+    while (i < n) {
+        store8(seg + 4 + i, load8(&hdr + i));
+        i = i + 1;
+    }
+    return 4 + n;
+}
+
+# ================================================================
+# jpeg-1 (1.1.1) — an APP0 is JFIF only if it is long enough to BE one.
+#
+# libjpeg's `examine_app0` sets `saw_JFIF_marker` only for a payload of at
+# least APP0_DATA_LEN = 14 bytes. chitra tested the 5-byte identifier alone, so
+# nine spliced bytes ("JFIF\0" + four) made the cjpeg -rgb fixture — Adobe
+# transform 0, no JFIF — decode through BT.601: 1,149 of 1,536 colour bytes
+# wrong (max delta 235), `source_color_type` 0x103, no error. `djpeg -nosmooth`
+# returns the same bytes for the spliced file as for the original
+# (md5 e81686f9 for both), and so must chitra.
+#
+# ⚠ MUTATION-CHECKED: against the pre-repair `remaining < 5` the first cell
+# reads ctype 0x103 and 1,149 differing bytes. The second cell is the other
+# half: a REAL 14-byte JFIF header still wins, exactly as it does in libjpeg
+# (djpeg decodes that file as YCbCr too).
+# ================================================================
+fn test_short_jfif_app0_does_not_override_adobe_rgb() {
+    var lo = 0;
+    var b = fx_jpeg_adobe_rgb(&lo);
+    var seg = alloc(18);
+    var sl = _fx_jfif_app0(seg, 9);
+    var lo2 = 0;
+    var b2 = _fx_splice(b, lo, 2, seg, sl, &lo2);
+    var err = 0;
+    var ref = chitra_jpeg_decode(b, lo, &err);
+    var err2 = 0;
+    var img = chitra_jpeg_decode(b2, lo2, &err2);
+    assert(img != 0, "jpeg-1: Adobe RGB + 9-byte 'JFIF' APP0 decodes");
+    assert_eq(err2, 0, "jpeg-1: no error");
+    if (img != 0) {
+        assert_eq(chitra_image_source_color_type(img), 0x113,
+          "jpeg-1: a 9-byte APP0 is not JFIF, so the Adobe transform 0 still names RGB");
+        if (ref != 0) {
+            assert_eq(_px_diff(img, ref), 0,
+              "jpeg-1: pixels identical to the file without the short APP0 (djpeg agrees)");
+        }
+    }
+    return 0;
+}
+
+fn test_full_jfif_app0_still_outranks_adobe() {
+    var lo = 0;
+    var b = fx_jpeg_adobe_rgb(&lo);
+    var seg = alloc(18);
+    var sl = _fx_jfif_app0(seg, 14);
+    var lo2 = 0;
+    var b2 = _fx_splice(b, lo, 2, seg, sl, &lo2);
+    var err = 0;
+    var img = chitra_jpeg_decode(b2, lo2, &err);
+    assert(img != 0, "jpeg-1: Adobe RGB + full 14-byte JFIF APP0 decodes");
+    if (img != 0) {
+        assert_eq(chitra_image_source_color_type(img), 0x103,
+          "jpeg-1: a full JFIF APP0 still outranks the Adobe marker (libjpeg's order)");
+    }
+    return 0;
+}
+
+# A 16-byte Adobe APP14 carrying transform `t`, written to `seg`. Returns 16.
+fn _fx_app14(seg, t): i64 {
+    store8(seg + 0, 0xFF);
+    store8(seg + 1, 0xEE);
+    store8(seg + 2, 0x00);
+    store8(seg + 3, 0x0E);
+    store8(seg + 4, 0x41);
+    store8(seg + 5, 0x64);
+    store8(seg + 6, 0x6F);
+    store8(seg + 7, 0x62);
+    store8(seg + 8, 0x65);
+    store8(seg + 9, 0x00);
+    store8(seg + 10, 0x64);
+    store8(seg + 11, 0x00);
+    store8(seg + 12, 0x00);
+    store8(seg + 13, 0x00);
+    store8(seg + 14, 0x00);
+    store8(seg + 15, t);
+    return 16;
+}
+
+# `src` with an Adobe APP14 carrying `t` spliced in right after SOI.
+fn _fx_with_app14(src, lo, t, len_out): i64 {
+    var seg = alloc(16);
+    var sl = _fx_app14(seg, t);
+    return _fx_splice(src, lo, 2, seg, sl, len_out);
+}
+
+# ================================================================
+# jpeg-8 (1.1.1) — the Adobe transform is judged where it decides something.
+#
+# _jpeg_parse_app14 refused transform > 1 the moment it read the segment, before
+# the frame's component count or a JFIF APP0 could be known. The byte only
+# decides the colour space of a 3-component, non-JFIF frame, and libjpeg
+# decodes every other case exactly as it decodes the file without the APP14.
+# Measured (`djpeg -nosmooth` md5 in brackets, identical to the plain file's):
+#   the real 16x16 grey gradient + APP14 transform 2 or 3   -> err 4 [665d7133]
+#   the cjpeg -rgb fixture + a full JFIF APP0, transform 2  -> err 4 [c5a2ea07]
+#   an APP14 transform 2 ahead of the fixture's own 0       -> err 4 [e81686f9]
+# and a 4-component frame — CMYK/YCCK, which ADR 0004 gives
+# CHITRA_ERR_JPEG_COMPONENTS — reported 4 when its APP14 came first.
+#
+# ⚠ The case that MUST still refuse is pinned by
+# test_app14_undefined_transform_rejected above: 3 components, no JFIF,
+# transform 2 or 3.
+# ⚠ MUTATION-CHECKED: restoring the parse-time `if (transform > 1)` refusal
+# fails every cell below; deleting the SOS-time judgement fails
+# test_app14_undefined_transform_rejected.
+# ================================================================
+fn test_app14_transform_is_inert_on_a_grey_frame() {
+    var lo = 0;
+    var b = fx_jpeg_real_gradient(&lo);
+    var err = 0;
+    var ref = chitra_jpeg_decode(b, lo, &err);
+    var t = 2;
+    var lo2 = 0;
+    var b2 = 0;
+    var err2 = 0;
+    var img = 0;
+    while (t <= 3) {
+        b2 = _fx_with_app14(b, lo, t, &lo2);
+        err2 = 0;
+        img = chitra_jpeg_decode(b2, lo2, &err2);
+        assert(img != 0, "jpeg-8: grey + APP14 transform 2/3 decodes (djpeg: identical to plain)");
+        if (img != 0) {
+            assert_eq(chitra_image_source_color_type(img), 0x101, "jpeg-8: grey stays 0x101");
+            if (ref != 0) { assert_eq(_px_diff(img, ref), 0, "jpeg-8: grey + APP14: pixels unchanged"); }
+        }
+        t = t + 1;
+    }
+    return 0;
+}
+
+fn test_app14_transform2_is_inert_under_jfif() {
+    var lo = 0;
+    var b = fx_jpeg_adobe_rgb(&lo);
+    var seg = alloc(18);
+    var sl = _fx_jfif_app0(seg, 14);
+    var lo2 = 0;
+    var jf = _fx_splice(b, lo, 2, seg, sl, &lo2);
+    var err = 0;
+    var ref = chitra_jpeg_decode(jf, lo2, &err);
+    # The fixture's own APP14 now sits at 20; its transform byte at 20 + 15.
+    assert_eq(load8(jf + 20 + 1), 0xEE, "fixture: the Adobe APP14 follows the spliced JFIF APP0");
+    store8(jf + 35, 2);
+    var err2 = 0;
+    var img = chitra_jpeg_decode(jf, lo2, &err2);
+    assert(img != 0, "jpeg-8: JFIF + APP14 transform 2 decodes (djpeg: identical to transform 0)");
+    if (img != 0) {
+        assert_eq(chitra_image_source_color_type(img), 0x103, "jpeg-8: JFIF + transform 2 is YCbCr");
+        if (ref != 0) { assert_eq(_px_diff(img, ref), 0, "jpeg-8: JFIF + transform 2: pixels unchanged"); }
+    }
+    return 0;
+}
+
+fn test_app14_the_last_transform_wins() {
+    var lo = 0;
+    var b = fx_jpeg_adobe_rgb(&lo);
+    var err = 0;
+    var ref = chitra_jpeg_decode(b, lo, &err);
+    var lo2 = 0;
+    var b2 = _fx_with_app14(b, lo, 2, &lo2);
+    var err2 = 0;
+    var img = chitra_jpeg_decode(b2, lo2, &err2);
+    assert(img != 0, "jpeg-8: APP14 transform 2 then the fixture's transform 0 decodes");
+    if (img != 0) {
+        assert_eq(chitra_image_source_color_type(img), 0x113, "jpeg-8: the LAST APP14 (transform 0) names RGB");
+        if (ref != 0) { assert_eq(_px_diff(img, ref), 0, "jpeg-8: last-APP14-wins pixels match djpeg's"); }
+    }
+    return 0;
+}
+
+fn test_app14_ycck_four_components_is_a_component_refusal() {
+    var lo = 0;
+    var b = fx_jpeg_baseline(&lo);
+    store8(b + 11, 0x04);   # Nf = 4
+    var lo2 = 0;
+    var b2 = _fx_with_app14(b, lo, 2, &lo2);
+    var err = 0;
+    var f = chitra_jpeg_scan_markers(b2, lo2, &err);
+    assert_eq(f, 0, "jpeg-8: YCCK 4-component frame refused");
+    if (err != 0) {
+        assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_COMPONENTS,
+          "jpeg-8: APP14 transform 2 + Nf = 4 -> JPEG_COMPONENTS (ADR 0004), not UNSUPPORTED");
+    }
+    return 0;
+}
+
+# Decode `b`; return the bytes the allocator handed out, error code to *code_out
+# (0 on success).
+fn _jpeg_cost(b, lo, code_out): i64 {
+    var err = 0;
+    var before = alloc_used();
+    var img = chitra_jpeg_decode(b, lo, &err);
+    var spent = alloc_used() - before;
+    store64(code_out, 0);
+    if (img == 0) {
+        if (err != 0) { store64(code_out, chitra_err_code(err)); }
+    }
+    return spent;
+}
+
+# ================================================================
+# jpeg-4 (1.1.1) — the lazy table stores are paid for by a table that VALIDATES.
+#
+# 0.6.1 moved the 2,048-byte quantization store and the 19,712-byte Huffman
+# block out of the up-front path so a table-less refusal costs 400 bytes. But
+# both parsers allocated on segment ENTRY, before reading a single table header,
+# so a segment that defines nothing bought the whole cost back. Measured before
+# the repair: 22,160 B for the 12-byte file below (1,847:1), 20,112 B for the
+# 7-byte truncated DHT, 20,112 B for a DHT whose first class byte is 2.
+#
+# ⚠ MUTATION-CHECKED: with either allocation moved back to segment entry, the
+# matching cells fail on the byte count alone — the verdicts do not change,
+# which is why these assert the cost.
+# ================================================================
+fn test_empty_tables_cost_nothing() {
+    var b = alloc(12);
+    store8(b + 0, 0xFF);
+    store8(b + 1, 0xD8);
+    store8(b + 2, 0xFF);
+    store8(b + 3, 0xDB);    # DQT, Lq = 2: defines nothing
+    store8(b + 4, 0x00);
+    store8(b + 5, 0x02);
+    store8(b + 6, 0xFF);
+    store8(b + 7, 0xC4);    # DHT, Lh = 2: defines nothing
+    store8(b + 8, 0x00);
+    store8(b + 9, 0x02);
+    store8(b + 10, 0xFF);
+    store8(b + 11, 0xD9);
+    var code = 0;
+    var spent = _jpeg_cost(b, 12, &code);
+    assert_eq(code, CHITRA_ERR_JPEG_MARKER, "jpeg-4: empty DQT + DHT then EOI -> JPEG_MARKER");
+    assert_lte(spent, 512, "jpeg-4: two empty table segments cost <= 512 B, not 22,160");
+    return 0;
+}
+
+fn test_malformed_table_headers_cost_nothing() {
+    var b = alloc(7);
+    store8(b + 0, 0xFF);
+    store8(b + 1, 0xD8);
+    store8(b + 2, 0xFF);
+    store8(b + 3, 0xC4);
+    store8(b + 4, 0x00);
+    store8(b + 5, 0x03);    # Lh = 3: one byte, short of a 17-byte table header
+    store8(b + 6, 0x00);
+    var code = 0;
+    var spent = _jpeg_cost(b, 7, &code);
+    assert_eq(code, CHITRA_ERR_JPEG_DHT, "jpeg-4: a 1-byte DHT -> JPEG_DHT");
+    assert_lte(spent, 512, "jpeg-4: refusing a 1-byte DHT costs <= 512 B, not 20,112");
+    var lo = 0;
+    var c = fx_jpeg_dht_bad_class(&lo, 0x20);
+    var code2 = 0;
+    var spent2 = _jpeg_cost(c, lo, &code2);
+    assert_eq(code2, CHITRA_ERR_JPEG_DHT, "jpeg-4: DHT class 2 -> JPEG_DHT");
+    assert_lte(spent2, 512, "jpeg-4: refusing DHT class 2 costs <= 512 B");
+    var lo3 = 0;
+    var d = fx_jpeg_dqt_bad(&lo3, 0x04);
+    var code3 = 0;
+    var spent3 = _jpeg_cost(d, lo3, &code3);
+    assert_eq(code3, CHITRA_ERR_JPEG_DQT, "jpeg-4: DQT Tq = 4 -> JPEG_DQT");
+    assert_lte(spent3, 512, "jpeg-4: refusing DQT Tq = 4 costs <= 512 B, not 2,448");
+    return 0;
+}
+
+# ================================================================
+# jpeg-3 (1.1.1) — a 16-bit DQT is judged against the frame header.
+#
+# libjpeg writes its DQT segments BEFORE the SOF marker, and cjpeg emits SOF1
+# exactly when a table value exceeds 255 — every cjpeg file at quality 23 or
+# below. chitra refused Pq = 1 on sight, so all of them (corpus jpg_q5.jpg,
+# and the -progressive / -arithmetic / -precision 12 variants) were reported as
+# CHITRA_ERR_JPEG_DQT, "bad quant table", for 2,448 bytes, instead of the mode
+# chitra actually declines. Measured after the repair on cjpeg output:
+# -quality 5 -> 22, + -progressive -> 19, + -arithmetic -> 20, -grayscale and
+# -precision 12 -> 22, all for 400 bytes; -quality 24 still decodes. djpeg
+# decodes every one of them.
+#
+# Fixture: SOI, a DQT holding one 16-bit table (Pq = 1, Tq = 0, 128 bytes),
+# then the marker under test. For SOF0 a valid 8x8 grey frame header follows,
+# then an SOS marker — so that without the refusal the walk would hand back a
+# frame, rather than stopping on a truncation the table could hide behind.
+# ⚠ MUTATION-CHECKED: restoring the on-sight `if (pq != 0)` refusal fails the
+# three mode cells (each reads 15); deleting the SOF0-with-flag refusal, or the
+# refusal of a 16-bit table after SOF0, hands back a frame (each cell reads 0);
+# deleting the end-of-walk rule makes the EOI cell read 13.
+# ================================================================
+fn fx_jpeg_dqt16_then(len_out, m): i64 {
+    var b = alloc(150);
+    var i = 0;
+    while (i < 150) {
+        store8(b + i, 0);
+        i = i + 1;
+    }
+    store8(b + 0, 0xFF);
+    store8(b + 1, 0xD8);
+    store8(b + 2, 0xFF);
+    store8(b + 3, 0xDB);
+    store8(b + 4, 0x00);
+    store8(b + 5, 0x83);    # Lq = 2 + 1 + 128
+    store8(b + 6, 0x10);    # Pq = 1, Tq = 0
+    i = 0;
+    while (i < 64) {
+        store8(b + 7 + i * 2, 0x01);    # every entry 0x0100 = 256: needs 16 bits
+        i = i + 1;
+    }
+    store8(b + 135, 0xFF);
+    store8(b + 136, m);
+    if (m == 0xC0) {
+        store8(b + 138, 0x0B);  # Lf = 11
+        store8(b + 139, 0x08);  # P = 8
+        store8(b + 141, 0x08);  # Y = 8
+        store8(b + 143, 0x08);  # X = 8
+        store8(b + 144, 0x01);  # Nf = 1
+        store8(b + 145, 0x01);  # id 1
+        store8(b + 146, 0x11);  # H = V = 1 (Tq = 0 already in place)
+        store8(b + 148, 0xFF);  # SOS
+        store8(b + 149, 0xDA);
+        store64(len_out, 150);
+        return b;
+    }
+    store64(len_out, 137);
+    return b;
+}
+
+fn _expect_scan_code(b, lo, code, name): i64 {
+    var err = 0;
+    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    assert_eq(f, 0, name);
+    assert(err != 0, name);
+    if (err != 0) { assert_eq(chitra_err_code(err), code, name); }
+    return 0;
+}
+
+fn test_dqt16_reports_the_frame_mode() {
+    var lo = 0;
+    _expect_scan_code(fx_jpeg_dqt16_then(&lo, 0xC1), lo, CHITRA_ERR_JPEG_MODE,
+      "jpeg-3: 16-bit DQT + SOF1 -> JPEG_MODE (cjpeg -quality 5), not JPEG_DQT");
+    var l2 = 0;
+    _expect_scan_code(fx_jpeg_dqt16_then(&l2, 0xC2), l2, CHITRA_ERR_JPEG_PROGRESSIVE,
+      "jpeg-3: 16-bit DQT + SOF2 -> JPEG_PROGRESSIVE");
+    var l3 = 0;
+    _expect_scan_code(fx_jpeg_dqt16_then(&l3, 0xC9), l3, CHITRA_ERR_JPEG_ARITHMETIC,
+      "jpeg-3: 16-bit DQT + SOF9 -> JPEG_ARITHMETIC");
+    return 0;
+}
+
+fn test_dqt16_in_a_baseline_frame_is_still_refused() {
+    var lo = 0;
+    _expect_scan_code(fx_jpeg_dqt16_then(&lo, 0xC0), lo, CHITRA_ERR_JPEG_DQT,
+      "jpeg-3: 16-bit DQT + SOF0 -> JPEG_DQT (baseline is 8-bit only)");
+    # And after a baseline frame header: refused on sight, as before.
+    var l2 = 0;
+    var g = fx_jpeg_dqt16_then(&l2, 0xC0);
+    var b = alloc(150);
+    var i = 0;
+    while (i < 2) {
+        store8(b + i, load8(g + i));
+        i = i + 1;
+    }
+    i = 0;
+    while (i < 13) {
+        store8(b + 2 + i, load8(g + 135 + i));      # SOF0 first
+        i = i + 1;
+    }
+    i = 0;
+    while (i < 133) {
+        store8(b + 15 + i, load8(g + 2 + i));       # then the 16-bit DQT
+        i = i + 1;
+    }
+    store8(b + 148, 0xFF);                          # then SOS
+    store8(b + 149, 0xDA);
+    _expect_scan_code(b, 150, CHITRA_ERR_JPEG_DQT, "jpeg-3: SOF0 then a 16-bit DQT -> JPEG_DQT");
+    # Pq > 1 is not a precision T.81 defines at all. The table header is
+    # followed by a well-formed 8-bit table, so a reader that let Pq = 2 through
+    # would take the next byte as a fresh Pq/Tq, define table 0, and walk on to
+    # EOI — the guard is the only thing that says DQT here.
+    var c = alloc(74);
+    i = 0;
+    while (i < 74) {
+        store8(c + i, 1);
+        i = i + 1;
+    }
+    store8(c + 0, 0xFF);
+    store8(c + 1, 0xD8);
+    store8(c + 2, 0xFF);
+    store8(c + 3, 0xDB);
+    store8(c + 4, 0x00);
+    store8(c + 5, 0x44);        # Lq = 68 = 2 + 1 + 1 + 64
+    store8(c + 6, 0x20);        # Pq = 2, Tq = 0
+    store8(c + 7, 0x00);        # Pq = 0, Tq = 0
+    store8(c + 72, 0xFF);
+    store8(c + 73, 0xD9);
+    _expect_scan_code(c, 74, CHITRA_ERR_JPEG_DQT, "jpeg-3: DQT Pq = 2 -> JPEG_DQT");
+    # A 16-bit table with no frame header after it keeps the code it had.
+    var l4 = 0;
+    var d = fx_jpeg_dqt16_then(&l4, 0xD9);
+    _expect_scan_code(d, l4, CHITRA_ERR_JPEG_DQT, "jpeg-3: 16-bit DQT then EOI -> JPEG_DQT");
+    # And a 16-bit table that is short of its 128 bytes is malformed.
+    var l5 = 0;
+    var e = fx_jpeg_dqt16_then(&l5, 0xC1);
+    store8(e + 5, 0x82);    # Lq one short: 127 bytes of body
+    _expect_scan_code(e, l5, CHITRA_ERR_JPEG_DQT, "jpeg-3: 16-bit DQT one byte short -> JPEG_DQT");
+    return 0;
+}
+
+# ================================================================
+# jpeg-7 / cc-1 / gate-8 (1.1.1) — GATE 2 runs before the planes, not after.
+#
+# B-3 put GATE 0 (w*h*4 against `len`) in front of the planes because GATE 2's
+# denominator — the summed entropy spans — was thought to exist only once every
+# scan had been decoded. It is byte-structural, and `len` counts padding, so
+# padding walked straight back through: measured on the 1.1.0 tree,
+#   one Ns=3 scan of 4,096 B + 12,300 B of APP1      16,550 B -> 50,354,832 B
+#   the same with the 12,300 B after EOI instead     16,546 B -> 50,354,832 B
+#   three Ns=1 scans of 4,096 B + 4,200 B of APP1    16,658 B -> 50,354,832 B
+#   two of those three scans + 8,400 B of APP1       16,752 B -> 33,577,616 B
+#   grey 1024x1024, one 512-B scan + 600 B of APP1    1,256 B ->  1,071,760 B
+# every one refused only after the planes were paid for. All now refuse for
+# 22,160 B — the per-frame table cost, which is why the bound is 64 KiB.
+#
+# The grey cell is gate-8's: GATE 0 passes (1,256 * 4096 >= 4 MiB) and so does
+# GATE 1 (the 1 MiB plane against 512 * 4096 = 2 MiB), and the output is 4x the
+# plane — so the summed-span test is the ONLY bound between this file and a
+# fabricated 1024x1024 decode. Its fixture self-checks below assert exactly that.
+#
+# Fixture: SOI, optional APP1 padding, DQT (Pq 0, all 1), a one-symbol DC table
+# and a one-symbol AC table (code '0' = category 0 / EOB, so zero bytes decode
+# as flat blocks), SOF0 with 1x1 components, then either one scan naming every
+# component or `nscans` Ns=1 scans, each `espan` zero bytes; EOI; trailing pad.
+#
+# ⚠ MUTATION-CHECKED: with the early GATE 2 neutered every cell below fails its
+# cost bound (and the multi-scan miss reads 17, not 10); with BOTH copies of
+# GATE 2 neutered the grey cell decodes; on the 1.1.0 tree every cost bound
+# fails. Neutering only the post-decode GATE 2 changes nothing — it is the
+# backstop, and jpeg.cyr says so.
+# ================================================================
+fn _fx_put(b, o, v): i64 {
+    store8(b + o, v);
+    return o + 1;
+}
+
+fn _fx_seg_hdr(b, o, m, paylen): i64 {
+    o = _fx_put(b, o, 0xFF);
+    o = _fx_put(b, o, m);
+    o = _fx_put(b, o, ((paylen + 2) >> 8) & 255);
+    return _fx_put(b, o, (paylen + 2) & 255);
+}
+
+fn fx_jpeg_span_bomb(len_out, w, h, nf, nscans, espan, pad, trail): i64 {
+    var total = 2 + 69 + 22 + 22 + 10 + 3 * nf + 2 + trail;
+    if (pad > 0) { total = total + 4 + pad; }
+    if (nscans == 0) { total = total + 8 + 2 * nf + espan; }
+    if (nscans > 0) { total = total + nscans * (10 + espan); }
+    var b = alloc(total);
+    var i = 0;
+    while (i < total) {
+        store8(b + i, 0);
+        i = i + 1;
+    }
+    var o = 0;
+    o = _fx_put(b, o, 0xFF);
+    o = _fx_put(b, o, 0xD8);
+    if (pad > 0) {
+        o = _fx_seg_hdr(b, o, 0xE1, pad);
+        o = o + pad;
+    }
+    o = _fx_seg_hdr(b, o, 0xDB, 65);            # DQT: Pq 0 Tq 0, 64 x 1
+    o = _fx_put(b, o, 0x00);
+    i = 0;
+    while (i < 64) {
+        o = _fx_put(b, o, 1);
+        i = i + 1;
+    }
+    o = _fx_seg_hdr(b, o, 0xC4, 18);            # DHT DC0: one code '0' -> 0
+    o = _fx_put(b, o, 0x00);
+    o = _fx_put(b, o, 1);
+    o = o + 15 + 1;
+    o = _fx_seg_hdr(b, o, 0xC4, 18);            # DHT AC0: one code '0' -> EOB
+    o = _fx_put(b, o, 0x10);
+    o = _fx_put(b, o, 1);
+    o = o + 15 + 1;
+    o = _fx_seg_hdr(b, o, 0xC0, 6 + 3 * nf);    # SOF0
+    o = _fx_put(b, o, 8);
+    o = _fx_put(b, o, (h >> 8) & 255);
+    o = _fx_put(b, o, h & 255);
+    o = _fx_put(b, o, (w >> 8) & 255);
+    o = _fx_put(b, o, w & 255);
+    o = _fx_put(b, o, nf);
+    i = 0;
+    while (i < nf) {
+        o = _fx_put(b, o, i + 1);
+        o = _fx_put(b, o, 0x11);
+        o = _fx_put(b, o, 0);
+        i = i + 1;
+    }
+    if (nscans == 0) {                          # one scan naming every component
+        o = _fx_seg_hdr(b, o, 0xDA, 4 + 2 * nf);
+        o = _fx_put(b, o, nf);
+        i = 0;
+        while (i < nf) {
+            o = _fx_put(b, o, i + 1);
+            o = _fx_put(b, o, 0);
+            i = i + 1;
+        }
+        o = _fx_put(b, o, 0);
+        o = _fx_put(b, o, 63);
+        o = _fx_put(b, o, 0);
+        o = o + espan;
+    }
+    i = 0;
+    while (i < nscans) {                        # Ns=1 scans, component i+1
+        o = _fx_seg_hdr(b, o, 0xDA, 6);
+        o = _fx_put(b, o, 1);
+        o = _fx_put(b, o, i + 1);
+        o = _fx_put(b, o, 0);
+        o = _fx_put(b, o, 0);
+        o = _fx_put(b, o, 63);
+        o = _fx_put(b, o, 0);
+        o = o + espan;
+        i = i + 1;
+    }
+    o = _fx_put(b, o, 0xFF);
+    o = _fx_put(b, o, 0xD9);
+    assert_eq(o + trail, total, "fixture: span-bomb length bookkeeping");
+    store64(len_out, o + trail);
+    return b;
+}
+
+fn _expect_cheap_dimensions(b, lo, name): i64 {
+    var code = 0;
+    var spent = _jpeg_cost(b, lo, &code);
+    assert_eq(code, CHITRA_ERR_DIMENSIONS, name);
+    assert_lt(spent, 65536, name);
+    return 0;
+}
+
+fn test_padding_does_not_buy_the_planes_back() {
+    var lo = 0;
+    var b = fx_jpeg_span_bomb(&lo, 4096, 4096, 3, 0, 4096, 12300, 0);
+    assert_eq(lo, 16550, "fixture: padded single-scan bomb is 16,550 B");
+    assert(4096 * 4096 * 4 <= lo * CHITRA_MAX_JPEG_RATIO, "fixture: GATE 0 passes it");
+    _expect_cheap_dimensions(b, lo,
+      "cc-1: 12,300 B of APP1 + one 4,096-B scan -> DIMENSIONS for < 64 KiB, not 50 MB");
+    var l2 = 0;
+    var c = fx_jpeg_span_bomb(&l2, 4096, 4096, 3, 0, 4096, 0, 12300);
+    assert(4096 * 4096 * 4 <= l2 * CHITRA_MAX_JPEG_RATIO, "fixture: GATE 0 passes the trailing pad");
+    _expect_cheap_dimensions(c, l2,
+      "cc-1: the same 12,300 B after EOI -> DIMENSIONS for < 64 KiB");
+    return 0;
+}
+
+fn test_multiscan_padding_does_not_buy_the_planes_back() {
+    var lo = 0;
+    var b = fx_jpeg_span_bomb(&lo, 4096, 4096, 3, 3, 4096, 4200, 0);
+    assert_eq(lo, 16658, "fixture: padded three-scan bomb is 16,658 B");
+    assert(4096 * 4096 * 4 <= lo * CHITRA_MAX_JPEG_RATIO, "fixture: GATE 0 passes it");
+    assert(4096 * 4096 <= 4096 * CHITRA_MAX_JPEG_RATIO, "fixture: GATE 1 passes each 4,096-B scan");
+    _expect_cheap_dimensions(b, lo,
+      "jpeg-7: three Ns=1 scans + 4,200 B of APP1 -> DIMENSIONS for < 64 KiB, not 50 MB");
+    # The third scan missing: certain to be refused, and the two scans present
+    # cannot fund the geometry either — so it is refused before their planes.
+    var l2 = 0;
+    var c = fx_jpeg_span_bomb(&l2, 4096, 4096, 3, 2, 4096, 8400, 0);
+    assert(4096 * 4096 * 4 <= l2 * CHITRA_MAX_JPEG_RATIO, "fixture: GATE 0 passes the two-scan file");
+    _expect_cheap_dimensions(c, l2,
+      "jpeg-7: two of three scans + padding -> DIMENSIONS for < 64 KiB, not 33 MB");
+    return 0;
+}
+
+fn test_grey_summed_span_gate_pinned_on_its_own() {
+    var lo = 0;
+    var b = fx_jpeg_span_bomb(&lo, 1024, 1024, 1, 0, 512, 600, 0);
+    assert(1024 * 1024 * 4 <= lo * CHITRA_MAX_JPEG_RATIO, "fixture: GATE 0 passes (padding)");
+    assert(1024 * 1024 <= 512 * CHITRA_MAX_JPEG_RATIO, "fixture: GATE 1 passes (plane = 1 MiB)");
+    assert(1024 * 1024 * 4 > 512 * CHITRA_MAX_JPEG_RATIO, "fixture: only the summed-span test refuses");
+    _expect_cheap_dimensions(b, lo,
+      "gate-8: grey 1024x1024 over 512 entropy bytes -> DIMENSIONS for < 64 KiB");
+    return 0;
+}
+
+# ================================================================
+# jpeg-10 (1.1.1) — a header cut at a segment boundary is TRUNCATED.
+#
+# The header walk reported CHITRA_ERR_JPEG_MARKER when the input ended exactly
+# at a segment boundary or on the 0xFF of a marker, and CHITRA_ERR_TRUNCATED for
+# a cut anywhere else — so the same defect got two names depending on where the
+# cut fell (18 of 618 cut points of corpus jpg_420.jpg). The real 16x16
+# gradient's JFIF APP0 ends at 20.
+# ⚠ MUTATION-CHECKED: the old `rc = CHITRA_ERR_JPEG_MARKER` on the 2-byte check
+# makes the first three cells read 13; on the fill-run check, the fourth.
+# ================================================================
+fn test_header_cut_at_a_segment_boundary_is_truncated() {
+    var lo = 0;
+    var b = fx_jpeg_real_gradient(&lo);
+    assert_eq(load8(b + 20), 0xFF, "fixture: the APP0 ends at 20");
+    _expect_scan_code(b, 20, CHITRA_ERR_TRUNCATED, "jpeg-10: header cut after APP0 -> TRUNCATED");
+    _expect_scan_code(b, 21, CHITRA_ERR_TRUNCATED, "jpeg-10: header cut on a marker's 0xFF -> TRUNCATED");
+    _expect_scan_code(b, 2, CHITRA_ERR_TRUNCATED, "jpeg-10: SOI and nothing else -> TRUNCATED");
+    # A fill run the input ends inside: FF FF and no marker code.
+    var ff = alloc(1);
+    store8(ff, 0xFF);
+    var l2 = 0;
+    var c = _fx_splice(b, lo, 20, ff, 1, &l2);
+    _expect_scan_code(c, 22, CHITRA_ERR_TRUNCATED, "jpeg-10: header cut inside a fill run -> TRUNCATED");
+    return 0;
+}
+
+# ================================================================
+# jpeg-11 (1.1.1) — JPG, DHP, EXP and the JPGn extensions are refused, not
+# skipped.
+#
+# FF C8 (JPG), FF DE (DHP), FF DF (EXP) and FF F0..FD (JPGn) fell through the
+# classifier to "length-bearing, skip", so the real 16x16 gradient with any of
+# them spliced in ahead of its SOF0 DECODED, seen_iend = 1 — djpeg refuses every
+# one ("Unsupported JPEG process: SOF type 0xc8", "Unsupported marker type
+# 0xde"). DHP and EXP are the hierarchical process CLAUDE.md JPEG item 1 says
+# is rejected. A JPEG-LS frame header (SOF55 = FF F7) was reported as
+# CHITRA_ERR_JPEG_SOF, "SOS before SOF". The controls — COM and APP15, which
+# djpeg skips — must still decode.
+# Also here: SOS with no frame header is a MISPLACED marker, JPEG_MARKER (it was
+# JPEG_SOF, which names an invalid SOF0 that does not exist).
+# ⚠ MUTATION-CHECKED: deleting each new classifier line fails its cell (the
+# file decodes, or F7 reads 13 / 14).
+# ================================================================
+fn _fx_gradient_with_segment(m, len_out): i64 {
+    var lo = 0;
+    var g = fx_jpeg_real_gradient(&lo);
+    var seg = alloc(12);
+    var i = 0;
+    while (i < 12) {
+        store8(seg + i, 0);
+        i = i + 1;
+    }
+    store8(seg + 0, 0xFF);
+    store8(seg + 1, m);
+    store8(seg + 3, 10);
+    # SOF0 of the gradient sits at 89.
+    return _fx_splice(g, lo, 89, seg, 12, len_out);
+}
+
+fn test_hierarchical_and_extension_markers_refused() {
+    var lo = 0;
+    var g = fx_jpeg_real_gradient(&lo);
+    assert_eq(load8(g + 90), 0xC0, "fixture: the gradient's SOF0 is at 89");
+    var ms[8];
+    store8(&ms + 0, 0xC8);
+    store8(&ms + 1, 0xDE);
+    store8(&ms + 2, 0xDF);
+    store8(&ms + 3, 0xF0);
+    store8(&ms + 4, 0xF7);
+    store8(&ms + 5, 0xFD);
+    var k = 0;
+    var l2 = 0;
+    var b = 0;
+    var code = 0;
+    while (k < 6) {
+        b = _fx_gradient_with_segment(load8(&ms + k), &l2);
+        code = 0;
+        _jpeg_cost(b, l2, &code);
+        assert_eq(code, CHITRA_ERR_JPEG_MODE,
+          "jpeg-11: FF C8 / DE / DF / F0 / F7 / FD ahead of SOF0 -> JPEG_MODE, not skipped");
+        k = k + 1;
+    }
+    # SOF55 (JPEG-LS) in place of SOF0.
+    var l3 = 0;
+    var c = fx_jpeg_real_gradient(&l3);
+    store8(c + 90, 0xF7);
+    _expect_scan_code(c, l3, CHITRA_ERR_JPEG_MODE, "jpeg-11: JPEG-LS SOF55 -> JPEG_MODE, not SOS-before-SOF");
+    return 0;
+}
+
+fn test_skippable_segments_still_skipped() {
+    var l2 = 0;
+    var b = _fx_gradient_with_segment(0xFE, &l2);
+    var err = 0;
+    assert(chitra_jpeg_decode(b, l2, &err) != 0, "jpeg-11: a COM ahead of SOF0 is still skipped");
+    var l3 = 0;
+    var c = _fx_gradient_with_segment(0xEF, &l3);
+    var err2 = 0;
+    assert(chitra_jpeg_decode(c, l3, &err2) != 0, "jpeg-11: an APP15 ahead of SOF0 is still skipped");
+    return 0;
+}
+
+fn test_sos_before_sof_is_a_misplaced_marker() {
+    var lo = 0;
+    var g = fx_jpeg_real_gradient(&lo);
+    # Drop the 13-byte SOF0 at 89: the walk meets SOS with no frame.
+    var b = alloc(lo);
+    var i = 0;
+    while (i < 89) {
+        store8(b + i, load8(g + i));
+        i = i + 1;
+    }
+    i = 102;
+    while (i < lo) {
+        store8(b + i - 13, load8(g + i));
+        i = i + 1;
+    }
+    _expect_scan_code(b, lo - 13, CHITRA_ERR_JPEG_MARKER, "jpeg-11: SOS before any SOF -> JPEG_MARKER");
+    return 0;
+}
+
+# ================================================================
+# gate-1 (1.1.1) — the three JPEG heap-overflow guards no test could see.
+#
+# Each of these is the ONLY bound between attacker-controlled fields and a
+# fixed-size allocation, and with any one of them neutered all 13 suites and
+# every fuzz harness stayed green; only a poison-redzone build saw the writes.
+#   DQT Tq < 4      quant store is 4 x 64 x 8 = 2,048 B; Tq = 15 writes ~5.6 KB
+#                   past it.
+#   DHT sum <= 256  each table is HT_SIZE = 2,464 B with room for 256 symbols;
+#                   slot 7 (Tc 1, Th 3) ends the 19,712-B block, so symbol 256
+#                   lands in the next allocation.
+#   AC k <= 63      zz is 64 x 8 = 512 B; a run that reaches k = 64 writes past.
+# The fixtures carry enough payload to get past every OTHER check, so the
+# guard under test is the one that answers.
+# ⚠ MUTATION-CHECKED: each cell fails with its guard neutered — the DQT and DHT
+# files then walk on to EOI (JPEG_MARKER), and the block decodes cleanly.
+# ================================================================
+fn test_dqt_table_id_past_the_store_rejected() {
+    var b = alloc(73);
+    var i = 0;
+    while (i < 73) {
+        store8(b + i, 1);
+        i = i + 1;
+    }
+    store8(b + 0, 0xFF);
+    store8(b + 1, 0xD8);
+    store8(b + 2, 0xFF);
+    store8(b + 3, 0xDB);
+    store8(b + 4, 0x00);
+    store8(b + 5, 0x43);        # Lq = 67: one full 8-bit table
+    store8(b + 6, 0x0F);        # Pq 0, Tq 15
+    store8(b + 71, 0xFF);
+    store8(b + 72, 0xD9);
+    _expect_scan_code(b, 73, CHITRA_ERR_JPEG_DQT, "gate-1: DQT Tq = 15 with a full body -> JPEG_DQT");
+    return 0;
+}
+
+fn test_dht_symbol_count_past_the_table_rejected() {
+    # BITS: 255 codes of length 9 and 2 of length 10 — 257 symbols, a complete
+    # canonical code that _jpeg_huff_build would accept.
+    var b = alloc(282);
+    var i = 0;
+    while (i < 282) {
+        store8(b + i, 0);
+        i = i + 1;
+    }
+    store8(b + 0, 0xFF);
+    store8(b + 1, 0xD8);
+    store8(b + 2, 0xFF);
+    store8(b + 3, 0xC4);
+    store8(b + 4, 0x01);
+    store8(b + 5, 0x14);        # Lh = 276 = 2 + 17 + 257
+    store8(b + 6, 0x13);        # Tc 1, Th 3: slot 7, the last in the block
+    store8(b + 6 + 9, 255);     # L9
+    store8(b + 6 + 10, 2);      # L10
+    store8(b + 280, 0xFF);
+    store8(b + 281, 0xD9);
+    _expect_scan_code(b, 282, CHITRA_ERR_JPEG_DHT, "gate-1: DHT with 257 symbols -> JPEG_DHT");
+    return 0;
+}
+
+# AC table whose single 1-bit code '0' is symbol 0xF1 (run 15, size 1).
+fn fx_ac_table_run15(): i64 {
+    var t = alloc(HT_SIZE);
+    var bits[136];
+    var i = 0;
+    while (i <= 16) { store64(&bits + i * 8, 0); i = i + 1; }
+    store64(&bits + 1 * 8, 1);
+    store64(t + HT_COUNT, 1);
+    store64(t + HT_HUFFVAL + 0 * 8, 0xF1);
+    _jpeg_huff_build(t, &bits);
+    return t;
+}
+
+fn test_ac_run_past_coefficient_63_rejected() {
+    # DC '0' (category 0), then four (run 15, size 1) coefficients, each '0'
+    # plus one magnitude bit: k = 16, 32, 48 — and the fourth reaches 64.
+    # Bits 0 01 01 01 01 -> 0x2A 0x80.
+    var dct = fx_dc_table_size0();
+    var act = fx_ac_table_run15();
+    var buf[2];
+    store8(&buf + 0, 0x2A);
+    store8(&buf + 1, 0x80);
+    var rdr[72];   # BR_SIZE
+    _jpeg_br_init(&rdr, &buf, 2);
+    var zz = alloc(1024);       # slack: a neutered guard writes zz[64]
+    var err = 0;
+    _jpeg_decode_block(&rdr, dct, act, 0, zz, &err);
+    assert(err != 0, "gate-1: an AC run reaching k = 64 is refused");
+    if (err != 0) {
+        assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_ENTROPY, "gate-1: AC run to k = 64 -> JPEG_ENTROPY");
+    }
+    return 0;
+}
+
+# ================================================================
+# gate-4 (1.1.1) — JPEG validity guards that survived their own deletion.
+#
+# The 1.1.1 mutation sweep found these guards neutered with every suite green.
+# Each cell below is built so that the guard under test is the ONLY thing that
+# refuses the file: without it the file decodes (or parses to a frame), or the
+# walk reaches a different verdict.
+#
+# Survivors that are genuinely EQUIVALENT, and so get no cell:
+#   - SOF0 width/height > CHITRA_MAX_DIM: both are u16 fields and the cap is
+#     65,535, so the test cannot be true.
+#   - DHT `remaining < 17`: below 17 bytes the 16 BITS reads overrun the
+#     segment and `remaining` goes negative, so `remaining < total` refuses
+#     with the same code.
+#   - SOS Ta >= 4: Ta selects presence bit 4 + Ta >= 8, which no DHT can set,
+#     so the table-presence check refuses with the same code.
+#   - _jpeg_decode's `idx < 0`, `idx >= count` and `L > 16`: for a table built
+#     by _jpeg_huff_build from the same BITS that set its count, a code that
+#     matches a length always indexes inside the table, and a code that matches
+#     none falls to the index checks — the three back each other up.
+#   - the multi-scan driver's `sos_off == 0`: without it the driver re-parses
+#     offset 0 as a scan header, and SOI's FF D8 is no valid Ls, so it refuses
+#     with the same 17. (Kept: that is an accident of byte values, not a bound.)
+#   - the post-decode GATE 2: see jpeg.cyr; its early copy is pinned above.
+# ⚠ MUTATION-CHECKED: every cell below fails with its own guard neutered.
+# ================================================================
+fn test_mode_markers_each_pinned() {
+    var lo = 0;
+    var b = fx_jpeg4(&lo, 0xFF, 0xD8, 0xFF, 0xC9);
+    _expect_scan_code(b, lo, CHITRA_ERR_JPEG_ARITHMETIC, "gate-4: SOF9 -> JPEG_ARITHMETIC");
+    var l2 = 0;
+    var c = fx_jpeg4(&l2, 0xFF, 0xD8, 0xFF, 0xCC);
+    _expect_scan_code(c, l2, CHITRA_ERR_JPEG_ARITHMETIC, "gate-4: DAC -> JPEG_ARITHMETIC");
+    return 0;
+}
+
+fn test_table_segment_lengths_pinned() {
+    # DQT Lq = 1: shorter than its own length field.
+    var b = alloc(8);
+    store8(b + 0, 0xFF);
+    store8(b + 1, 0xD8);
+    store8(b + 2, 0xFF);
+    store8(b + 3, 0xDB);
+    store8(b + 4, 0x00);
+    store8(b + 5, 0x01);
+    store8(b + 6, 0xFF);
+    store8(b + 7, 0xD9);
+    _expect_scan_code(b, 8, CHITRA_ERR_JPEG_DQT, "gate-4: DQT Lq = 1 -> JPEG_DQT");
+    # DQT whose body is 10 bytes, not 64: without the check the table read runs
+    # 54 bytes past the segment.
+    var c = alloc(71);
+    var i = 0;
+    while (i < 71) {
+        store8(c + i, 0);
+        i = i + 1;
+    }
+    store8(c + 0, 0xFF);
+    store8(c + 1, 0xD8);
+    store8(c + 2, 0xFF);
+    store8(c + 3, 0xDB);
+    store8(c + 4, 0x00);
+    store8(c + 5, 0x0D);        # Lq = 13: Pq/Tq + 10 bytes
+    store8(c + 17, 0xFF);
+    store8(c + 18, 0xD9);
+    _expect_scan_code(c, 71, CHITRA_ERR_JPEG_DQT, "gate-4: DQT with a 10-byte table -> JPEG_DQT");
+    # DHT whose BITS promise 2 symbols and whose segment holds 1.
+    var d = alloc(26);
+    i = 0;
+    while (i < 26) {
+        store8(d + i, 0);
+        i = i + 1;
+    }
+    store8(d + 0, 0xFF);
+    store8(d + 1, 0xD8);
+    store8(d + 2, 0xFF);
+    store8(d + 3, 0xC4);
+    store8(d + 4, 0x00);
+    store8(d + 5, 0x14);        # Lh = 20 = 2 + 17 + 1
+    store8(d + 7, 2);           # L1 = 2
+    store8(d + 24, 0xFF);
+    store8(d + 25, 0xD9);
+    _expect_scan_code(d, 26, CHITRA_ERR_JPEG_DHT, "gate-4: DHT short of its symbols -> JPEG_DHT");
+    # DRI whose length is 2, not 4: without the check its Ri is read from the
+    # EOI behind it.
+    var e = alloc(8);
+    store8(e + 0, 0xFF);
+    store8(e + 1, 0xD8);
+    store8(e + 2, 0xFF);
+    store8(e + 3, 0xDD);
+    store8(e + 4, 0x00);
+    store8(e + 5, 0x02);
+    store8(e + 6, 0xFF);
+    store8(e + 7, 0xD9);
+    _expect_scan_code(e, 8, CHITRA_ERR_JPEG_MARKER, "gate-4: DRI Lr = 2 -> JPEG_MARKER");
+    return 0;
+}
+
+fn test_sof0_fields_pinned() {
+    var lo = 0;
+    var b = fx_jpeg_baseline(&lo);
+    store8(b + 7, 0x00);        # Y = 0
+    store8(b + 8, 0x00);
+    _expect_scan_code(b, lo, CHITRA_ERR_DIMENSIONS, "gate-4: SOF0 height 0 -> DIMENSIONS");
+    var l2 = 0;
+    var c = fx_jpeg_baseline(&l2);
+    store8(c + 7, 0x10);        # Y = 4096
+    store8(c + 8, 0x00);
+    store8(c + 9, 0x10);        # X = 4097
+    store8(c + 10, 0x01);
+    _expect_scan_code(c, l2, CHITRA_ERR_DIMENSIONS, "gate-4: SOF0 4097x4096 > MAX_PIXELS -> DIMENSIONS");
+    var l3 = 0;
+    var d = fx_jpeg_baseline(&l3);
+    store8(d + 5, 0x12);        # Lf = 18 for Nf = 3
+    _expect_scan_code(d, l3, CHITRA_ERR_JPEG_SOF, "gate-4: SOF0 Lf != 8 + 3 Nf -> JPEG_SOF");
+    var l4 = 0;
+    var e = fx_jpeg_baseline(&l4);
+    store8(e + 13, 0x20);       # comp 1: H 2, V 0
+    _expect_scan_code(e, l4, CHITRA_ERR_JPEG_SOF, "gate-4: SOF0 V = 0 -> JPEG_SOF");
+    var l5 = 0;
+    var f = fx_jpeg_baseline(&l5);
+    store8(f + 14, 0x04);       # comp 1: Tq 4
+    _expect_scan_code(f, l5, CHITRA_ERR_JPEG_SOF, "gate-4: SOF0 Tq = 4 -> JPEG_SOF");
+    # Lf = 8: shorter than the fixed fields; the 12-bit precision byte behind
+    # it is what a reader without the check would take for P.
+    var g = alloc(12);
+    store8(g + 0, 0xFF);
+    store8(g + 1, 0xD8);
+    store8(g + 2, 0xFF);
+    store8(g + 3, 0xC0);
+    store8(g + 4, 0x00);
+    store8(g + 5, 0x08);
+    store8(g + 6, 0x0C);
+    store8(g + 7, 0x00);
+    store8(g + 8, 0x08);
+    store8(g + 9, 0x00);
+    store8(g + 10, 0x08);
+    store8(g + 11, 0x01);
+    _expect_scan_code(g, 12, CHITRA_ERR_JPEG_SOF, "gate-4: SOF0 Lf = 8 -> JPEG_SOF");
+    return 0;
+}
+
+# The real 16x16 gradient with one SOS byte replaced. Its SOS is
+# FF DA 00 08 01 01 00 00 3F 00 at 149: Ls @151, Cs @154, Td/Ta @155,
+# Ss @156, Se @157, Ah/Al @158.
+fn _fx_gradient_sos_patched(at, v, len_out): i64 {
+    var b = fx_jpeg_real_gradient(len_out);
+    store8(b + at, v);
+    return b;
+}
+
+fn _expect_decode_code(b, lo, code, name): i64 {
+    var got = 0;
+    _jpeg_cost(b, lo, &got);
+    assert_eq(got, code, name);
+    return 0;
+}
+
+fn test_sos_fields_pinned() {
+    var lo = 0;
+    var g = fx_jpeg_real_gradient(&lo);
+    assert_eq(load8(g + 150), 0xDA, "fixture: the gradient's SOS is at 149");
+    assert_eq(load8(g + 157), 0x3F, "fixture: its Se is at 157");
+    var l1 = 0;
+    _expect_decode_code(_fx_gradient_sos_patched(152, 0x09, &l1), l1, CHITRA_ERR_JPEG_SOS,
+      "gate-4: SOS Ls != 6 + 2 Ns -> JPEG_SOS");
+    var l2 = 0;
+    _expect_decode_code(_fx_gradient_sos_patched(154, 0x09, &l2), l2, CHITRA_ERR_JPEG_SOS,
+      "gate-4: SOS Cs naming no component -> JPEG_SOS");
+    var l3 = 0;
+    _expect_decode_code(_fx_gradient_sos_patched(155, 0x40, &l3), l3, CHITRA_ERR_JPEG_SOS,
+      "gate-4: SOS Td = 4 (would select AC table 0) -> JPEG_SOS");
+    var l4 = 0;
+    _expect_decode_code(_fx_gradient_sos_patched(156, 0x01, &l4), l4, CHITRA_ERR_JPEG_SOS,
+      "gate-4: SOS Ss = 1 -> JPEG_SOS");
+    var l5 = 0;
+    _expect_decode_code(_fx_gradient_sos_patched(157, 0x3E, &l5), l5, CHITRA_ERR_JPEG_SOS,
+      "gate-4: SOS Se = 62 -> JPEG_SOS (djpeg: invalid SOS parameters for sequential JPEG)");
+    var l6 = 0;
+    _expect_decode_code(_fx_gradient_sos_patched(158, 0x01, &l6), l6, CHITRA_ERR_JPEG_SOS,
+      "gate-4: SOS Ah/Al = 0/1 -> JPEG_SOS");
+    return 0;
+}
+
+# AC table whose single 1-bit code '0' is ZRL (0xF0).
+fn fx_ac_table_zrl(): i64 {
+    var t = alloc(HT_SIZE);
+    var bits[136];
+    var i = 0;
+    while (i <= 16) { store64(&bits + i * 8, 0); i = i + 1; }
+    store64(&bits + 1 * 8, 1);
+    store64(t + HT_COUNT, 1);
+    store64(t + HT_HUFFVAL + 0 * 8, 0xF0);
+    _jpeg_huff_build(t, &bits);
+    return t;
+}
+
+fn test_zrl_past_the_block_rejected() {
+    # DC '0', then ZRL four times: k = 17, 33, 49, 65 — the fourth runs past
+    # the block. Without the check the loop simply ends: a corrupt block
+    # reported as a clean decode.
+    var dct = fx_dc_table_size0();
+    var act = fx_ac_table_zrl();
+    var buf[2];
+    store8(&buf + 0, 0x00);
+    store8(&buf + 1, 0x00);
+    var rdr[72];   # BR_SIZE
+    _jpeg_br_init(&rdr, &buf, 2);
+    var zz = alloc(512);
+    var err = 0;
+    _jpeg_decode_block(&rdr, dct, act, 0, zz, &err);
+    assert(err != 0, "gate-4: four ZRLs (k = 65) are refused");
+    if (err != 0) {
+        assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_ENTROPY, "gate-4: ZRL past the block -> JPEG_ENTROPY");
+    }
+    return 0;
+}
+
+fn _fx_cut(src, lo, at, n, len_out): i64 {
+    var out = alloc(lo - n);
+    store64(len_out, lo - n);
+    var i = 0;
+    while (i < at) {
+        store8(out + i, load8(src + i));
+        i = i + 1;
+    }
+    i = at + n;
+    while (i < lo) {
+        store8(out + i - n, load8(src + i));
+        i = i + 1;
+    }
+    return out;
+}
+
+fn test_per_scan_gate1_pinned() {
+    # 1024x1024, three Ns=1 scans of 512, 1 and 512 entropy bytes. The SUM
+    # (1,025 B) funds the whole image — GATE 0 and GATE 2 both pass — but the
+    # middle scan's 1 MiB plane against ONE byte is pure fabrication; GATE 1 is
+    # the only bound that sees it.
+    var lo = 0;
+    var b = fx_jpeg_span_bomb(&lo, 1024, 1024, 3, 3, 512, 0, 0);
+    # Scan 2's SOS is at 2 + 69 + 44 + 19 + 10 + 512 = 656; its data at 666.
+    assert_eq(load8(b + 657), 0xDA, "fixture: scan 2 SOS at 656");
+    var l2 = 0;
+    var c = _fx_cut(b, lo, 667, 511, &l2);
+    assert(1024 * 1024 * 4 <= 1025 * CHITRA_MAX_JPEG_RATIO, "fixture: the summed spans fund the image");
+    _expect_decode_code(c, l2, CHITRA_ERR_DIMENSIONS, "gate-4: a 1-byte scan for a 1 MiB plane -> DIMENSIONS (GATE 1)");
+    return 0;
+}
+
+fn test_gate0_still_names_a_headerless_bomb() {
+    # GATE 0 (B-3) since jpeg-7 (1.1.1): wherever the structural walk can read
+    # a scan header, the early GATE 2 refuses everything GATE 0 does, at the
+    # same cost — so GATE 0 is no longer what keeps the planes unpaid. What it
+    # still decides is the CODE when no scan header can be read at all: here a
+    # 4096x4096 frame whose only scan header declares Ns = 0. Nothing would be
+    # allocated either way (the decode refuses at that header), so this pins a
+    # classification, and says so.
+    # ⚠ MUTATION-CHECKED: with GATE 0 neutered this reads 17.
+    var lo = 0;
+    var b = fx_jpeg_span_bomb(&lo, 4096, 4096, 1, 0, 16, 0, 0);
+    # SOS at 2 + 69 + 44 + 13 = 128; Ns at 132.
+    assert_eq(load8(b + 129), 0xDA, "fixture: SOS at 128");
+    store8(b + 132, 0);
+    _expect_decode_code(b, lo, CHITRA_ERR_DIMENSIONS, "B-3: GATE 0 still refuses a bomb with no readable scan");
+    return 0;
+}
+
 fn main() {
+    test_gate0_still_names_a_headerless_bomb();
+    test_dqt_table_id_past_the_store_rejected();
+    test_dht_symbol_count_past_the_table_rejected();
+    test_ac_run_past_coefficient_63_rejected();
+    test_mode_markers_each_pinned();
+    test_table_segment_lengths_pinned();
+    test_sof0_fields_pinned();
+    test_sos_fields_pinned();
+    test_zrl_past_the_block_rejected();
+    test_per_scan_gate1_pinned();
+    test_hierarchical_and_extension_markers_refused();
+    test_skippable_segments_still_skipped();
+    test_sos_before_sof_is_a_misplaced_marker();
+    test_header_cut_at_a_segment_boundary_is_truncated();
+    test_padding_does_not_buy_the_planes_back();
+    test_multiscan_padding_does_not_buy_the_planes_back();
+    test_grey_summed_span_gate_pinned_on_its_own();
+    test_dqt16_reports_the_frame_mode();
+    test_dqt16_in_a_baseline_frame_is_still_refused();
+    test_empty_tables_cost_nothing();
+    test_malformed_table_headers_cost_nothing();
+    test_app14_transform_is_inert_on_a_grey_frame();
+    test_app14_transform2_is_inert_under_jfif();
+    test_app14_the_last_transform_wins();
+    test_app14_ycck_four_components_is_a_component_refusal();
+    test_short_jfif_app0_does_not_override_adobe_rgb();
+    test_full_jfif_app0_still_outranks_adobe();
     test_jpeg_rgba8_wrapper_distinguishes_w_from_h();
     test_jfif_app0_outranks_rgb_component_ids();
     test_rgb_component_ids_still_win_without_jfif();

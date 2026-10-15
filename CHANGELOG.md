@@ -9,6 +9,166 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 _Nothing yet._
 
+## [1.1.1] - 2026-10-15 — a P(-1) sweep after the dependency boundary moved
+
+The sixth security audit: [`docs/audit/2026-10-15-audit.md`](docs/audit/2026-10-15-audit.md).
+Five lenses — PNG and the sankoch boundary, JPEG, BMP + GIF, cross-cutting, and
+the gate stack — each finding put to an independent verifier whose job was to
+refute it by reproduction. **65 filed, 57 confirmed, 8 refuted**, about 40
+distinct defects: 5 HIGH, 10 MEDIUM, the rest LOW, **no CRITICAL**. Every repair
+carries a regression test checked to fail against the pre-repair code.
+
+⛔ **Nothing frozen changed** — the 29 names, both record layouts and every
+`ChitraErrCode` value are as at 1.0.0, and the frozen values are now pinned by a
+test (C-9). ⚠ Several outputs and error codes *did* change, every one toward the
+reference decoders; the audit's § 5 lists them, and two land in kii's error
+mapping.
+
+### Fixed — JPEG colour space could be overridden without an error (HIGH)
+
+- **C-1** · A 5–13-byte `JFIF\0` APP0 counted as JFIF and overrode an Adobe RGB
+  file's declared colour space: every colour byte wrong, `source_color_type`
+  0x103. libjpeg requires a 14-byte payload; so does chitra now.
+- **C-2** · APP0/APP14 between scans re-decided the colour space *after* the
+  scans had decoded. libjpeg fixes it at the first SOS; so does chitra now.
+
+Both are 1.0.3's B-2 class (crafted bytes, whole-image colour error, a false
+`source_color_type`), and both are now byte-identical to `djpeg -nosmooth`.
+
+### Fixed — guards held by no test (HIGH / MEDIUM)
+
+- **C-3** · Out-of-bounds guards in GIF (frame rect, palette index, LZW code,
+  dictionary ceiling), BMP (palette span, both RLE `y >= h` write bounds, delta,
+  absolute-mode `row_cap`), JPEG (DHT Σ ≤ 256, DQT `Tq`, coefficient index) and
+  PNG (sub-byte palette index) could each be deleted with every suite and every
+  fuzz harness green — the bump arena absorbs the overrun.
+- **C-6** · A mutation sweep of 171 guards left **106** unnoticed. Every
+  non-equivalent survivor now has a cell; the equivalent ones are documented as
+  such in the code. **Erratum**: the 2026-08-24 audit's claim that A-5 (GCE
+  revocation) and A-6 (GCE block size) carried regression tests was false — no
+  test for either ever existed. Both have one now.
+
+### Fixed — refusals that cost more than they should
+
+- **C-4** (MEDIUM) · JPEG GATE 2 fired only after every plane was allocated, so
+  4,200 bytes of APP1 padding bought 1.0.3's B-3 refusal back: a 16,658-byte file
+  spent **50,354,832 B**. An allocation-free structural pre-pass now runs it
+  before any plane: **22,160 B**, single- and multi-scan.
+- **C-10** · PNG colour type 3 without PLTE, or a wrong-length tRNS:
+  71–100 MB → **120 B**.
+- **C-11** · An empty DQT/DHT triggered the full table allocation:
+  22,160 B → **400 B**.
+- **C-12** · An out-of-range GIF palette index: 67,109,120 B → **256 B**.
+
+### Fixed — refusals that named the wrong cause
+
+- **C-5** (MEDIUM) · Every `cjpeg` file at quality ≤ 23 (16-bit DQT under SOF1)
+  was refused as `JPEG_DQT`, "bad quant table". The frame's mode now decides:
+  SOF1 → `JPEG_MODE` (22), SOF2 → `JPEG_PROGRESSIVE` (19), SOF9 →
+  `JPEG_ARITHMETIC` (20). A 16-bit table in a SOF0 frame is still `JPEG_DQT`.
+- **C-13** · sankoch's `ERR_OOM` from `zlib_decompress` was reported as
+  `CHITRA_ERR_INFLATE` — "corrupt stream" — for a valid PNG under memory
+  pressure. Now `CHITRA_ERR_OOM`.
+- **C-14** · A second IHDR: `UNSUPPORTED` → `BAD_CHUNK`.
+- **C-15** · The Adobe APP14 transform is judged at the first SOS, not at parse
+  time: grey and JFIF frames ignore it, YCCK gets `JPEG_COMPONENTS` (23).
+- **C-16** · JPEG truncation reports `TRUNCATED` instead of `SOS` / `MARKER`.
+- **C-17** · JPG/DHP/EXP and `0xF0–0xFD` segments were *skipped* (a file with
+  `FF C8` decoded); they refuse as `JPEG_MODE`. SOS before SOF → `JPEG_MARKER`.
+- **C-18** · `chitra_err_name(CHITRA_ERR_SIGNATURE)` read "bad PNG signature"
+  for every format; it reads "unrecognised image signature". Names are not
+  frozen — match on codes.
+- **C-19** · OS/2 2.x BMP with compression ≥ 3 → `BMP_COMPRESSION`.
+
+### Fixed — output, toward the references
+
+- **C-20** · Out-of-sequence RSTn and unconsumed entropy bytes before EOI now
+  report `seen_iend` = 0. ⚠ Stricter than djpeg, which is silent about up to ~6
+  trailing bytes; every real-encoder file checked (ffmpeg, ImageMagick, `cjpeg`)
+  still reports 1.
+- **C-21** · A truncated restart-interval JPEG decodes partially with
+  `seen_iend` = 0 (it was refused), as one without DRI always did.
+- **C-22** · Components within one scan must appear in frame order (T.81 §
+  B.2.3), as djpeg and ImageMagick enforce. ⚠ **Correction to 0.8.0**: the
+  in-code reason for not checking it — "libjpeg writes such scans" — was false.
+- **C-23** · `bfOffBits = 0` BMPs at 16/24/32 bpp read their colour table as
+  pixels; the table is skipped.
+- **C-24** · BMP channels wider than 8 bits scale with ImageMagick's mapping (they
+  were ±1). The verifier's § 13.13 formula was rejected: it moved samples away
+  from the reference.
+- **C-25** · An End-less GIF whose final padding fills a code now decodes.
+
+### Changed — the gate stack
+
+- **C-7** · `make fuzz` runs every harness under **`--poison`** (allocator
+  redzones) and is exactly what CI runs. Proven: a neutered GIF frame-rect guard
+  passed plain fuzzing and fails `make fuzz`.
+- **C-8** · Every fuzz harness has a fixture for each structurally distinct path
+  it claimed to drive and never reached (Adam7, palettes, sub-byte, 16-bit and
+  tRNS PNG; restart-interval and RGB JPEG; RLE4 BMP; a GIF that fills its
+  dictionary), each proven reached by an exit-on-entry probe. A budget mode
+  exercises `chitra_image_decode_budget` (C-33), which no harness called.
+- ⭐ **Fuzz memory: JPEG peak RSS 16.3 GB → 54 MB**, GIF 8.7 GB → 207 MB. The
+  arena never frees between cases, and a 16 GB CI runner was one fixture away
+  from running out. Each harness now resets the arena every 1,024 cases, after
+  sweeping the poison redzones. Assertion counts unchanged.
+- **C-9** · All 37 `ChitraErrCode` values pinned literally; `check-surface.sh`
+  also fails on an unnamed or unpinned enum member.
+- **C-27** · Both lint loops fail on lint's own exit status (a file that did not
+  compile passed as clean), and CI compiles the bench harness (`make
+  bench-build`, also in `test-all`).
+- **C-28** · CI and release run `cyrius deps --locked` and fail if resolution
+  rewrites `cyrius.lock` — a deleted or stale lock used to go green.
+- **C-29** · `version-check.sh` fails closed on the README and also checks
+  `state.md`'s `chitra_version()` claims.
+- **C-31** · All 13 lint deferral notes reworded (none silenced), and
+  **`--strict-deferrals` is on**. On 6.7.9 the flag works in either argument
+  position; the 6.6.2 ordering trap is gone.
+- **C-36** · `check-anchors.sh` flags citations that land on a comment-only line
+  or away from the identifier they name, and exits 1. CHANGELOG.md is excluded
+  alongside `docs/audit/`: a released entry is never edited.
+
+### Documentation
+
+- **The sankoch floor (C-26)**: chitra pins sankoch 2.8.7, but a consumer's own
+  bundle wins, and below **2.8.6** inflate accepts stream classes zlib refuses.
+  The getting-started guide and SECURITY.md state the floor and the toolchain
+  mapping (stdlib sankoch is 2.8.7 from cyrius 6.7.11; 6.7.6–6.7.10 ship 2.8.3).
+  ⚠ **Correction to 1.1.0**: its claims that PNG refuses what zlib refuses and is
+  22–75 % faster hold only when the program links sankoch ≥ 2.8.6 — for kii,
+  mabda and aethersafha on 6.7.9 they do not.
+- **Corrections to figures in released entries**, recorded here rather than
+  back-dated: the BMP byte-budget refusal costs **128 B**, not 144 (since 0.5.2);
+  the bundle exports **75** names, 46 internal (since 1.0.3); and the GIF
+  amplification cap admits **16,384 pixels per LZW byte** — a **1 KB** floor for a
+  4096² frame and ~11× headroom over ImageMagick's own solid GIF, not the 4 KB and
+  3.2× 0.5.3 stated (the code was right; the units in the docs were not).
+- CLAUDE.md's hardening checklist, SECURITY.md, ADRs 0002/0003/0004/0008 and
+  architecture/004 re-anchored and updated for every behaviour above.
+- **`docs/development/roadmap.md` is forward-only** — shipped work is this file's,
+  not the roadmap's. The release table and the v1.0 criteria are gone (398 → ~260
+  lines); what remains is sequenced as 1.1.x maintenance, 1.2.0 (PNG past 16 MiB
+  inflated), unscheduled 1.x candidates, a list of what would need a major, the
+  lessons carried forward and the durable out-of-scope guards. It had two errors
+  of its own, both corrected: appending a `ChitraImage` field is additive (the
+  record is append-only), not a major; and fancy chroma upsampling was listed
+  both as a candidate and as out of scope.
+
+### Deferred
+
+- **cc-13** — 125 unprefixed bundle globals (`IMAGE_*_OFFSET`, `HT_SIZE`, …) that a
+  consumer's same-named global would silently override. Confirmed, LOW, no
+  collision in any consumer today; a 125-name rename is its own patch (roadmap
+  1.1.x).
+
+### Numbers
+
+**3,949 assertions across 13 suites** (3,086 at 1.1.0) and **11,185,700 fuzz
+assertions** under `--poison` (10,732,113 at 1.1.0, unpoisoned), 0 failures. The
+53-file reference corpus decodes byte-identically to 1.1.0 except `jpg_q5.jpg`,
+whose refusal code is now `JPEG_MODE`. `build/chitra_smoke` 347,912 B (36,616 B
+with DCE); `dist/chitra.cyr` 331,215 B.
+
 ## [1.1.0] - 2026-10-15 — chitra links sankoch's `zlib` profile, not all of sankoch
 
 ⛔ **No decode code changed and no name moved.** `scripts/check-surface.sh` reports **75 exports,

@@ -156,11 +156,11 @@ sankoch 2.8.0.** Through 2.7.x `_sankoch_lock`'s copy of the guard was compiled
 out under `CYRIUS_TARGET_AGNOS`, so on AGNOS only `crc32_init_table`'s copy
 fired (2.8.0 runs it on every target; the 2.8.7 `zlib` profile chitra links
 does). chitra's PNG path calls `crc32_init_table()`
-(`src/png_filter.cyr:372`) well before `zlib_decompress()` (`:680`), so the
+(`src/png_filter.cyr:372`) well before `zlib_decompress()` (`:743`), so the
 covering call always happens first.
 
 ⚠ **This note is retired, not deleted, and the guard is now asserted in-tree.**
-`tests/tcyr/alloc_reset.tcyr` (15 assertions) pins the behaviour, because the
+`tests/tcyr/alloc_reset.tcyr` (22 assertions at 1.1.1) pins the behaviour, because the
 fix lives in gitignored `lib/` and a future pin bump — since 1.1.0, a
 `[deps.sankoch]` tag bump — could withdraw it with no diff in `src/` to show
 for it.

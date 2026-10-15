@@ -47,6 +47,12 @@ The realistic threats:
 For PNG, DEFLATE decompression itself is **not** chitra's code — it is
 `sankoch`'s job (RFC 1950 / 1951 `zlib_decompress`); chitra owns the framing, the
 bounds discipline around the inflate call, and the post-inflate exact-size check.
+⚠ **Which sankoch runs is the consumer's program's choice, not chitra's.** chitra
+pins the 2.8.7 `zlib` profile, but a consumer's own sankoch bundle wins
+(closest-wins), and below **2.8.6** inflate accepts stream classes zlib refuses
+(incomplete Huffman codes, `hdist` 31/32). chitra's guarantee that its PNG path
+refuses what zlib refuses therefore holds only when the linked sankoch is ≥ 2.8.6
+— see the getting-started guide for the toolchain mapping.
 For JPEG, the Huffman/entropy decode **is** chitra's own code — its bounds are
 the subject of the 2026-06-27 audit.
 
@@ -58,7 +64,7 @@ decode. Each maps to a `ChitraErrCode`
 
 - ✅ **PNG signature check** — the 8-byte magic is length-validated and matched
   before any chunk is read (`chitra_png_check_signature`,
-  [`src/png_chunks.cyr:196`](src/png_chunks.cyr)). Failure →
+  [`src/png_chunks.cyr:197`](src/png_chunks.cyr)). Failure →
   `CHITRA_ERR_SIGNATURE`.
 - ✅ **Self-validating bounds-checked cursor** — every read goes through a
   cursor that rejects negative lengths and reads past the end of the input
@@ -66,7 +72,7 @@ decode. Each maps to a `ChitraErrCode`
   Failure → `CHITRA_ERR_TRUNCATED`.
 - ✅ **Per-chunk CRC-32 validation** — every chunk (IHDR included) is verified
   with `sankoch`'s `crc32` against its trailing CRC (e.g. the IHDR check at
-  [`src/png_filter.cyr:140`](src/png_filter.cyr)); a mismatch aborts the decode
+  [`src/png_filter.cyr:145`](src/png_filter.cyr)); a mismatch aborts the decode
   rather than accepting corrupt or tampered data. Failure → `CHITRA_ERR_CRC`.
 - ✅ **Dimension caps before any multiply** — IHDR `width`/`height` are rejected
   if zero/negative or over the per-side cap `CHITRA_MAX_DIM = 65535`, *before*
@@ -77,7 +83,7 @@ decode. Each maps to a `ChitraErrCode`
 - ✅ **Decompression-bomb ratio cap** — the ratio of inflated output to
   compressed IDAT input is bounded by `CHITRA_MAX_INFLATE_RATIO = 1100`
   (constant in [`src/png_chunks.cyr:43`](src/png_chunks.cyr); checked at
-  [`src/png_filter.cyr:622`](src/png_filter.cyr)), just above DEFLATE's
+  [`src/png_filter.cyr:636`](src/png_filter.cyr)), just above DEFLATE's
   theoretical 1032:1 maximum (RFC 1951 § 3.2.5), so a zip-bomb-style input is
   rejected instead of expanded. Failure → `CHITRA_ERR_DIMENSIONS`.
   ⚠️ **Accepted risk, stated rather than quietly fixed**: this ratio bounds
@@ -106,10 +112,19 @@ decode. Each maps to a `ChitraErrCode`
   `crc32_init_table()`'s OOM return was discarded, so under memory pressure the
   next `crc32()` read through a NULL table and the process died with SIGSEGV on
   an ordinary valid PNG (B-1). The contract has always been
-  `(0, *err_out = CHITRA_ERR_OOM)`; now the code keeps it. The IHDR-derived inflated/pixel buffer sizes over the ceiling
-  fail as `CHITRA_ERR_DIMENSIONS` ([`src/png_filter.cyr:603-607`](src/png_filter.cyr));
+  `(0, *err_out = CHITRA_ERR_OOM)`; now the code keeps it.
+  ⚠ **And until 1.1.1 it held for `crc32_init_table` only.** `zlib_decompress`
+  returns `-ERR_OOM` when sankoch's own allocations fail — its lazily built
+  decode tables on a process's first inflate, the 32-byte bit-reader on every
+  call — and chitra reported that as `CHITRA_ERR_INFLATE`, which a caller reads
+  as a damaged file: a valid PNG decoded under memory pressure could be refused,
+  and cached, as corrupt. It now maps to `CHITRA_ERR_OOM`
+  ([`src/png_filter.cyr:751`](src/png_filter.cyr)); every other negative return
+  is still the stream's fault. With that, the clause above is true of every
+  allocating sankoch entry point chitra calls. The IHDR-derived inflated/pixel buffer sizes over the ceiling
+  fail as `CHITRA_ERR_DIMENSIONS` ([`src/png_filter.cyr:617-624`](src/png_filter.cyr));
   the IDAT-accumulator over the ceiling and any allocation that returns null
-  fail as `CHITRA_ERR_OOM` ([`src/png_filter.cyr:469`](src/png_filter.cyr)).
+  fail as `CHITRA_ERR_OOM` ([`src/png_filter.cyr:483`](src/png_filter.cyr)).
 - ✅ **Inflate exact-size second line of defense** — the inflated stream size
   must match exactly the size derived from IHDR (`height × (1 + row_bytes)`);
   any mismatch from `sankoch` aborts the decode. Failure →
@@ -124,13 +139,13 @@ decode. Each maps to a `ChitraErrCode`
   combination) — see [`src/png_filter.cyr:165-185`](src/png_filter.cyr).
 - ✅ **Per-row filter-byte validation** — every scanline's filter type is
   checked against `{0,1,2,3,4}` (spec § 9) on both the non-interlaced and the
-  Adam7 paths ([`src/png_filter.cyr:37`](src/png_filter.cyr)); an out-of-range
+  Adam7 paths (`_chitra_unfilter_row`, [`src/png_filter.cyr:39`](src/png_filter.cyr)); an out-of-range
   byte aborts before unfilter. Failure → `CHITRA_ERR_FILTER`.
 - ✅ **Palette-index bounds checks** — every palette pixel index, on both the
   sub-byte and the depth-8 path, is rejected if it points past the PLTE entry
   count, and per-entry tRNS reads are bounded by the tRNS array length
-  ([`src/png_color.cyr:196`](src/png_color.cyr),
-  [`src/png_color.cyr:328`](src/png_color.cyr)). Palette images with a
+  ([`src/png_color.cyr:197`](src/png_color.cyr),
+  [`src/png_color.cyr:335`](src/png_color.cyr)). Palette images with a
   missing/short PLTE are rejected. Failure → `CHITRA_ERR_BAD_CHUNK`.
 - ✅ **PLTE / tRNS structural guards** — PLTE is rejected if duplicated, if it
   appears after IDAT, if its length exceeds 768 bytes, or if it is not a
@@ -138,9 +153,24 @@ decode. Each maps to a `ChitraErrCode`
   pass and must have the correct length for the color type
   ([`src/png_color.cyr:125`](src/png_color.cyr)). Failure →
   `CHITRA_ERR_BAD_CHUNK`.
+  ⚠ **Since 1.1.1 the facts the chunk list has already settled are refused
+  before the first allocation**, at the end of the chunk walk
+  ([`src/png_filter.cyr:682-711`](src/png_filter.cyr)): colour type 3 with no
+  (or an empty) PLTE, a palette tRNS longer than the palette, and a colour-type
+  0 / 2 tRNS that is not 2 / 6 bytes. Through 1.1.0 the colour pass refused them
+  only after the IDAT concatenation, the inflate buffer, the scanlines and the
+  RGBA buffer had been allocated — a **2,116-byte** 4096×4096 depth-1 palette
+  PNG with no PLTE spent **71,335,368 bytes** to return `CHITRA_ERR_BAD_CHUNK`,
+  in an arena that never frees. The early checks sit after the bomb caps (a
+  bomb keeps `CHITRA_ERR_DIMENSIONS`) and mirror the colour pass's conditions
+  exactly, so no accept/reject outcome moved — only what a refusal costs. The
+  colour-pass checks remain, as defence in depth for its `@internal` entry.
 - ✅ **Structural completeness checks** — IEND must be zero-length; a
   structurally valid PNG with zero IDAT is rejected before any divide on the
-  scanline geometry. Failures → `CHITRA_ERR_BAD_CHUNK` / `CHITRA_ERR_NO_IDAT`.
+  scanline geometry; and a **second IHDR** is malformed (§ 5.6 allows one) —
+  through 1.1.0 it fell to the unknown-critical-chunk branch and reported
+  `CHITRA_ERR_UNSUPPORTED`, "valid but declined" (1.1.1). Failures →
+  `CHITRA_ERR_BAD_CHUNK` / `CHITRA_ERR_NO_IDAT`.
 - ✅ **Fail-fast short reads** — chunk headers, chunk data, and CRC spans are
   all bounds-checked against the remaining input before they are scanned, so a
   truncated stream is detected during the walk rather than read past.
@@ -176,11 +206,39 @@ conformance, resource and defence-in-depth rather than exploit fixes:
   stream bytes as a length and skip that far: bounds-checked, so never an
   overread, but a cursor steered by attacker input. Failure →
   `CHITRA_ERR_JPEG_MARKER`.
+  **1.1.1 finished the table**: `0xC8` (JPG), `0xDE` (DHP), `0xDF` (EXP) and
+  `0xF0`–`0xFD` (JPGn, JPEG-LS among them) name processes chitra does not
+  decode, yet fell through to the length-skip, so a file carrying one ahead of
+  its SOF0 decoded with `seen_iend = 1` where libjpeg refuses it. They now
+  refuse as `CHITRA_ERR_JPEG_MODE`. An SOS with no frame header in front of it
+  is a misplaced marker, `CHITRA_ERR_JPEG_MARKER` (it read `JPEG_SOF`).
+- ✅ **The refusal names the mode, not a symptom of it (1.1.1).** libjpeg writes
+  its DQT segments before the SOF, and cjpeg emits SOF1 exactly when a
+  quantization value exceeds 255 — every cjpeg file at quality 23 or below.
+  chitra refused a 16-bit table (`Pq = 1`) on sight, so all of those, and their
+  progressive and arithmetic siblings, came back `CHITRA_ERR_JPEG_DQT` ("bad
+  quant table") and a consumer routing `CHITRA_ERR_JPEG_PROGRESSIVE` to a
+  fallback decoder saw a corrupt file instead. A 16-bit table ahead of the frame
+  header is now length-checked, consumed without being stored, and judged by
+  the SOF that follows: SOF1 → `JPEG_MODE` (22), SOF2 → `JPEG_PROGRESSIVE` (19),
+  SOF9 → `JPEG_ARITHMETIC` (20). With SOF0 — or after it — it is still
+  `CHITRA_ERR_JPEG_DQT`.
 - ✅ **Entropy-stream conformance** — `0xFF` fill runs are collapsed on both
   the header and entropy sides (§ B.1.1.2), and a ZRL run past coefficient 63
   is rejected like the run overrun beside it instead of exiting as a clean
   decode. The first accepts valid input that was previously refused; the second
   refuses corrupt input that was previously accepted.
+- ✅ **A damaged scan cannot report a clean close (1.1.1).** `seen_iend` now
+  also reads 0 when a restart marker arrives out of its modulo-8 sequence (an
+  interval lost or repeated: the decoder resyncs on it, so every bit is real but
+  later MCUs sit in the wrong place) and when entropy bytes remain that no MCU
+  consumed (libjpeg's "extraneous bytes"). Neither is an error — chitra returns
+  the image, as libjpeg does. And a restart-interval file **truncated** inside
+  its scan now decodes partially with `seen_iend = 0`, exactly as a file without
+  DRI always has: through 1.1.0 the exhausted span at the next restart point was
+  refused as `CHITRA_ERR_JPEG_ENTROPY`, so a partial download of any camera or
+  phone JPEG with restart markers was refused outright. A restart point holding
+  something other than an RSTn still refuses.
 - ✅ **The error path cannot fail silently** — `chitra_err_new` no longer
   returns `0` when its 16-byte allocation fails. It previously stored through a
   null pointer *and* returned 0, which every caller reads as "no error" —
@@ -195,10 +253,13 @@ conformance, resource and defence-in-depth rather than exploit fixes:
   What replaced the gate as the bound is the **per-component coverage
   bitmask** — a component may be decoded exactly once, so a file gets at most
   `Nf` scans and every scan must name something new (refused in
-  `_jpeg_parse_sos`, [`src/jpeg.cyr:163`](src/jpeg.cyr), set at `:169`; the
-  driver `_jpeg_decode_scans` at `:763` reads the mask at `:805`). That is what makes the scan walk
+  `_jpeg_parse_sos`, [`src/jpeg.cyr:180`](src/jpeg.cyr), set at `:186`; the
+  driver `_jpeg_decode_scans` at `:963` reads the mask at `:1055`). That is what makes the scan walk
   terminate; no scan counter and no resume tripwire were added, because neither
-  could fire before coverage does. The measured reason it was not relaxed
+  could fire before coverage does. **Within** one scan the components must
+  follow frame order (T.81 § B.2.3, refused at `:170` since 1.1.1 — libjpeg
+  enforces it and cjpeg will not write anything else; chitra had accepted all
+  five permutations of a 4:4:4 scan). The order of the *scans* stays free. The measured reason it was not relaxed
   earlier still stands as the reason it needed its own cut: a naive relaxation
   makes those files **decode to a wrong image with no error raised**. See
   [ADR 0006](docs/adr/0006-defer-jpeg-multiscan-resumption.md), amended.
@@ -210,6 +271,18 @@ conformance, resource and defence-in-depth rather than exploit fixes:
   wrong-denominator defect, live in the JPEG path. The denominator is now a
   structural entropy-span walk that stops at the first marker which is neither
   byte-stuffing nor RSTn, so padding before *or* after the scan buys nothing.
+  ⛔ **Until 1.1.1 that held for the verdict but not for the bill.** The
+  whole-image bound on the *summed* spans (GATE 2) ran only once every scan had
+  decoded — every plane already allocated — and the only gate in front of the
+  planes (GATE 0, 1.0.3) measured `len`, which counts padding. So 4,200 bytes of
+  APP1 bought a 16,658-byte three-scan file back the full **50,354,832 bytes**
+  1.0.3 had retired, and 12,300 bytes before the frame or after EOI did the same
+  for a single scan. The sum is byte-structural, so an allocation-free pre-pass
+  (`_jpeg_structural_espan`) now computes it from the scan headers and the
+  segment lengths alone and GATE 2 refuses **before any plane exists**
+  ([`src/jpeg.cyr:1010-1016`](src/jpeg.cyr)); the post-decode GATE 2 stays as
+  the exact backstop. Padding no longer buys the planes back: each of those
+  files now refuses for the 22,160-byte per-frame table cost.
 - ✅ **The refusal path is cheap (0.6.1).** A JPEG refused for good reason cost
   **22,160 bytes** on every call — the quantization store and eight Huffman
   records, allocated before any check could reject the file, on an allocator
@@ -219,9 +292,16 @@ conformance, resource and defence-in-depth rather than exploit fixes:
   which matters because a single DHT segment may carry **3,854 table
   definitions** — allocating per definition would have replaced a flat cost
   with one that scales with file size (9,496,704 bytes from a 64 KB file).
+  ⚠ **"First defines something" is true as of 1.1.1, not 0.6.1.** Both parsers
+  allocated on segment *entry*, ahead of every table header, so a DQT or DHT
+  that defined nothing (`Lq`/`Lh` = 2) or whose first header was malformed paid
+  the whole store: the 12-byte `FF D8 FF DB 00 02 FF C4 00 02 FF D9` spent
+  22,160 bytes (~1,847:1) and the 7-byte `FF D8 FF C4 00 03 00` 20,112. The
+  store is now allocated immediately before the first store into it, once that
+  table's header has validated, so an empty segment costs nothing.
 - ✅ **A caller can bound one decode (0.6.1).** `chitra_image_decode_budget`
   refuses before beginning any decode whose RGBA8 output would exceed
-  `max_bytes`, at a cost of 16 bytes (144 for BMP). It bounds the **output**,
+  `max_bytes`, at a cost of 16 bytes (128 for BMP). It bounds the **output**,
   not the peak, and it does not cover sankoch's allocations or the cumulative
   total across calls — all stated on the function and in
   [ADR 0008](docs/adr/0008-byte-budget-as-shipped.md), because a memory
@@ -231,9 +311,22 @@ conformance, resource and defence-in-depth rather than exploit fixes:
   Guessing produced a silent whole-image colour error on real `cjpeg -rgb`
   output — 1,149 of 1,536 bytes wrong. An undefined transform is declined
   rather than guessed at.
+  Since 1.0.3 a JFIF APP0 outranks all three (JFIF *defines* three components
+  as Y/Cb/Cr), which is libjpeg's order. **1.1.1 tightened when that evidence
+  counts.** An APP0 is JFIF only with a payload of at least 14 bytes (libjpeg's
+  `APP0_DATA_LEN`): a bare 5-byte `"JFIF\0"` had outranked an explicit
+  `transform=0`, and nine spliced bytes sent a `cjpeg -rgb` file's RGB samples
+  through BT.601 again. APP0 and APP14 after the first SOS are skipped, so the
+  colour space is fixed by what precedes the first scan — a segment spliced
+  between scans had been re-deciding the colour of samples already decoded. And
+  the transform is judged once, at the first SOS, where it decides something: a
+  3-component frame with no JFIF declines a transform above 1 as
+  `CHITRA_ERR_UNSUPPORTED`; a grey or JFIF frame ignores the byte, as libjpeg
+  does; and a 4-component YCCK frame now reports `CHITRA_ERR_JPEG_COMPONENTS`
+  rather than 4.
 - ✅ **The ΣHj·Vj ≤ 10 cap is conditioned, not relaxed (0.6.0)** — T.81 § B.2.3
   conditions it on `Ns > 1`, and it bounds an interleaved MCU. As of **0.8.0 it lives at the scan
-  header** ([`src/jpeg.cyr:183`](src/jpeg.cyr)), summed over the *scan's* own
+  header** ([`src/jpeg.cyr:213`](src/jpeg.cyr)), summed over the *scan's* own
   components rather than the frame's — which is where § B.2.3 puts it, and
   which is required for correctness: applied frame-wide it rejected files
   libjpeg writes, since `cjpeg -sample 4x4,1x1,1x1 -scans` is legal, sums to
@@ -246,7 +339,7 @@ conformance, resource and defence-in-depth rather than exploit fixes:
   BMP finding.
 
 > Note on two narrow codes: `CHITRA_ERR_INTERLACE` and `CHITRA_ERR_BIT_DEPTH`
-> ([`src/error.cyr:40-41`](src/error.cyr)) are validity rejections, not
+> ([`src/error.cyr:43-44`](src/error.cyr)) are validity rejections, not
 > capability limits — chitra decodes Adam7 and every spec-legal bit depth, so
 > they fire only on genuinely illegal values (an interlace method outside
 > {0,1}, or a bit-depth × color-type pair outside § 11.2.2 Table 11.1, e.g.
@@ -272,7 +365,11 @@ turn it away, so the header parser *is* the entire perimeter:
   not "wherever the palette ended" — so it can point anywhere in or past the
   buffer. The full `data_off + stride * height` span is validated against the
   input length before a single pixel is read. Failure →
-  `CHITRA_ERR_TRUNCATED`.
+  `CHITRA_ERR_TRUNCATED`. A **zero** offset means "immediately after the
+  headers", and since 1.1.1 that inferred start also skips the optional colour
+  table a 16/24/32-bpp file declares through a non-zero `biClrUsed` — with no
+  palette at those depths it had landed on the table and decoded its entries as
+  pixels, with no error.
 - ✅ **Palette span and index bounds.** The palette span is validated against
   the input length, and every index is **hard-rejected** against the declared
   entry count rather than clamped — the same posture as the PNG palette path.
@@ -307,6 +404,14 @@ turn it away, so the header parser *is* the entire perimeter:
   "at least one colour channel" guard **unreachable dead code** — the defaults
   erased exactly the condition it tests. A guard that cannot fire is worse
   than no guard, because it also documents a protection you do not have.
+  **1.1.1 corrected the widening of channels wider than 8 bits.** Bit
+  replication (which still governs every sub-8-bit field) degenerated there to
+  truncation, off by one on about a quarter of samples. chitra now uses
+  ImageMagick's mapping — the field placed at the top of a 16-bit sample,
+  `x16 = v << (16 − w)` (or `v >> (w − 16)` above 16 bits), then
+  `round(x16 / 257)` — which matched ImageMagick on every value of the 9-, 10-,
+  11-, 12-, 16- and 24-bit fields measured, where the § 13.13 rescale still
+  disagreed in both directions.
 - ✅ **RLE amplification cap (0.5.3)** — `CHITRA_MAX_BMP_RLE_RATIO` = 4096
   bounds decoded output against RLE bytes **consumed**. Demonstrated, not
   argued: a **1,082-byte** RLE8 file declaring 4096×4096 decoded into ~64 MB
@@ -318,7 +423,11 @@ turn it away, so the header parser *is* the entire perimeter:
 - ✅ **Accepted DIB header sizes are an allow-list**, not a lower bound:
   12 / 40 / 52 / 56 / **64** / 108 / 124 — 64 being the OS/2 2.x
   `BITMAPCOREHEADER2` admitted in 0.7.2, whose fields past +40 are
-  units/recording/rendering, so its mask fields are deliberately *not* read.
+  units/recording/rendering, so its mask fields are deliberately *not* read —
+  and whose compression codes diverge from Windows' at 3 (Huffman 1D) and 4
+  (RLE24), so since 1.1.1 any compression ≥ 3 on that header is
+  `CHITRA_ERR_BMP_COMPRESSION` rather than bitfields read from a header that
+  has no mask fields.
   The other OS/2 sizes (16..60) are still refused: their compression and
   clrused fields are absent and would have to be guessed. An unrecognised size
   rejects rather than being treated as "at least an INFO header". **0.7.2 also
@@ -367,7 +476,12 @@ hostile LZW stream takes:
   must distinguish a complete frame from a prefix has to read that accessor;
   the error channel will not tell it. Byte-level truncation of the file itself
   — a sub-block chain running off the end — still rejects with
-  `CHITRA_ERR_TRUNCATED`.
+  `CHITRA_ERR_TRUNCATED`. The same tolerance now covers the case it used to
+  miss (1.1.1): a **full** frame with no End code, followed only by the last
+  byte's padding — fewer than 8 bits — ends there, as ImageMagick and ffmpeg
+  end it. Through 1.1.0 that padding read as one more code whenever it was a
+  whole code wide, one pixel past the frame, and the file was refused as a bomb:
+  34 of 150 such files, depending only on bit alignment.
 - ✅ **Sub-block chains** — every length byte is bounds-checked against the
   input, and the gathered payload is capped at the input length, so a chain
   cannot make chitra hold more than the file itself. The same walk skips
@@ -377,15 +491,28 @@ hostile LZW stream takes:
   A frame hanging off the canvas edge is rejected, not clamped — clamping would
   silently decode a different image than the file describes.
 - ✅ **Palette indices hard-rejected** against the table in force (a local
-  color table overrides the global one for its image).
+  color table overrides the global one for its image) — across the whole
+  decoded index plane, and since 1.1.1 **before the canvas is allocated**. The
+  check used to live in the paint loops, which run after the logical-screen
+  canvas exists, so a 35-byte file naming a 4096×4096 screen and one
+  out-of-range index spent 67,109,120 bytes to be refused.
 - ✅ **Amplification cap (0.5.3)** — `CHITRA_MAX_GIF_RATIO` = 16384 bounds
-  decoded output against the compressed stream, checked **before** the
+  the decoded frame against the compressed stream, checked **before** the
   allocation it exists to prevent (the first version fired after it). A
-  **797-byte** GIF declaring 4096×4096 decoded into ~64 MB. The cap is
-  deliberately looser than PNG's 1100:1 because **LZW's legitimate compression
-  of degenerate content is close to the bomb ratio** — a solid 4096×4096
-  really does compress to ~13 KB — so it bounds the extreme case, not the
-  merely aggressive one. Failure → `CHITRA_ERR_DIMENSIONS`.
+  **797-byte** GIF declaring 4096×4096 — 2 LZW bytes — decoded into ~64 MB. The
+  cap is deliberately looser than PNG's 1100:1 because **LZW's legitimate
+  compression of degenerate content is close to the bomb ratio**, so it bounds
+  the extreme case, not the merely aggressive one. Failure →
+  `CHITRA_ERR_DIMENSIONS`.
+  ⚠ **Its units are frame pixels per gathered LZW byte (corrected 1.1.1).** A
+  frame is admitted iff `fw × fh ≤ comp_len × 16384`, where `comp_len` is the
+  LZW payload the sub-block walk gathered — so a 4096×4096 frame needs at least
+  **1,024** LZW bytes, and ImageMagick's own solid 4096×4096 GIF carries 11,513
+  of them (~1,457 pixels per byte): **~11× headroom**. Through 1.1.0 the source
+  comment, the CHANGELOG and the 0.5.3 audit did the arithmetic in RGBA bytes
+  (a 4 KB floor, ~3× headroom), and this bullet put the solid file at ~13 KB;
+  the cap itself has not changed. It still refuses the 797-byte bomb by a
+  factor of 512.
 
   **Scope, stated because 0.6.1 narrowed it**: the ratio bounds the **frame**
   (`fw * fh`), not the RGBA8 buffer chitra returns. 0.6.1 removed the canvas
@@ -457,6 +584,11 @@ chitra's parser beyond spec.
 
 ## Audit history
 
+**2026-10-15** — [P(-1) sweep of all four formats, the sankoch boundary and the
+gate stack](docs/audit/2026-10-15-audit.md), gating 1.1.1 — the first since the
+dependency boundary moved to the sankoch 2.8.7 `zlib` profile. The repairs it
+produced are the items marked **1.1.1** above; the report carries the counts.
+
 **2026-09-10** — [P-1 sweep of all four formats and the gate stack](docs/audit/2026-09-10-audit.md),
 gating 1.0.3. Eleven adversarial lenses, every candidate put to two independent
 skeptics with opposing jobs: 41 confirmed, 5 split, 2 refuted → **19 distinct
@@ -505,13 +637,17 @@ CI workflow at all.
 > Coverage note: as of 0.5.3 every format has been audited, and both
 > hardening gates have been closed since 0.3.3. The fuzz gap
 > is closed — `make fuzz` drives all four public decode entries and the
-> format-sniffing router over ~2.6 M adversarial cases (10,732,113 assertions,
-> 0 failures), including JPEG entropy-segment mutation and the PNG scanline-
+> format-sniffing router under `--poison` (11,185,700 assertions, 0 failures, at
+> 1.1.1), including JPEG entropy-segment mutation and the PNG scanline-
 > and IDAT-stream-mutation modes added in 0.7.3; it runs in CI as of 0.7.3,
 > and asserts the documented
-> `(0, *err_out set)` failure contract as well as survival; and `make bench`
+> `(0, *err_out set)` failure contract as well as survival. Since 1.1.1 every
+> harness runs under `--poison` — allocator redzones, exit 86 on an overwrite,
+> because a small overflow into the next bump allocation does not crash and a
+> plain run cannot see it — and CI's fuzz step *is* `make fuzz`, one definition
+> rather than two loops over two harness sets. `make bench`
 > measures decode latency for all four formats with a committed CSV history. Note
-> that benchmarks are a performance signal, **not** a security one — they are
-> deliberately excluded from `make test-all` so a slow host cannot fail a
-> correctness gate. See
+> that benchmarks are a performance signal, **not** a security one — `make
+> test-all` and CI only *compile* the harness (`make bench-build`), never run
+> it, so a slow host cannot fail a correctness gate. See
 > [`docs/development/roadmap.md`](docs/development/roadmap.md).

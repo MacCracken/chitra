@@ -152,7 +152,22 @@ fn _gif_lzw_decode(data, data_len, min_code_size, out, out_cap, err_out): i64 {
     var guard = 0;
 
     while (done == 0) {
-        code = _gif_br_bits(&br, code_size);
+        # A FULL FRAME WITH ONLY THE LAST BYTE'S PADDING LEFT IS THE END
+        # (gif-noend, 1.1.1). The missing-End tolerance below used to hold only
+        # when that padding was shorter than one code: otherwise its zero bits
+        # read as root code 0, one pixel past a full frame, and out_cap refused
+        # the whole file as a bomb. Whether an End-less file decoded therefore
+        # hung on bit alignment — measured, 34 of 150 such files refused, every
+        # one of which ImageMagick and ffmpeg decode byte-identically. Fewer
+        # than 8 bits left is the tail of the byte the last pixel's code ended
+        # in — zero-fill, or an End code — so chitra stops there, as both of
+        # them stop at a full frame. A whole byte or more past a full frame is
+        # still real extra data, and out_cap below still refuses it.
+        if (written == out_cap) {
+            if (data_len * 8 - load64(&br + LZ_BIT) < 8) { done = 1; }
+        }
+        code = 0 - 1;
+        if (done == 0) { code = _gif_br_bits(&br, code_size); }
         if (code < 0) {
             # Ran out of bits without an End code. Tolerated as a clean end:
             # real encoders in the wild omit the terminator, and the frame is
@@ -177,54 +192,58 @@ fn _gif_lzw_decode(data, data_len, min_code_size, out, out_cap, err_out): i64 {
                     if (done == 0) {
                         if (code == next_code) {
                             # KwKwK: the entry being defined by this very code.
-                            # Only legal with a previous code to extend.
-                            if (prev < 0) {
-                                rc = CHITRA_ERR_GIF_LZW;
-                                done = 1;
-                            }
-                            if (done == 0) {
-                                # KwKwK emits string(prev) + first_char(prev).
-                                # `chain` is a REVERSE stack — the emit loop
-                                # below walks it from the top down — so the
-                                # trailing byte must sit at the BOTTOM, index 0.
-                                # It is not known until the chain walk finds the
-                                # root, so index 0 is reserved and filled after.
-                                sp = 1;
-                                cur = prev;
-                                guard = 0;
-                                while (cur >= clear_code) {
-                                    if (guard >= table_cap) {
+                            # Only legal with a previous code to extend. With
+                            # none, `cur = prev` is -1, the walk is skipped and
+                            # the `cur < 0` check after it refuses — the guard
+                            # that stood here was outcome-identical to that one
+                            # (guards-unreachable, 1.1.1).
+                            #
+                            # KwKwK emits string(prev) + first_char(prev).
+                            # `chain` is a REVERSE stack — the emit loop
+                            # below walks it from the top down — so the
+                            # trailing byte must sit at the BOTTOM, index 0.
+                            # It is not known until the chain walk finds the
+                            # root, so index 0 is reserved and filled after.
+                            sp = 1;
+                            cur = prev;
+                            guard = 0;
+                            # The `guard` and `sp` bounds in both walks
+                            # cannot fire: prefix[k] < k, so a chain has at
+                            # most table_cap - clear_code links. They are the
+                            # deliberate second bound the header describes,
+                            # not untested protection (gate-4, 1.1.1).
+                            while (cur >= clear_code) {
+                                if (guard >= table_cap) {
+                                    rc = CHITRA_ERR_GIF_LZW;
+                                    cur = 0 - 1;
+                                }
+                                if (cur >= clear_code) {
+                                    # Bound on `sp` itself, not merely on
+                                    # the walk length: sp is what indexes
+                                    # `chain`, and the guard counter was
+                                    # one looser than the buffer it was
+                                    # protecting.
+                                    if (sp >= table_cap) {
                                         rc = CHITRA_ERR_GIF_LZW;
                                         cur = 0 - 1;
                                     }
                                     if (cur >= clear_code) {
-                                        # Bound on `sp` itself, not merely on
-                                        # the walk length: sp is what indexes
-                                        # `chain`, and the guard counter was
-                                        # one looser than the buffer it was
-                                        # protecting.
-                                        if (sp >= table_cap) {
-                                            rc = CHITRA_ERR_GIF_LZW;
-                                            cur = 0 - 1;
-                                        }
-                                        if (cur >= clear_code) {
-                                            store8(chain + sp, load64(suffix + cur * 8));
-                                            sp = sp + 1;
-                                            cur = load64(prefix + cur * 8);
-                                            guard = guard + 1;
-                                        }
+                                        store8(chain + sp, load64(suffix + cur * 8));
+                                        sp = sp + 1;
+                                        cur = load64(prefix + cur * 8);
+                                        guard = guard + 1;
                                     }
                                 }
-                                if (rc != 0) { done = 1; }
-                                if (done == 0) {
-                                    if (cur < 0) { rc = CHITRA_ERR_GIF_LZW; done = 1; }
-                                }
-                                if (done == 0) {
-                                    first = load64(suffix + cur * 8);
-                                    store8(chain + sp, first);   # root: emitted FIRST
-                                    sp = sp + 1;
-                                    store8(chain + 0, first);    # repeat: emitted LAST
-                                }
+                            }
+                            if (rc != 0) { done = 1; }
+                            if (done == 0) {
+                                if (cur < 0) { rc = CHITRA_ERR_GIF_LZW; done = 1; }
+                            }
+                            if (done == 0) {
+                                first = load64(suffix + cur * 8);
+                                store8(chain + sp, first);   # root: emitted FIRST
+                                sp = sp + 1;
+                                store8(chain + 0, first);    # repeat: emitted LAST
                             }
                         } else {
                             cur = code;

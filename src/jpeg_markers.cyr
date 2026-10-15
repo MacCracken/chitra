@@ -26,6 +26,7 @@
 #   C0 SOF0(baseline)  C1 SOF1(ext-seq)  C2 SOF2(progressive)  C3 SOF3(lossless)
 #   C4 DHT  C5..C7 differential  C9..CB arithmetic SOF  CC DAC
 #   CD..CF differential arithmetic  D0..D7 RSTn  01 TEM (all standalone)
+#   C8 JPG  DE DHP  DF EXP  F0..FD JPGn (extensions) — refused as JPEG_MODE
 
 # ================================================================
 # Baseline ceilings (validated before any allocation depends on them).
@@ -44,9 +45,10 @@ var CHITRA_MAX_JPEG_RATIO     = 4096;
 
 # ================================================================
 # ChitraJpegFrame — the marker-walk handoff record (internal). Filled by the
-# scan; later bites (restart interval, scan selectors) extend it.
-# CHITRA_JPEG_FRAME_SIZE reserves room so the alloc size is stable as fields
-# are added across the 0.3.0 arc.
+# scan, and carries the restart interval, the per-scan selectors, the colour
+# evidence (JFIF / Adobe transform) and the coverage mask the multi-scan driver
+# reads. CHITRA_JPEG_FRAME_SIZE reserves room so the alloc size stays stable as
+# fields are appended.
 #   +0   width            (i64 — pixels)
 #   +8   height           (i64 — pixels)
 #   +16  precision        (i64 — sample bits; 8 only in 0.3.0)
@@ -93,11 +95,11 @@ var JF_COMP_TQ          = 24;
 # (104 + 128 = 232); it was +296 while the stride was 48.
 var JF_ADOBE_TRANSFORM  = 232;
 # ---- per-SCAN state (0.8.0, multi-scan) ------------------------------------
-# A baseline file may carry several scans, each naming a subset of the frame's
-# components in ITS OWN ORDER (T.81 § A.2.3 composes an interleaved MCU in scan
-# order, not frame order). None of that had anywhere to live: _jpeg_parse_sos
-# built a selector list locally and discarded it, and the MCU loop iterated
-# frame components.
+# A baseline file may carry several scans, each naming a SUBSET of the frame's
+# components (T.81 § A.2.3 composes an interleaved MCU from the scan's own
+# list; § B.2.3 keeps that list in frame order, enforced since 1.1.1 —
+# jpeg-12). None of that had anywhere to live: _jpeg_parse_sos built a selector
+# list locally and discarded it, and the MCU loop iterated frame components.
 #
 # JF_SCAN is that ordered list — the frame-component index plus the Huffman
 # selectors THIS scan chose for it. Selectors live here rather than on the
@@ -121,12 +123,19 @@ var JF_COVERED          = 344;
 # itself JFIF has already answered the colour question, and nothing weaker may
 # override it — see the authority order in _jpeg_build_image.
 var JF_SAW_JFIF         = 352;
+# 1 once a 16-bit (Pq = 1) quantization table has been seen ahead of the frame
+# header (jpeg-3, 1.1.1). Such a table is not malformed — T.81 § B.2.4.1 gives
+# it to the extended, progressive and lossless processes — it is only illegal
+# in a BASELINE frame, so it is judged against the frame header when one
+# arrives: SOF0 refuses it as CHITRA_ERR_JPEG_DQT, a non-baseline SOF reports
+# its own mode code. See _jpeg_parse_dqt.
+var JF_DQT16            = 360;
 # Grown 320 -> 384 in 0.6.1 for the field above. This record is @internal and
 # heap-allocated per decode, so growing it costs 8 bytes a decode and nothing
 # else — but the 0.7.0 multi-scan work needs a per-component coverage bitmask
 # and a resume position (ADR 0006), so the slack is left deliberately generous
 # rather than shaved to fit.
-var CHITRA_JPEG_FRAME_SIZE = 384;   # 360 used, 24 B spare
+var CHITRA_JPEG_FRAME_SIZE = 384;   # 368 used, 16 B spare
 
 fn chitra_jpeg_frame_width(f): i64          { return load64(f + JF_WIDTH); }
 fn chitra_jpeg_frame_height(f): i64         { return load64(f + JF_HEIGHT); }
@@ -145,8 +154,10 @@ fn chitra_jpeg_frame_comp_h(f, i): i64  { return load64(f + JF_COMP + i * JF_COM
 fn chitra_jpeg_frame_comp_v(f, i): i64  { return load64(f + JF_COMP + i * JF_COMP_STRIDE + JF_COMP_V); }
 fn chitra_jpeg_frame_comp_tq(f, i): i64 { return load64(f + JF_COMP + i * JF_COMP_STRIDE + JF_COMP_TQ); }
 fn chitra_jpeg_frame_sos_offset(f): i64  { return load64(f + JF_SOS_OFFSET); }
-# -1 = no Adobe APP14 segment was present; 0 = RGB (or CMYK at 4 components),
-# 1 = YCbCr, 2 = YCCK.
+# -1 = no Adobe APP14 segment was present; otherwise the raw transform byte of
+# the LAST one before the first SOS: 0 = RGB (or CMYK at 4 components),
+# 1 = YCbCr, 2 = YCCK, anything else undefined (jpeg-8, 1.1.1 — values above 1
+# are refused at the first SOS, and only where they would decide the colour).
 fn chitra_jpeg_frame_adobe_transform(f): i64 { return load64(f + JF_ADOBE_TRANSFORM); }
 fn chitra_jpeg_frame_scan_ns(f): i64   { return load64(f + JF_SCAN_NS); }
 fn chitra_jpeg_frame_covered(f): i64   { return load64(f + JF_COVERED); }
@@ -184,8 +195,9 @@ fn chitra_jpeg_check_signature(src, len): i64 {
 # ================================================================
 # Marker classifier. Returns an ACTION (1=SOF0/parse, 2=SOS/stop,
 # 3=standalone/no-length, 4=length-bearing/skip, 5=DQT/parse, 6=DHT/parse,
-# 7=DRI/parse, 8=APP14/parse) or a CHITRA_ERR_* reject code (>=13) for any non-baseline mode.
-# Action values 1..8 never collide with the JPEG error codes (13..23).
+# 7=DRI/parse, 8=APP14/parse, 9=APP0/parse) or a CHITRA_ERR_* reject code (>=13)
+# for any non-baseline mode. Action values 1..9 never collide with the JPEG
+# error codes (13..23).
 # ================================================================
 fn _jpeg_marker_action(m): i64 {
     if (m == 0xC0) { return 1; }                          # SOF0 baseline — parse
@@ -208,6 +220,18 @@ fn _jpeg_marker_action(m): i64 {
     if (m == 0xCD) { return CHITRA_ERR_JPEG_MODE; }       # SOF13 differential seq arithmetic
     if (m == 0xCE) { return CHITRA_ERR_JPEG_MODE; }       # SOF14 differential prog arithmetic
     if (m == 0xCF) { return CHITRA_ERR_JPEG_MODE; }       # SOF15 differential lossless arithmetic
+    # ⛔ jpeg-11 (1.1.1) — markers that name a process chitra does not decode,
+    # and that are NOT segments to skip. Each of these fell through to the
+    # length-skip below, so a file carrying one ahead of a SOF0 decoded with
+    # seen_iend = 1 while libjpeg refuses it ("Unsupported JPEG process: SOF type
+    # 0xc8", "Unsupported marker type 0xde") — the JPEG analogue of PNG's
+    # unknown-critical-chunk rule — and a JPEG-LS file (SOF55 = 0xF7) was
+    # reported as "SOS before SOF". CLAUDE.md JPEG item 1 says the
+    # hierarchical modes are rejected; DHP and EXP ARE the hierarchical mode.
+    if (m == 0xC8) { return CHITRA_ERR_JPEG_MODE; }       # JPG: reserved for JPEG extensions
+    if (m == 0xDE) { return CHITRA_ERR_JPEG_MODE; }       # DHP: hierarchical progression
+    if (m == 0xDF) { return CHITRA_ERR_JPEG_MODE; }       # EXP: hierarchical expand reference
+    if (m >= 0xF0 && m <= 0xFD) { return CHITRA_ERR_JPEG_MODE; }   # JPGn: extensions (JPEG-LS SOF55 = F7)
     if (m == 0xD9) { return CHITRA_ERR_JPEG_MARKER; }     # EOI before SOS — no scan present
     if (m >= 0xD0 && m <= 0xD7) { return 3; }             # RSTn standalone
     if (m == 0x01) { return 3; }                          # TEM standalone
@@ -219,7 +243,7 @@ fn _jpeg_marker_action(m): i64 {
     if (m == 0x00) { return CHITRA_ERR_JPEG_MARKER; }     # FF00 is entropy stuffing, not a marker
     if (m == 0xD8) { return CHITRA_ERR_JPEG_MARKER; }     # SOI is standalone; a second one is malformed
     if (m >= 0x02 && m <= 0xBF) { return CHITRA_ERR_JPEG_MARKER; }   # reserved (RES)
-    return 4;   # APPn / COM / DNL / ... — length-bearing, skipped (not decoded)
+    return 4;   # APPn / COM / DNL — length-bearing, skipped (not decoded)
 }
 
 # ================================================================
@@ -236,6 +260,9 @@ fn _jpeg_marker_action(m): i64 {
 # Allocating on first use drops that to 400 bytes (the frame record plus the
 # ChitraErr), and costs a real file nothing: a JPEG that defines tables pays
 # exactly what it paid before, one segment later.
+# "First use" is the first table header that VALIDATES, not the first DQT/DHT
+# marker (jpeg-4, 1.1.1): an empty or malformed segment defines nothing and
+# pays nothing.
 # ================================================================
 fn _jpeg_alloc_quant(frame): i64 {
     var quant = alloc(CHITRA_MAX_QUANT_TABLES * 64 * 8);
@@ -268,9 +295,11 @@ fn _jpeg_alloc_huff(frame): i64 {
 }
 
 # ================================================================
-# Parse a DQT segment (T.81 § B.2.4). Cursor is at the 2-byte length field.
-# A DQT may carry multiple tables. Baseline allows 8-bit precision only (Pq=0).
-# Values are stored in spec (zig-zag) order; de-zig-zag is deferred to dequant.
+# Parse a DQT segment (T.81 § B.2.4.1). Cursor is at the 2-byte length field.
+# A DQT may carry multiple tables. Baseline decodes 8-bit tables only (Pq=0);
+# a 16-bit one (Pq=1) is accepted SYNTACTICALLY ahead of the frame header and
+# judged against it (jpeg-3, 1.1.1 — see JF_DQT16). Values are stored in spec
+# (zig-zag) order; de-zig-zag is done at dequant.
 # Returns 0 on success, or a CHITRA_ERR_* code.
 # ================================================================
 fn _jpeg_parse_dqt(cur, frame): i64 {
@@ -279,15 +308,20 @@ fn _jpeg_parse_dqt(cur, frame): i64 {
     if (seglen < 2) { return CHITRA_ERR_JPEG_DQT; }
     var remaining = seglen - 2;
     if (_cur_can_read(cur, remaining) == 0) { return CHITRA_ERR_TRUNCATED; }
-    # Allocate the quantization store the first time a DQT actually defines
-    # something (0.6.1 — see _jpeg_alloc_quant). The `== 0` test is what makes
-    # this at-most-once: a file carrying twenty DQT segments allocates one
-    # store, not twenty.
+    # The quantization store is allocated the first time a DQT actually DEFINES
+    # something (0.6.1 — see _jpeg_alloc_quant), and the `== 0` test inside the
+    # loop is what makes that at-most-once: a file carrying twenty DQT segments
+    # allocates one store, not twenty.
+    #
+    # ⛔ jpeg-4 (1.1.1) — "defines something" was not what the code did. The
+    # allocation sat HERE, ahead of every table header, so a DQT that defined
+    # nothing (Lq = 2) or whose first header was malformed still paid the full
+    # 2,048 bytes, and with the same shape in the DHT parser the 12-byte file
+    # FF D8 FF DB 00 02 FF C4 00 02 FF D9 spent the whole 22,160 bytes 0.6.1
+    # retired — ~1,847:1 on the refusal path, every call. It now happens below,
+    # immediately before the first store, once Pq, Tq and the 64-byte body have
+    # all been validated.
     var quant = load64(frame + JF_QUANT);
-    if (quant == 0) {
-        quant = _jpeg_alloc_quant(frame);
-        if (quant == 0) { return CHITRA_ERR_OOM; }
-    }
     var rc = 0;
     var done = 0;
     var pqtq = 0;
@@ -303,24 +337,59 @@ fn _jpeg_parse_dqt(cur, frame): i64 {
             remaining = remaining - 1;
             pq = (pqtq >> 4) & 15;
             tq = pqtq & 15;
-            if (pq != 0) { rc = CHITRA_ERR_JPEG_DQT; done = 1; }     # 8-bit only (baseline)
+            if (pq > 1) { rc = CHITRA_ERR_JPEG_DQT; done = 1; }      # § B.2.4.1: Pq is 0 or 1
             if (done == 0) {
                 if (tq >= CHITRA_MAX_QUANT_TABLES) { rc = CHITRA_ERR_JPEG_DQT; done = 1; }
             }
-            if (done == 0) {
-                if (remaining < 64) { rc = CHITRA_ERR_JPEG_DQT; done = 1; }
-            }
-            if (done == 0) {
-                k = 0;
-                while (k < 64) {
-                    v = _cur_u8(cur);
-                    store64(quant + (tq * 64 + k) * 8, v);
-                    k = k + 1;
+        }
+        if (done == 0) {
+            if (pq == 1) {
+                # ⛔ jpeg-3 (1.1.1) — A 16-BIT TABLE IS JUDGED AGAINST THE FRAME,
+                # NOT ON SIGHT. libjpeg writes DQT ahead of SOF, and cjpeg
+                # switches to SOF1 precisely when a table value exceeds 255 —
+                # every cjpeg file at quality 23 or below. Refusing Pq = 1 here
+                # reported all of them, and their progressive / arithmetic /
+                # 12-bit siblings, as CHITRA_ERR_JPEG_DQT ("bad quant table")
+                # before the SOF marker naming the real cause was reached, so a
+                # consumer routing CHITRA_ERR_JPEG_PROGRESSIVE to a fallback
+                # decoder saw a corrupt file instead. Once a baseline SOF0 is
+                # known a 16-bit table is refused outright; before it, the table
+                # is length-checked, consumed WITHOUT being stored (chitra never
+                # decodes from one) and recorded, and the frame header decides:
+                # SOF0 refuses it as JPEG_DQT, SOF1 / SOF2 / SOF9 / ... report
+                # their own mode code (chitra_jpeg_scan_markers).
+                if (load64(frame + JF_SEEN_SOF) == 1) { rc = CHITRA_ERR_JPEG_DQT; done = 1; }
+                if (done == 0) {
+                    if (remaining < 128) { rc = CHITRA_ERR_JPEG_DQT; done = 1; }
                 }
-                remaining = remaining - 64;
-                present = load64(frame + JF_QUANT_PRESENT);
-                present = present | (1 << tq);
-                store64(frame + JF_QUANT_PRESENT, present);
+                if (done == 0) {
+                    _cur_skip(cur, 128);
+                    remaining = remaining - 128;
+                    store64(frame + JF_DQT16, 1);
+                }
+            }
+        }
+        if (done == 0) {
+            if (pq == 0) {
+                if (remaining < 64) { rc = CHITRA_ERR_JPEG_DQT; done = 1; }
+                if (done == 0) {
+                    if (quant == 0) {
+                        quant = _jpeg_alloc_quant(frame);
+                        if (quant == 0) { rc = CHITRA_ERR_OOM; done = 1; }
+                    }
+                }
+                if (done == 0) {
+                    k = 0;
+                    while (k < 64) {
+                        v = _cur_u8(cur);
+                        store64(quant + (tq * 64 + k) * 8, v);
+                        k = k + 1;
+                    }
+                    remaining = remaining - 64;
+                    present = load64(frame + JF_QUANT_PRESENT);
+                    present = present | (1 << tq);
+                    store64(frame + JF_QUANT_PRESENT, present);
+                }
             }
         }
     }
@@ -347,11 +416,12 @@ fn _jpeg_parse_dht(cur, frame): i64 {
     # trade this cut's flat 22 KB refusal cost for one that SCALES with file
     # size (~9.5 MB from a 64 KB segment). Allocating the whole 8-slot block
     # once makes that unreachable by construction rather than by a bound.
+    # ⛔ jpeg-4 (1.1.1) — and "first real use" means after the first table
+    # header has VALIDATED (Tc, Th, the BITS sum and the symbol span), inside
+    # the loop below. Allocating here, on segment entry, charged an empty DHT
+    # (Lh = 2) or a malformed one the full 19,712 bytes: the 7-byte file
+    # FF D8 FF C4 00 03 00 spent 20,112 B to be refused (2,873:1).
     var huff = load64(frame + JF_HUFF);
-    if (huff == 0) {
-        huff = _jpeg_alloc_huff(frame);
-        if (huff == 0) { return CHITRA_ERR_OOM; }
-    }
     var bits[136];           # 17 i64 (index 1..16 = BITS counts)
     var rc = 0;
     var done = 0;
@@ -369,7 +439,10 @@ fn _jpeg_parse_dht(cur, frame): i64 {
     while (done == 0) {
         if (remaining <= 0) { done = 1; }
         if (done == 0) {
-            # each table header is 1 (Tc/Th) + 16 (BITS) bytes minimum
+            # each table header is 1 (Tc/Th) + 16 (BITS) bytes minimum.
+            # Equivalent (gate-4, 1.1.1): without it the BITS reads overrun the
+            # segment, `remaining` goes negative and `remaining < total` below
+            # refuses with the same code.
             if (remaining < 17) { rc = CHITRA_ERR_JPEG_DHT; done = 1; }
         }
         if (done == 0) {
@@ -396,6 +469,12 @@ fn _jpeg_parse_dht(cur, frame): i64 {
         }
         if (done == 0) {
             if (remaining < total) { rc = CHITRA_ERR_JPEG_DHT; done = 1; }
+        }
+        if (done == 0) {
+            if (huff == 0) {
+                huff = _jpeg_alloc_huff(frame);
+                if (huff == 0) { rc = CHITRA_ERR_OOM; done = 1; }
+            }
         }
         if (done == 0) {
             slot = tc * 4 + th;
@@ -443,9 +522,11 @@ fn _jpeg_parse_dht(cur, frame): i64 {
 # ================================================================
 # APP0 — is this a JFIF file? (B-2, 1.0.3)
 #
-# Only the five-byte identifier matters: version, density and the thumbnail are
-# metadata chitra has no use for. The segment is skipped whole either way; the
-# single bit recorded is whether it said "JFIF\0".
+# Only the five-byte identifier is READ: version, density and the thumbnail are
+# metadata chitra has no use for. But the segment must be long enough to BE a
+# JFIF header (14 payload bytes, libjpeg's APP0_DATA_LEN — jpeg-1, 1.1.1) before
+# the identifier counts. The segment is skipped whole either way; the single bit
+# recorded is whether it was a JFIF APP0.
 #
 # ⛔ WHY IT IS RECORDED AT ALL. Through 1.0.2 APP0 fell through to the generic
 # length-skip, so nothing in the tree knew a file was JFIF — and the colour
@@ -462,8 +543,18 @@ fn _jpeg_parse_app0(cur, frame): i64 {
     if (seglen < 2) { return CHITRA_ERR_JPEG_MARKER; }
     var remaining = seglen - 2;
     if (_cur_can_read(cur, remaining) == 0) { return CHITRA_ERR_TRUNCATED; }
-    # Shorter than the identifier cannot be JFIF; skip it whole.
-    if (remaining < 5) {
+    # ⛔ jpeg-1 (1.1.1) — A JFIF APP0 IS 14 PAYLOAD BYTES, NOT 5. libjpeg's
+    # `examine_app0` sets `saw_JFIF_marker` only when `datalen >= APP0_DATA_LEN`
+    # (14: the identifier, version, units, both densities and both thumbnail
+    # dimensions). Through 1.1.0 this tested the 5-byte identifier alone, so a
+    # truncated "JFIF\0" outranked an explicit Adobe transform=0 and the RGB
+    # samples of a `cjpeg -rgb` file went through the BT.601 inverse: nine
+    # spliced bytes, 1,149 of 1,536 colour bytes wrong (max delta 235), no error,
+    # and `source_color_type` reporting 0x103 — the B-2 failure in the other
+    # direction. djpeg's output for the same bytes is identical to the file
+    # without them. A segment shorter than libjpeg's minimum is not JFIF; skip
+    # it whole, exactly as libjpeg does.
+    if (remaining < 14) {
         _cur_skip(cur, remaining);
         return 0;
     }
@@ -518,11 +609,21 @@ fn _jpeg_parse_app14(cur, frame): i64 {
     _cur_skip(cur, 6);                  # version (2) + flags0 (2) + flags1 (2)
     var transform = _cur_u8(cur);
     _cur_skip(cur, remaining - 12);     # any trailing bytes in an over-long segment
-    # Only 0, 1 and 2 are defined. chitra implements 0 and 1; 2 is YCCK, which
-    # only occurs on the 4-component frames it already refuses. An undefined
-    # value is declined rather than guessed at — assuming YCbCr is exactly the
-    # guess that produced the defect this parser exists to fix.
-    if (transform > 1) { return CHITRA_ERR_UNSUPPORTED; }
+    # Only 0, 1 and 2 are defined. chitra implements 0 and 1; 2 is YCCK, and an
+    # undefined value is declined rather than guessed at — assuming YCbCr is
+    # exactly the guess that produced the defect this parser exists to fix.
+    #
+    # ⚠ jpeg-8 (1.1.1) — but it is declined WHERE IT MATTERS, not here. The
+    # transform only decides anything for a 3-component frame with no JFIF
+    # APP0 (JFIF outranks it; one component is grey whatever it says), and
+    # none of that is known while the header is still being walked. Refusing
+    # at the segment turned away a grey file and a JFIF file that djpeg decodes
+    # byte-identically to the same files without the APP14, let a first APP14
+    # pre-empt a later one (libjpeg keeps the LAST, as this store now does),
+    # and reported a YCCK CMYK file as 4 instead of the
+    # CHITRA_ERR_JPEG_COMPONENTS (23) its four components earn at SOF0. The
+    # raw value is recorded and judged at the first SOS — see
+    # chitra_jpeg_scan_markers.
     store64(frame + JF_ADOBE_TRANSFORM, transform);
     return 0;
 }
@@ -561,9 +662,12 @@ fn _jpeg_parse_sof0(cur, frame): i64 {
     var ncomp = _cur_u8(cur);
     if (precision != 8) { return CHITRA_ERR_JPEG_PRECISION; }
     if (ncomp != 1 && ncomp != 3) { return CHITRA_ERR_JPEG_COMPONENTS; }
-    # Y==0 (DNL-deferred height) is rejected, never decoded with a 0-height
+    # Y==0 (height supplied by a DNL after the scan; roadmap Out of scope) is rejected, never decoded with a 0-height
     # buffer — see docs/adr/0004 scope.
     if (width == 0 || height == 0) { return CHITRA_ERR_DIMENSIONS; }
+    # Equivalent here (gate-4, 1.1.1): X and Y are u16 fields and
+    # CHITRA_MAX_DIM is 65,535, so this cannot be true. Kept so the cap stays
+    # stated in one place for every format.
     if (width > CHITRA_MAX_DIM || height > CHITRA_MAX_DIM) { return CHITRA_ERR_DIMENSIONS; }
     if (width * height > CHITRA_MAX_PIXELS) { return CHITRA_ERR_DIMENSIONS; }
     if (seglen != 8 + 3 * ncomp) { return CHITRA_ERR_JPEG_SOF; }
@@ -663,8 +767,15 @@ fn _jpeg_parse_sof0(cur, frame): i64 {
 # real `cjpeg -scans` output puts DHT segments BETWEEN scans, and its last scan
 # often carries none of its own.
 #
-# Returns the offset of the next SOS length field; or 0 with *err_out clear for
-# a clean end (EOI, or the input simply ran out); or 0 with *err_out set.
+# Returns the offset of the next SOS length field; or 0 with *err_out clear when
+# EOI ends the file; or 0 with *err_out set.
+#
+# jpeg-10 (1.1.1): the input running out is NOT a clean end. This walk only runs
+# while a component is still undecoded, so a file that stops here is truncated,
+# and it now says CHITRA_ERR_TRUNCATED. Through 1.1.0 it returned the "clean
+# end" answer and the driver reported CHITRA_ERR_JPEG_SOS, "bad JPEG scan
+# header", for a multi-scan file cut inside a non-final scan — djpeg's
+# "Premature end of JPEG file". EOI with a component missing keeps JPEG_SOS.
 # ================================================================
 fn _jpeg_resume_to_next_scan(frame, src, len, resume, err_out): i64 {
     store64(err_out, 0);
@@ -679,18 +790,25 @@ fn _jpeg_resume_to_next_scan(frame, src, len, resume, err_out): i64 {
     var act = 0;
     var seglen = 0;
     while (done == 0) {
-        if (_cur_can_read(&cur, 2) == 0) { done = 1; }        # clean stop
+        if (_cur_can_read(&cur, 2) == 0) { rc = CHITRA_ERR_TRUNCATED; done = 1; }
         if (done == 0) {
             b = _cur_u8(&cur);
             if (b != 0xFF) { rc = CHITRA_ERR_JPEG_MARKER; done = 1; }
         }
         if (done == 0) {
-            # Collapse a run of fill bytes (§ B.1.1.2).
+            # Collapse a run of fill bytes (§ B.1.1.2). A run that reaches the
+            # end of the input is a marker cut in half: truncation (jpeg-10).
             m = _cur_u8(&cur);
             while (m == 0xFF) {
-                if (_cur_can_read(&cur, 1) == 0) { m = 0; }
+                if (_cur_can_read(&cur, 1) == 0) {
+                    m = 0;
+                    rc = CHITRA_ERR_TRUNCATED;
+                    done = 1;
+                }
                 if (m == 0xFF) { m = _cur_u8(&cur); }
             }
+        }
+        if (done == 0) {
             # EOI is tested BEFORE the classifier. _jpeg_marker_action maps it to
             # CHITRA_ERR_JPEG_MARKER because in the HEADER walk it means "no scan
             # present", and that remains true where it lives — here it simply
@@ -723,14 +841,21 @@ fn _jpeg_resume_to_next_scan(frame, src, len, resume, err_out): i64 {
                 rc = _jpeg_parse_dri(&cur, frame);
                 if (rc != 0) { done = 1; }
             }
-            if (act == 8) {
-                rc = _jpeg_parse_app14(&cur, frame);
-                if (rc != 0) { done = 1; }
-            }
-            if (act == 9) {
-                rc = _jpeg_parse_app0(&cur, frame);
-                if (rc != 0) { done = 1; }
-            }
+            # ⛔ jpeg-2 (1.1.1) — APP0 and APP14 are NOT parsed here. The
+            # colour space is decided by the evidence in front of the FIRST
+            # SOS, as libjpeg decides it (`default_decompress_parms` runs once,
+            # at the first SOS, and later markers cannot reach it). Through
+            # 1.1.0 this walk parsed both into the frame, and
+            # _jpeg_build_image read them only after every scan had decoded —
+            # so a segment spliced in between scans re-decided the colour space
+            # of samples the earlier scans had already produced, either way,
+            # with no error: an Adobe transform 0 turned a three-scan YCbCr
+            # file into "RGB" (1,141 of 1,152 colour bytes wrong), a JFIF APP0
+            # turned a `cjpeg -rgb -scans` file into YCbCr, and an APP14
+            # transform 2 refused a file djpeg decodes byte-identically to the
+            # one without it. They fall through to the length skip below.
+            if (act == 8) { act = 4; }
+            if (act == 9) { act = 4; }
             if (act == 2) {
                 store64(frame + JF_SOS_OFFSET, _cur_pos(&cur));
                 found = _cur_pos(&cur);
@@ -755,6 +880,26 @@ fn _jpeg_resume_to_next_scan(frame, src, len, resume, err_out): i64 {
         return 0;
     }
     return found;
+}
+
+# ================================================================
+# _jpeg_colour_evidence_ok — judge the Adobe transform once the first SOS has
+# fixed the colour evidence (jpeg-8, 1.1.1). Returns 0 or CHITRA_ERR_UNSUPPORTED.
+#
+# The transform decides the colour space only for a 3-component frame that is
+# not JFIF (_jpeg_build_image's authority order: JFIF, then the transform, then
+# the component ids). There, 0 and 1 are implemented and anything else is
+# declined rather than assumed to be YCbCr. Everywhere else the byte is inert —
+# one component is grey, JFIF already said YCbCr — and libjpeg decodes those
+# files exactly as it decodes them without the APP14, so chitra does too. A
+# 4-component frame never gets here: SOF0 refuses it with
+# CHITRA_ERR_JPEG_COMPONENTS, the code ADR 0004 gives CMYK/YCCK.
+# ================================================================
+fn _jpeg_colour_evidence_ok(frame): i64 {
+    if (load64(frame + JF_NCOMP) != 3) { return 0; }
+    if (load64(frame + JF_SAW_JFIF) != 0) { return 0; }
+    if (load64(frame + JF_ADOBE_TRANSFORM) > 1) { return CHITRA_ERR_UNSUPPORTED; }
+    return 0;
 }
 
 # ================================================================
@@ -789,6 +934,7 @@ fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
     store64(frame + JF_SCAN_NS, 0);
     store64(frame + JF_COVERED, 0);
     store64(frame + JF_SAW_JFIF, 0);
+    store64(frame + JF_DQT16, 0);
     # The quantization and Huffman stores are NOT allocated here — see
     # _jpeg_alloc_quant / _jpeg_alloc_huff. A file that never defines a table
     # never pays for one, which is what makes the refusal path cheap.
@@ -808,7 +954,13 @@ fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
     var fill_done = 0;
 
     while (done == 0) {
-        if (_cur_can_read(&cur, 2) == 0) { rc = CHITRA_ERR_JPEG_MARKER; done = 1; }
+        # jpeg-10 (1.1.1): the input ending at a segment boundary, or on the
+        # 0xFF of a marker whose code never arrives, is TRUNCATION — the same
+        # answer a cut anywhere else in the header already got. Through 1.1.0
+        # these two shapes alone said CHITRA_ERR_JPEG_MARKER, so whether a
+        # truncated header was "truncated" or "malformed" depended on exactly
+        # where the cut fell (18 of 618 cut points of a real file).
+        if (_cur_can_read(&cur, 2) == 0) { rc = CHITRA_ERR_TRUNCATED; done = 1; }
         if (done == 0) {
             b = _cur_u8(&cur);
             if (b != 0xFF) { rc = CHITRA_ERR_JPEG_MARKER; done = 1; }
@@ -824,13 +976,20 @@ fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
                     if (_cur_can_read(&cur, 1) == 1) { m = _cur_u8(&cur); }
                 }
             }
-            if (m == 0xFF) { rc = CHITRA_ERR_JPEG_MARKER; done = 1; }
+            if (m == 0xFF) { rc = CHITRA_ERR_TRUNCATED; done = 1; }
         }
         if (done == 0) {
             act = _jpeg_marker_action(m);
             if (act >= 13) { rc = act; done = 1; }
             if (act == 1) {
                 if (load64(frame + JF_SEEN_SOF) == 1) { rc = CHITRA_ERR_JPEG_SOF; done = 1; }
+                # jpeg-3 (1.1.1): a BASELINE frame after a 16-bit table. The
+                # table, not this header, is what chitra refuses — exactly the
+                # code a 16-bit DQT earned through 1.1.0, when it was refused on
+                # sight. Tested before the SOF0 parse for the same reason.
+                if (done == 0) {
+                    if (load64(frame + JF_DQT16) == 1) { rc = CHITRA_ERR_JPEG_DQT; done = 1; }
+                }
                 if (done == 0) {
                     rc = _jpeg_parse_sof0(&cur, frame);
                     if (rc != 0) { done = 1; }
@@ -857,7 +1016,13 @@ fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
                 if (rc != 0) { done = 1; }
             }
             if (act == 2) {
-                if (load64(frame + JF_SEEN_SOF) == 0) { rc = CHITRA_ERR_JPEG_SOF; }
+                # SOS with no frame header in front of it is a MISPLACED marker
+                # — error.cyr's own definition of CHITRA_ERR_JPEG_MARKER, and
+                # libjpeg's "Invalid JPEG file structure: SOS before SOF". There
+                # is no SOF0 here to be invalid, which is what JPEG_SOF reported
+                # through 1.1.0 (jpeg-11, 1.1.1).
+                if (load64(frame + JF_SEEN_SOF) == 0) { rc = CHITRA_ERR_JPEG_MARKER; }
+                if (rc == 0) { rc = _jpeg_colour_evidence_ok(frame); }
                 if (rc == 0) { store64(frame + JF_SOS_OFFSET, _cur_pos(&cur)); }
                 done = 1;   # SOS reached; entropy data follows (decoded by jpeg.cyr)
             }
@@ -876,6 +1041,18 @@ fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
         }
     }
 
+    # jpeg-3 (1.1.1): a 16-bit table came first, so unless what stopped the walk
+    # was a frame header that EXPLAINS it — a non-baseline mode, codes 19..23 —
+    # the table is still the earliest defect chitra can name, and it keeps the
+    # code it was refused with through 1.1.0. A non-baseline SOF never reaches
+    # here as 0: its classifier code is the answer.
+    if (rc != 0) {
+        if (load64(frame + JF_DQT16) == 1) {
+            if (rc < CHITRA_ERR_JPEG_PROGRESSIVE || rc > CHITRA_ERR_JPEG_COMPONENTS) {
+                rc = CHITRA_ERR_JPEG_DQT;
+            }
+        }
+    }
     if (rc != 0) {
         store64(err_out, chitra_err(rc));
         return 0;

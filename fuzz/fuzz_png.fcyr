@@ -16,6 +16,16 @@
 # 0 without setting *err_out hands the caller a stale or zero error, and
 # mabda maps ChitraErr straight onto GpuErr.
 #
+# FIXTURES (1.1.1, gate-3). Through 1.1.0 every mode mutated ONE shape — a 2x2
+# RGBA8 non-interlaced PNG — so the Adam7 deinterlace, both palette paths,
+# sub-byte gray, gray+alpha, 16-bit and every tRNS key never executed under
+# fuzzing, while the mode comments said they did. The harness now carries
+# eleven fixtures (fx_rgba8_2x2 + the ten _png_shape builds below); every mode
+# that starts from a fixture rotates across all of them, the self-check decodes
+# each one, and the scanline mode draws its shape from the same table. Run
+# under `cyrius fuzz --poison` (make fuzz / CI), which also catches a silent
+# overwrite into the next allocation, not just a crash.
+#
 # Stack-array pointer note: `var buf[N]` reserves N bytes, but `buf` as an
 # rvalue yields the first 8 bytes, not the address — pass `&buf`.
 
@@ -142,8 +152,10 @@ fn _png_contract(buf, n, label): i64 {
         assert(err != 0, label);
         if (err != 0) {
             assert(chitra_err_code(err) != CHITRA_OK, label);
-            # every code must have a printable name (no null deref downstream)
-            assert(chitra_err_name(chitra_err_code(err)) != 0, label);
+            # Every code must have a name of its own. chitra_err_name never
+            # returns 0 — an unnamed code gets the fallback — so `!= 0` could not
+            # fail (gate-13, 1.1.1); the fallback string is what to compare with.
+            assert(streq(chitra_err_name(chitra_err_code(err)), "unknown error") == 0, label);
         }
     }
     if (img != 0) {
@@ -194,31 +206,48 @@ fn _rgba8_contract(buf, n, label): i64 {
 # A fuzz harness that silently no-ops is worse than none. fuzz_png was the only
 # one of the four without this gate: if fx_rgba8_2x2 ever stopped decoding,
 # every mode below would still report hundreds of thousands of cases
-# "survived" while exercising nothing past the signature check.
+# "survived" while exercising nothing past the signature check. 1.1.1: EVERY
+# fixture must decode, at the size its shape says, or a fixture that rots would
+# silently turn its share of every mode into a rejection test.
 fn fuzz_png_selfcheck(): i64 {
+    var k = 0;
     var lo = 0;
-    var b = fx_rgba8_2x2(&lo);
+    var b = 0;
     var err = 0;
-    var img = chitra_png_decode(b, lo, &err);
-    assert(img != 0, "selfcheck: png fixture decodes clean");
-    assert(err == 0, "selfcheck: png fixture sets no error");
-    if (img != 0) {
-        assert(chitra_image_width(img) == 2, "selfcheck: png fixture is 2 wide");
-        assert(chitra_image_height(img) == 2, "selfcheck: png fixture is 2 tall");
-        assert(chitra_image_channels(img) == 4, "selfcheck: png fixture is RGBA8");
-    }
-    # ...and the IDAT locator must actually find one, or the mutation mode
-    # below would silently degrade into "return 0" on every case.
+    var img = 0;
     var type_off = 0;
     var clen = 0;
-    assert(_find_idat(b, lo, &type_off, &clen) == 1, "selfcheck: IDAT located");
-    assert(clen > 0, "selfcheck: IDAT payload is non-empty");
-    # Repairing the CRC of an UNMUTATED chunk must leave the file decodable —
-    # if _repair_crc were wrong, every mutated case would reject at the CRC
-    # gate and this whole mode would test nothing.
-    _repair_crc(b, type_off, clen);
-    var err2 = 0;
-    assert(chitra_png_decode(b, lo, &err2) != 0, "selfcheck: CRC repair is correct");
+    var s = 0;
+    while (k < PNG_FIXTURES) {
+        lo = 0;
+        b = _png_fixture(k, &lo);
+        assert(b != 0, "selfcheck: png fixture builds");
+        if (b != 0) {
+            err = 0;
+            img = chitra_png_decode(b, lo, &err);
+            assert(img != 0, "selfcheck: png fixture decodes clean");
+            assert(err == 0, "selfcheck: png fixture sets no error");
+            if (img != 0) {
+                s = _png_fixture_shape(k);
+                assert(chitra_image_width(img) == _h_field(s, 0), "selfcheck: png fixture width");
+                assert(chitra_image_height(img) == _h_field(s, 1), "selfcheck: png fixture height");
+                assert(chitra_image_source_depth(img) == _h_field(s, 2), "selfcheck: png fixture depth");
+                assert(chitra_image_source_color_type(img) == _h_field(s, 3), "selfcheck: png fixture ct");
+                assert(chitra_image_channels(img) == 4, "selfcheck: png fixture is RGBA8");
+            }
+            # ...and the IDAT locator must actually find one, or the mutation
+            # mode below would silently degrade into "return 0" on every case.
+            assert(_find_idat(b, lo, &type_off, &clen) == 1, "selfcheck: IDAT located");
+            assert(clen > 0, "selfcheck: IDAT payload is non-empty");
+            # Repairing the CRC of an UNMUTATED chunk must leave the file
+            # decodable — if _repair_crc were wrong, every mutated case would
+            # reject at the CRC gate and this whole mode would test nothing.
+            _repair_crc(b, type_off, clen);
+            err = 0;
+            assert(chitra_png_decode(b, lo, &err) != 0, "selfcheck: CRC repair is correct");
+        }
+        k = k + 1;
+    }
     return 0;
 }
 
@@ -259,13 +288,13 @@ fn fuzz_png_sigprefix(seed, n): i64 {
 }
 
 # ---- 3. Bit-flipped valid fixture ------------------------------------
-# Starts from a genuinely valid 2x2 RGBA8 PNG and corrupts `nmut` bytes.
-# Most land on a CRC-covered field, so the CRC gate must reject cleanly
-# rather than decode corrupt geometry.
+# Starts from a genuinely valid PNG — each of the eleven fixtures in turn — and
+# corrupts `nmut` bytes. Most land on a CRC-covered field, so the CRC gate must
+# reject cleanly rather than decode corrupt geometry.
 fn fuzz_png_mutate(seed, nmut): i64 {
     _fuzz_seed(seed);
     var lo = 0;
-    var b = fx_rgba8_2x2(&lo);
+    var b = _png_fixture(seed % PNG_FIXTURES, &lo);
     var m = 0;
     var pos = 0;
     while (m < nmut) {
@@ -279,31 +308,37 @@ fn fuzz_png_mutate(seed, nmut): i64 {
 }
 
 # ---- 4. Truncation sweep ---------------------------------------------
-# Every prefix of a valid PNG. Each must reject as TRUNCATED (or decode,
-# for the full length) — never read past the buffer.
+# Every prefix of every fixture. Each must reject (or decode, for the full
+# length) — never read past the buffer.
 fn fuzz_png_truncate(): i64 {
+    var k = 0;
     var lo = 0;
-    var b = fx_rgba8_2x2(&lo);
+    var b = 0;
     var cut = 0;
-    while (cut <= lo) {
-        _png_contract(b, cut, "png truncated prefix");
-        cut = cut + 1;
+    while (k < PNG_FIXTURES) {
+        b = _png_fixture(k, &lo);
+        cut = 0;
+        while (cut <= lo) {
+            _png_contract(b, cut, "png truncated prefix");
+            cut = cut + 1;
+        }
+        k = k + 1;
     }
     return 0;
 }
 
-# ---- IDAT-stream mutation (0.7.3, the priority target) ---------------
+# ---- 6. IDAT-stream mutation (0.7.3) ---------------------------------
 # PNG's per-chunk CRC-32 is why this mode has to exist. A random byte flip
 # inside IDAT makes the chunk CRC disagree, so `chitra_png_parse_raw` rejects
-# with CHITRA_ERR_CRC before sankoch's inflate — and therefore before the five
-# § 9 unfilter predictors, the Adam7 deinterlace and the tRNS/palette colour
-# pass — ever runs. Every one of those was effectively unfuzzed: modes 1-3
-# below drive the chunk walk and the signature gate, and stop at the CRC.
+# with CHITRA_ERR_CRC before sankoch's inflate ever runs: modes 1-3 drive the
+# chunk walk and the signature gate, and stop at the CRC.
 #
 # So this mode mutates the IDAT payload and then REPAIRS THE CRC, producing a
-# structurally valid PNG carrying hostile compressed data. That is the direct
-# analogue of fuzz_jpeg's entropy-segment mutation (0.3.3), which is why the
-# JPEG entropy path is well covered and this one was not.
+# structurally valid PNG carrying hostile COMPRESSED data. What it reaches is
+# sankoch's inflate and the size checks after it: ~99% of cases fail inflate.
+# The unfilter predictors, the deinterlace and the colour pass are mode 7's
+# job, which mutates BEFORE compressing. It rotates over every fixture, so the
+# streams it corrupts are Adam7, palette, sub-byte and 16-bit ones too.
 
 # Locate the first IDAT chunk. Writes the offset of its 4-byte TYPE field
 # (which is what the CRC is computed over, together with the data) and its
@@ -365,93 +400,37 @@ fn _repair_crc(b, type_off, clen): i64 {
     return 0;
 }
 
-# ---- Scanline-level mutation (0.7.3) --------------------------------
-# The IDAT-stream mode above repairs the CRC, so hostile bytes reach sankoch —
-# but they are hostile COMPRESSED bytes, and ~99% of them fail inflate. Only
-# ~0.6% survive to the part this release is actually about: the five § 9
-# unfilter predictors, the Adam7 deinterlace and the colour pass.
+# ---- 7. Scanline-level mutation (0.7.3; every shape 1.1.1) ----------
+# Mode 6 repairs the CRC, so hostile bytes reach sankoch — but they are hostile
+# COMPRESSED bytes, and ~99% of them fail inflate. Only a sliver survives to the
+# part after it: the five § 9 unfilter predictors, the Adam7 deinterlace and
+# the colour pass.
 #
-# So this mode mutates the raw scanlines BEFORE compressing them. Every case
-# therefore inflates cleanly and lands squarely in `_chitra_unfilter_row`, with
-# an attacker-chosen filter byte per row — including values outside {0..4},
-# which is the one thing the predictors must reject rather than index on.
-fn fuzz_png_scanlines(seed, w, h): i64 {
+# So this mode generates the raw scanlines and compresses them, and every case
+# inflates cleanly. Through 1.1.0 it built only 8-bit RGBA non-interlaced
+# files, so of that list it reached the predictors and nothing else. It now
+# takes its depth / colour type / interlace / tRNS from the _png_shape table in
+# rotation, with a random size (1..12 x 1..9 — small enough that Adam7's empty
+# passes occur) and, for palette shapes, a random PLTE size, so out-of-range
+# indices are as live as in-range ones. One row in eight carries an arbitrary
+# filter byte, which the § 9 allow-list must reject rather than index on.
+# `k` is the case number: the shape is taken from it, not from the seed, so the
+# rotation is exact (a seed multiplier sharing a factor with PNG_SHAPES would
+# otherwise visit only some shapes — 1103515245 is a multiple of 5).
+fn fuzz_png_scanlines(seed, k): i64 {
     _fuzz_seed(seed);
-    var row_bytes = w * 4;                   # RGBA8, colour type 6
-    var raw_len = h * (row_bytes + 1);
-    var raw = alloc(raw_len);
-    if (raw == 0) { return 0; }
-    var y = 0;
-    var x = 0;
-    var off = 0;
-    while (y < h) {
-        # The filter byte. Mostly legal so the predictors actually run, but
-        # 1-in-8 out of range so the § 9 allow-list is exercised too.
-        if ((_fuzz_next() & 7) == 0) {
-            store8(raw + off, _fuzz_next() & 255);
-        } else {
-            store8(raw + off, _fuzz_next() % 5);
-        }
-        off = off + 1;
-        x = 0;
-        while (x < row_bytes) {
-            store8(raw + off, _fuzz_next() & 255);
-            off = off + 1;
-            x = x + 1;
-        }
-        y = y + 1;
-    }
-    var zcap = raw_len * 2 + 128;
-    var z = alloc(zcap);
-    if (z == 0) { return 0; }
-    var zlen = zlib_compress(raw, raw_len, z, zcap);
-    if (zlen <= 0) { return 0; }
-
-    # Assemble: signature + IHDR + IDAT(z) + IEND, every CRC correct.
-    var total = 8 + 25 + (12 + zlen) + 12;
-    var b = alloc(total);
+    var shape = _png_shape(k % PNG_SHAPES);
+    var w = 1 + (_fuzz_next() % 12);
+    var h = 1 + (_fuzz_next() % 9);
+    var depth = _h_field(shape, 2);
+    var plte_n = 1 + (_fuzz_next() % _h_full_plte(depth));
+    var trns = _h_field(shape, 5);
+    if ((_fuzz_next() & 3) == 0) { trns = 1 - trns; }
+    if (_h_field(shape, 3) == 4) { trns = 0; }       # tRNS is illegal for ct 4/6:
+    if (_h_field(shape, 3) == 6) { trns = 0; }       # mode 3 already covers that
+    var total = 0;
+    var b = _png_build(w, h, depth, _h_field(shape, 3), _h_field(shape, 4), plte_n, trns, 1, &total);
     if (b == 0) { return 0; }
-    store8(b + 0, 137);
-    store8(b + 1, 80);
-    store8(b + 2, 78);
-    store8(b + 3, 71);
-    store8(b + 4, 13);
-    store8(b + 5, 10);
-    store8(b + 6, 26);
-    store8(b + 7, 10);
-    _put_be32(b + 8, 13);
-    store8(b + 12, 73);
-    store8(b + 13, 72);
-    store8(b + 14, 68);
-    store8(b + 15, 82);
-    _put_be32(b + 16, w);
-    _put_be32(b + 20, h);
-    store8(b + 24, 8);                       # bit depth
-    store8(b + 25, 6);                       # colour type 6 (RGBA)
-    store8(b + 26, 0);
-    store8(b + 27, 0);
-    store8(b + 28, 0);                       # interlace: none
-    _repair_crc(b, 12, 13);
-    var idat = 8 + 25;
-    _put_be32(b + idat, zlen);
-    store8(b + idat + 4, 73);
-    store8(b + idat + 5, 68);
-    store8(b + idat + 6, 65);
-    store8(b + idat + 7, 84);
-    var i = 0;
-    while (i < zlen) {
-        store8(b + idat + 8 + i, load8(z + i));
-        i = i + 1;
-    }
-    _repair_crc(b, idat + 4, zlen);
-    var iend = idat + 12 + zlen;
-    _put_be32(b + iend, 0);
-    store8(b + iend + 4, 73);
-    store8(b + iend + 5, 69);
-    store8(b + iend + 6, 78);
-    store8(b + iend + 7, 68);
-    _repair_crc(b, iend + 4, 0);
-
     _png_contract(b, total, "png scanline mutation");
     _rgba8_contract(b, total, "png scanline mutation (_rgba8 wrapper)");
     return 0;
@@ -459,7 +438,7 @@ fn fuzz_png_scanlines(seed, w, h): i64 {
 
 fn fuzz_png_idat(seed, nmut): i64 {
     var lo = 0;
-    var b = fx_rgba8_2x2(&lo);
+    var b = _png_fixture(seed % PNG_FIXTURES, &lo);
     var type_off = 0;
     var clen = 0;
     if (_find_idat(b, lo, &type_off, &clen) == 0) { return 0; }
@@ -478,6 +457,343 @@ fn fuzz_png_idat(seed, nmut): i64 {
     return 0;
 }
 
+# ---- PNG fixture builder (1.1.1, gate-3) ------------------------------
+# One 2x2 RGBA8 fixture drove every mode through 1.1.0, so the Adam7
+# deinterlace, both palette paths, sub-byte gray, gray+alpha, 16-bit and every
+# tRNS key were never executed under fuzzing — while the mode comments said they
+# were. This builds a structurally valid PNG for ANY (w, h, depth, colour type,
+# interlace, PLTE size, tRNS) from random scanlines, every CRC correct, so each
+# shape can be both a fixed fixture and a per-case random target.
+#
+# The Adam7 pass geometry is computed HERE from the § 8.2 table, not borrowed
+# from src/: a harness that sized its streams with the decoder's own helper
+# would agree with the decoder by construction.
+
+fn _h_channels(ct): i64 {
+    if (ct == 2) { return 3; }
+    if (ct == 4) { return 2; }
+    if (ct == 6) { return 4; }
+    return 1;                              # 0 gray, 3 palette
+}
+
+fn _h_row_bytes(pw, ct, depth): i64 {
+    return (pw * _h_channels(ct) * depth + 7) / 8;
+}
+
+# Adam7 pass p: x0 y0 dx dy, PNG § 8.2.
+fn _h_a7(p, k): i64 {
+    var x0 = 0;
+    var y0 = 0;
+    var dx = 8;
+    var dy = 8;
+    if (p == 1) { x0 = 4; }
+    if (p == 2) { y0 = 4; dx = 4; }
+    if (p == 3) { x0 = 2; dx = 4; dy = 4; }
+    if (p == 4) { y0 = 2; dx = 2; dy = 4; }
+    if (p == 5) { x0 = 1; dx = 2; dy = 2; }
+    if (p == 6) { y0 = 1; dx = 1; dy = 2; }
+    if (k == 0) { return x0; }
+    if (k == 1) { return y0; }
+    if (k == 2) { return dx; }
+    return dy;
+}
+
+fn _h_a7_count(dim, start, step): i64 {
+    if (dim <= start) { return 0; }
+    return (dim - start + step - 1) / step;
+}
+
+# Append `rows` scanlines of `rb` data bytes at raw+off: a filter byte, then
+# random bytes. With badfilt, 1 row in 8 gets an arbitrary filter byte so the
+# § 9 allow-list is exercised too. Returns the new offset.
+fn _h_fill_rows(raw, off, rows, rb, badfilt): i64 {
+    var y = 0;
+    var x = 0;
+    while (y < rows) {
+        if (badfilt == 1 && (_fuzz_next() & 7) == 0) {
+            store8(raw + off, _fuzz_next());
+        } else {
+            store8(raw + off, _fuzz_next() % 5);
+        }
+        off = off + 1;
+        x = 0;
+        while (x < rb) {
+            store8(raw + off, _fuzz_next());
+            off = off + 1;
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return off;
+}
+
+# Write one chunk (length, type, data, CRC) at b+at; returns the offset past it.
+fn _h_chunk(b, at, t0, t1, t2, t3, data, dlen): i64 {
+    _put_be32(b + at, dlen);
+    store8(b + at + 4, t0);
+    store8(b + at + 5, t1);
+    store8(b + at + 6, t2);
+    store8(b + at + 7, t3);
+    var i = 0;
+    while (i < dlen) {
+        store8(b + at + 8 + i, load8(data + i));
+        i = i + 1;
+    }
+    _repair_crc(b, at + 4, dlen);
+    return at + 12 + dlen;
+}
+
+# plte_n: PLTE entries for colour type 3 (ignored otherwise). trns: 1 = emit a
+# tRNS of the right shape for the colour type (gray/RGB key at full sample
+# width, or a per-entry alpha array no longer than PLTE). The caller seeds the
+# PRNG; everything random here comes from it.
+fn _png_build(w, h, depth, ct, ilace, plte_n, trns, badfilt, len_out): i64 {
+    store64(len_out, 0);
+    var raw_len = 0;
+    var p = 0;
+    var pw = 0;
+    var ph = 0;
+    if (ilace == 1) {
+        while (p < 7) {
+            pw = _h_a7_count(w, _h_a7(p, 0), _h_a7(p, 2));
+            ph = _h_a7_count(h, _h_a7(p, 1), _h_a7(p, 3));
+            if (pw > 0 && ph > 0) { raw_len = raw_len + ph * (1 + _h_row_bytes(pw, ct, depth)); }
+            p = p + 1;
+        }
+    } else {
+        raw_len = h * (1 + _h_row_bytes(w, ct, depth));
+    }
+    var raw = alloc(raw_len + 1);
+    if (raw == 0) { return 0; }
+    var off = 0;
+    if (ilace == 1) {
+        p = 0;
+        while (p < 7) {
+            pw = _h_a7_count(w, _h_a7(p, 0), _h_a7(p, 2));
+            ph = _h_a7_count(h, _h_a7(p, 1), _h_a7(p, 3));
+            if (pw > 0 && ph > 0) { off = _h_fill_rows(raw, off, ph, _h_row_bytes(pw, ct, depth), badfilt); }
+            p = p + 1;
+        }
+    } else {
+        off = _h_fill_rows(raw, 0, h, _h_row_bytes(w, ct, depth), badfilt);
+    }
+    var zcap = raw_len * 2 + 128;
+    var z = alloc(zcap);
+    if (z == 0) { return 0; }
+    var zlen = zlib_compress(raw, raw_len, z, zcap);
+    if (zlen <= 0) { return 0; }
+
+    var ihdr[16];
+    _put_be32(&ihdr, w);
+    _put_be32(&ihdr + 4, h);
+    store8(&ihdr + 8, depth);
+    store8(&ihdr + 9, ct);
+    store8(&ihdr + 10, 0);
+    store8(&ihdr + 11, 0);
+    store8(&ihdr + 12, ilace);
+
+    var plte_len = 0;
+    if (ct == 3) { plte_len = plte_n * 3; }
+    var trns_len = 0;
+    if (trns == 1) {
+        if (ct == 0) { trns_len = 2; }
+        if (ct == 2) { trns_len = 6; }
+        if (ct == 3) { trns_len = 1 + (_fuzz_next() % plte_n); }
+    }
+    var aux = alloc(plte_len + trns_len + 8);
+    if (aux == 0) { return 0; }
+    _fuzz_fill(aux, plte_len + trns_len);
+    if (trns_len == 2 && depth < 16) {
+        # A gray key has to be a value the samples can take (§ 11.3.2.1).
+        store8(aux + plte_len, 0);
+        store8(aux + plte_len + 1, _fuzz_next() & ((1 << depth) - 1));
+    }
+    if (trns_len == 6 && depth < 16) {
+        store8(aux + plte_len, 0);
+        store8(aux + plte_len + 2, 0);
+        store8(aux + plte_len + 4, 0);
+    }
+
+    var total = 8 + 25 + 12 + zlen + 12;
+    if (plte_len > 0) { total = total + 12 + plte_len; }
+    if (trns_len > 0) { total = total + 12 + trns_len; }
+    var b = alloc(total);
+    if (b == 0) { return 0; }
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    var at = _h_chunk(b, 8, 73, 72, 68, 82, &ihdr, 13);                       # IHDR
+    if (plte_len > 0) { at = _h_chunk(b, at, 80, 76, 84, 69, aux, plte_len); }  # PLTE
+    if (trns_len > 0) { at = _h_chunk(b, at, 116, 82, 78, 83, aux + plte_len, trns_len); }  # tRNS
+    at = _h_chunk(b, at, 73, 68, 65, 84, z, zlen);                             # IDAT
+    at = _h_chunk(b, at, 73, 69, 78, 68, z, 0);                                # IEND
+    store64(len_out, at);
+    return b;
+}
+
+# The fixed shapes. Each names a decode path that NO mode reached before 1.1.1
+# (the probe it trips is in brackets — tools/run_probes.py in the 1.1.1 sweep):
+#   0  9x7   d8  ct2 Adam7          [PR-adam7]  deinterlace + RGB
+#   1  7x5   d8  ct3      + tRNS    [PR-pal8b]  8-bit palette, per-entry alpha
+#   2  9x5   d2  ct3      + tRNS    [PR-subpal] sub-byte palette
+#   3  11x3  d4  ct0      + tRNS    [PR-subgray] sub-byte gray + key
+#   4  5x4   d8  ct4                [PR-ga]     gray + alpha
+#   5  4x3   d16 ct2      + tRNS    [PR-rgb16]  16-bit RGB + 16-bit key
+#   6  6x4   d8  ct0      + tRNS    [PR-graykey] 8-bit gray key
+#   7  10x9  d1  ct0 Adam7          Adam7 at a sub-byte depth
+#   8  5x6   d16 ct6 Adam7          Adam7 at 16 bits, RGBA
+#   9  3x5   d8  ct6                the original RGBA8 shape
+enum PngFuzzShapes {
+    PNG_SHAPES = 10;      # _png_shape(0..9)
+    PNG_FIXTURES = 11;    # fx_rgba8_2x2 + the ten shapes
+}
+
+fn _h_pack(w, h, depth, ct, ilace, trns): i64 {
+    return w + (h << 8) + (depth << 16) + (ct << 24) + (ilace << 32) + (trns << 40);
+}
+
+# Field f of a packed shape: 0 w, 1 h, 2 depth, 3 colour type, 4 interlace, 5 tRNS.
+fn _h_field(shape, f): i64 {
+    return (shape >> (f * 8)) & 255;
+}
+
+fn _png_shape(k): i64 {
+    if (k == 0) { return _h_pack(9, 7, 8, 2, 1, 0); }
+    if (k == 1) { return _h_pack(7, 5, 8, 3, 0, 1); }
+    if (k == 2) { return _h_pack(9, 5, 2, 3, 0, 1); }
+    if (k == 3) { return _h_pack(11, 3, 4, 0, 0, 1); }
+    if (k == 4) { return _h_pack(5, 4, 8, 4, 0, 0); }
+    if (k == 5) { return _h_pack(4, 3, 16, 2, 0, 1); }
+    if (k == 6) { return _h_pack(6, 4, 8, 0, 0, 1); }
+    if (k == 7) { return _h_pack(10, 9, 1, 0, 1, 0); }
+    if (k == 8) { return _h_pack(5, 6, 16, 6, 1, 0); }
+    return _h_pack(3, 5, 8, 6, 0, 0);
+}
+
+# A full palette for the depth, so every index a random scanline can hold is
+# in range and the fixture decodes.
+fn _h_full_plte(depth): i64 {
+    if (depth >= 8) { return 256; }
+    return 1 << depth;
+}
+
+var _png_fx_cache[80];
+var _png_fx_len[80];
+
+# Fixed fixture k (0..PNG_SHAPES-1): built once from a fixed seed, then a fresh
+# COPY per call, because every mode mutates its copy in place.
+fn fx_png_shape(k, len_out): i64 {
+    var slot = &_png_fx_cache + k * 8;
+    if (load64(slot) == 0) {
+        var s = _png_shape(k);
+        var saved = _fuzz_state;
+        _fuzz_seed(7919 * (k + 1));
+        var n = 0;
+        var b = _png_build(_h_field(s, 0), _h_field(s, 1), _h_field(s, 2), _h_field(s, 3),
+          _h_field(s, 4), _h_full_plte(_h_field(s, 2)), _h_field(s, 5), 0, &n);
+        _fuzz_state = saved;
+        if (b == 0) { return 0; }
+        store64(slot, b);
+        store64(&_png_fx_len + k * 8, n);
+    }
+    var len = load64(&_png_fx_len + k * 8);
+    store64(len_out, len);
+    var c = alloc(len);
+    var i = 0;
+    while (i < len) {
+        store8(c + i, load8(load64(slot) + i));
+        i = i + 1;
+    }
+    return c;
+}
+
+# Fixture k of PNG_FIXTURES: 0 is the original hand-built 2x2 RGBA8 file, and
+# 1..PNG_SHAPES are the _png_shape builds.
+
+fn _png_fixture(k, len_out): i64 {
+    if (k == 0) { return fx_rgba8_2x2(len_out); }
+    return fx_png_shape(k - 1, len_out);
+}
+
+fn _png_fixture_shape(k): i64 {
+    if (k == 0) { return _h_pack(2, 2, 8, 6, 0, 0); }
+    return _png_shape(k - 1);
+}
+
+# ---- 8. decode_budget (1.1.1, cc-11) ----------------------------------
+# chitra_image_decode_budget is frozen, and it reads the attacker's bytes
+# TWICE: its own header walker (_chitra_declared_rgba_bytes) decides whether to
+# refuse, then the router decodes. No harness called it through 1.1.0. Its one
+# promise is that no image it returns exceeds max_bytes of RGBA8; its failure
+# shape is the same (0, *err_out set) as every other entry point. A budget of
+# exactly the output must decode — a refusal there is the walker disagreeing
+# with the decoder — and one byte under it must refuse as CHITRA_ERR_BUDGET.
+fn _budget_one(buf, n, max, code_out, label): i64 {
+    var err = 0;
+    store64(code_out, 0);
+    var img = chitra_image_decode_budget(buf, n, max, &err);
+    if (img == 0) {
+        assert(err != 0, label);
+        if (err != 0) {
+            store64(code_out, chitra_err_code(err));
+            assert(chitra_err_code(err) != CHITRA_OK, label);
+        }
+    }
+    if (img != 0) {
+        assert(err == 0, label);
+        assert(chitra_image_width(img) * chitra_image_height(img) * 4 <= max, label);
+    }
+    return img;
+}
+
+fn _budget_contract(buf, n, label): i64 {
+    var err = 0;
+    var code = 0;
+    var ref = chitra_image_decode(buf, n, &err);
+    if (ref != 0) {
+        var out = chitra_image_width(ref) * chitra_image_height(ref) * 4;
+        assert(_budget_one(buf, n, out - 1, &code, label) == 0, label);
+        assert(code == CHITRA_ERR_BUDGET, label);
+        assert(_budget_one(buf, n, out, &code, label) != 0, label);
+    }
+    if (ref == 0) {
+        # An input that does not decode: an arbitrary budget, 0 to ~16 MB on a
+        # log scale, must still refuse with *err_out set. (At most two decodes a
+        # case — every one is heap the bump allocator never gives back.)
+        var r = (_fuzz_next() << 16) | (_fuzz_next() << 8) | _fuzz_next();
+        _budget_one(buf, n, r >> (_fuzz_next() % 24), &code, label);
+    }
+    return 0;
+}
+
+# Untouched, IHDR-mutated behind a repaired CRC (which moves the size the walker
+# reads), or flipped anywhere — over every fixture.
+fn fuzz_png_budget(seed): i64 {
+    _fuzz_seed(seed);
+    var lo = 0;
+    var b = _png_fixture(seed % PNG_FIXTURES, &lo);
+    var kind = (seed / PNG_FIXTURES) % 3;
+    var m = 0;
+    if (kind == 1) {
+        m = 1 + (_fuzz_next() & 1);
+        while (m > 0) {
+            store8(b + 16 + (_fuzz_next() % 13), _fuzz_next());
+            m = m - 1;
+        }
+        _repair_crc(b, 12, 13);
+    }
+    if (kind == 2) {
+        store8(b + ((_fuzz_next() * 256 + _fuzz_next()) % lo), _fuzz_next());
+    }
+    _budget_contract(b, lo, "png decode_budget");
+    return 0;
+}
+
 # ---- 5. Degenerate lengths -------------------------------------------
 # A caller handing over a zero or negative length must be rejected, not
 # trusted into a read.
@@ -491,6 +807,53 @@ fn fuzz_png_degenerate(): i64 {
     return 0;
 }
 
+# ---- Heap epochs (1.1.1) ----------------------------------------------
+# cyrius's bump allocator never frees, so every case's decode used to stay on
+# the heap until exit: before this, fuzz_jpeg peaked at ~16 GB RSS and fuzz_gif
+# at ~9 GB, against a 16 GB CI runner. main() now calls _fuzz_epoch(case) after
+# every case and _fuzz_reclaim() after every mode; every FUZZ_EPOCH cases that
+#   1. under --poison, SWEEPS every live block first. alloc_reset() makes the
+#      poison layer forget its blocks, so without this an overwrite made since
+#      the last periodic sweep would never be checked — the gate-2 class;
+#   2. alloc_reset()s the heap back to its first 256 MB chunk (an epoch must
+#      fit in it: a spill maps a new chunk that a reset abandons, still
+#      resident — which is why the epoch is a case count, kept small);
+#   3. drops every heap pointer this harness memoizes, so nothing survives the
+#      reset as a dangling pointer. The caches below rebuild lazily.
+# Call it only BETWEEN cases: nothing a case allocated may be live after it.
+# chitra itself memoizes nothing on the heap (its tables are BSS); the stdlib
+# assert counters are plain globals.
+enum FuzzEpoch {
+    FUZZ_EPOCH = 1024;
+}
+
+fn _fuzz_reclaim(): i64 {
+    #ifdef CYRIUS_POISON
+    var pz = poison_sweep();
+    if (pz > 0) { assert_eq(pz, 0, "poison_sweep() before alloc_reset: changed redzones"); }
+    #endif
+    alloc_reset();
+    # sankoch memoizes its CRC table on the heap and detects a reset with an arena
+    # canary — exactly what tests/tcyr/alloc_reset.tcyr pins, which is why
+    # resetting between PNG decodes is safe. But crc32() itself does not check
+    # the canary ("call crc32_init_table() first"), and _repair_crc calls it
+    # directly, so re-arm here: crc32_init_table() sees the canary gone, drops
+    # sankoch's memoized pointers and rebuilds the table.
+    crc32_init_table();
+    var k = 0;
+    while (k < PNG_SHAPES) {
+        store64(&_png_fx_cache + k * 8, 0);
+        store64(&_png_fx_len + k * 8, 0);
+        k = k + 1;
+    }
+    return 0;
+}
+
+fn _fuzz_epoch(n): i64 {
+    if ((n % FUZZ_EPOCH) == 0) { _fuzz_reclaim(); }
+    return 0;
+}
+
 fn main(): i64 {
     var seed = 1;
 
@@ -500,56 +863,79 @@ fn main(): i64 {
     crc32_init_table();
 
     fuzz_png_selfcheck();
-    println("fuzz_png: harness self-check passed (fixture valid, IDAT reachable, CRC repair correct)");
+    _fuzz_reclaim();
+    println("fuzz_png: harness self-check passed (11 fixtures decode, IDAT reachable, CRC repair correct)");
 
     # 1. random bytes across a spread of lengths
     seed = 1;
     while (seed <= 100000) {
         fuzz_png_random(seed * 2654435761, (seed * 7) % 512);
+        _fuzz_epoch(seed);
         seed = seed + 1;
     }
+    _fuzz_reclaim();
     println("fuzz_png: 100000 random-byte cases survived");
 
     # 2. signature-prefixed garbage — drives the chunk walk
     seed = 1;
     while (seed <= 150000) {
         fuzz_png_sigprefix(seed * 40503, (seed * 11) % 504);
+        _fuzz_epoch(seed);
         seed = seed + 1;
     }
+    _fuzz_reclaim();
     println("fuzz_png: 150000 signature-prefixed chunk-walk cases survived");
 
-    # 3. bit-flipped valid fixtures, 1..4 mutations each
+    # 3. bit-flipped valid fixtures (all eleven), 1..4 mutations each
     seed = 1;
     while (seed <= 250000) {
         fuzz_png_mutate(seed * 97, (seed % 4) + 1);
+        _fuzz_epoch(seed);
         seed = seed + 1;
     }
+    _fuzz_reclaim();
     println("fuzz_png: 250000 mutated-fixture cases survived");
 
-    # 4. every truncation of a valid PNG
+    # 4. every truncation of every fixture
     fuzz_png_truncate();
+    _fuzz_reclaim();
     println("fuzz_png: truncation sweep survived");
 
-    # 5. degenerate lengths
-    # 6. hostile bytes BEHIND a repaired CRC — inflate, the five unfilter
-    #    predictors, Adam7 and the colour pass
+    # 6. hostile COMPRESSED bytes behind a repaired CRC, every fixture —
+    #    inflate and the size checks after it
     seed = 1;
     while (seed <= 150000) {
         fuzz_png_idat(seed * 2246822519, (seed % 5) + 1);
+        _fuzz_epoch(seed);
         seed = seed + 1;
     }
+    _fuzz_reclaim();
     println("fuzz_png: 150000 IDAT-stream mutation cases survived");
 
-    # 7. hostile SCANLINES behind a valid deflate stream — the five § 9
-    #    predictors, with an attacker-chosen filter byte per row
+    # 7. hostile SCANLINES behind a valid deflate stream, every shape — the
+    #    five § 9 predictors, Adam7, and every colour-type x depth x tRNS path
     seed = 1;
     while (seed <= 60000) {
-        fuzz_png_scanlines(seed * 1103515245, (seed % 7) + 1, (seed % 5) + 1);
+        fuzz_png_scanlines(seed * 1103515245, seed);
+        _fuzz_epoch(seed);
         seed = seed + 1;
     }
-    println("fuzz_png: 60000 scanline-mutation cases survived");
+    _fuzz_reclaim();
+    println("fuzz_png: 60000 scanline-mutation cases survived (10 shapes)");
 
+    # 8. chitra_image_decode_budget, budgets around the exact output size
+    seed = 1;
+    while (seed <= 30000) {
+        fuzz_png_budget(seed * 2654435761);
+        _fuzz_epoch(seed);
+        seed = seed + 1;
+    }
+    _fuzz_reclaim();
+    println("fuzz_png: 30000 decode_budget cases survived");
+
+    # 5. degenerate lengths
     fuzz_png_degenerate();
+    _fuzz_reclaim();
     println("fuzz_png: degenerate-length cases survived");
 
     return assert_summary();

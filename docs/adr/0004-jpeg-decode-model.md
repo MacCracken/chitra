@@ -77,6 +77,25 @@ This ADR records only the model decision and the alternatives weighed.
   baseline path — is also deferred (`CHITRA_ERR_JPEG_MODE`) to keep the
   scope a single committed mode; it is a documented upgrade candidate.
 
+> ⚠ **Amended 1.1.1 (2026-10-15): the distinct codes were not always the ones
+> a real file got.** The decision stands; the dispatch did not deliver it for
+> the commonest SOF1 file there is. libjpeg writes its DQT segments *before* the
+> SOF marker, and cjpeg switches to SOF1 precisely when a quantization value
+> exceeds 255 — every cjpeg file at quality 23 or below — writing that table at
+> 16-bit precision (`Pq = 1`). chitra refused a 16-bit table on sight, so those
+> files, and their progressive and arithmetic siblings, reported
+> `CHITRA_ERR_JPEG_DQT` before the SOF naming the real reason was reached. Since
+> 1.1.1 a 16-bit table ahead of the frame header is accepted syntactically and
+> judged against it: SOF1 → `CHITRA_ERR_JPEG_MODE`, SOF2 →
+> `CHITRA_ERR_JPEG_PROGRESSIVE`, SOF9 → `CHITRA_ERR_JPEG_ARITHMETIC`; with (or
+> after) SOF0 it is still `CHITRA_ERR_JPEG_DQT`, because baseline is 8-bit. The
+> same cut made the rest of the list hold: `0xC8` (JPG), `0xDE` (DHP), `0xDF`
+> (EXP) and `0xF0`–`0xFD` (JPGn) had fallen through to the length-skip and now
+> refuse as `CHITRA_ERR_JPEG_MODE`; and an Adobe APP14 `transform=2` no longer
+> refuses at the segment, so a 4-component YCCK file reports the
+> `CHITRA_ERR_JPEG_COMPONENTS` this list gives it rather than
+> `CHITRA_ERR_UNSUPPORTED`.
+
 The output normalizes to the same canonical RGBA8 surface PNG emits,
 reusing the 48-byte `ChitraImage` (`channels=4`), so downstream consumers
 (mabda's `gpu_texture_load_png`, kii's re-fold) gain JPEG on a

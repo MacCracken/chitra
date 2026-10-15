@@ -1312,11 +1312,11 @@ fn test_bmp_core_header() {
 }
 
 # ================================================================
-# Deferred modes and malformed headers reject with distinct codes.
+# Refused compressions and malformed headers reject with distinct codes.
 # ================================================================
 # RLE8/RLE4 landed in 0.5.1 and BITFIELDS in 0.5.2, so the only compressions
 # still refused are the embedded-stream ones — and those are refused
-# PERMANENTLY, not deferred: honouring them re-enters the decoder.
+# PERMANENTLY: honouring them re-enters the decoder.
 fn test_bmp_reject_compression() {
     var lo = 0;
     var b = fx_bmp24_2x2(&lo);
@@ -8724,6 +8724,602 @@ fn test_bmp_rgba8_wrapper_distinguishes_w_from_h() {
     return 0;
 }
 
+# ================================================================
+# 1.1.1 P(-1) sweep — the BMP guards no cell could tell from their absence, and
+# the BMP repairs that sweep made.
+#
+# ⛔ THROUGH 1.1.0, 25 BMP GUARDS COULD BE DELETED WITH ALL 13 SUITES AND BOTH
+# FUZZERS GREEN (gate-4 counted 23; bmp-gate-3 and gate-17 found two more).
+# Three of those could not fire at all (`stride <= 0` and the i32-floor height
+# were removed in 1.1.1, `stride * h` is documented). Among the rest: the
+# palette-span check, the only bound on `pal + idx*pal_str` reads past the
+# input, and the `y >= h` half of BOTH RLE write bounds. The end-of-line and
+# delta escapes deliberately allow y == h, and a store at y == h lands up to w
+# bytes BEFORE the index plane: an out-of-bounds WRITE the bump arena absorbs
+# in silence.
+# ⚠ EVERY CELL BELOW WAS MUTATION-CHECKED: its guard neutered (or its repair
+# reverted), the cell seen to FAIL, the source restored. A cell that passes
+# both ways proves nothing.
+#
+# Fixtures are spelled in hex, so the bytes are the record; every one that
+# decodes was checked against ImageMagick and ffmpeg when it was written.
+# Shared shapes: a 6x3 BI_RLE8 bitmap with a 4-entry palette (010203 040506
+# 070809 0a0b0c, stored B,G,R,x), and 2x1 BI_BITFIELDS bitmaps.
+# ================================================================
+fn _bhexnib(c): i64 {
+    if (c >= 97) { return c - 87; }    # a-f
+    if (c >= 65) { return c - 55; }    # A-F
+    return c - 48;
+}
+
+# Write the bytes a hex string spells at `b + pos`; returns the position just
+# past them.
+fn _bhx(b, pos, hex): i64 {
+    var n = strlen(hex) / 2;
+    var i = 0;
+    while (i < n) {
+        store8(b + pos + i, _bhexnib(load8(hex + i * 2)) * 16 + _bhexnib(load8(hex + i * 2 + 1)));
+        i = i + 1;
+    }
+    return pos + n;
+}
+
+fn _bzero(n): i64 {
+    var b = alloc(n + 8);
+    var i = 0;
+    while (i < n + 8) { store8(b + i, 0); i = i + 1; }
+    return b;
+}
+
+fn _ble32(p, v): i64 {
+    store8(p, v & 255);
+    store8(p + 1, (v >> 8) & 255);
+    store8(p + 2, (v >> 16) & 255);
+    store8(p + 3, (v >> 24) & 255);
+    return 0;
+}
+
+# Decode, returning the bytes the decode allocated through `spent_out`.
+fn _bcost(b, lo, err_out, spent_out): i64 {
+    var before = alloc_used();
+    var img = chitra_bmp_decode(b, lo, err_out);
+    store64(spent_out, alloc_used() - before);
+    return img;
+}
+
+# ---- fixtures ----------------------------------------------------
+fn fx_b_pal_span(len_out): i64 {
+    var b = _bzero(74);
+    _bhx(b, 0, "424d4a0000000000000046000000280000000100000001000000010008000000000004000000130b0000130b0000");
+    _bhx(b, 46, "00000000000000000102030004050600070809000a0b0c00c8000000");
+    store64(len_out, 74);
+    return b;
+}
+
+fn fx_b_delta_x(len_out): i64 {
+    var b = _bzero(76);
+    _bhx(b, 0, "424d4c0000000000000046000000280000000600000003000000010008000100000006000000130b0000130b0000");
+    _bhx(b, 46, "04000000000000000102030004050600070809000a0b0c00000209000001");
+    store64(len_out, 76);
+    return b;
+}
+
+fn fx_b_delta_y(len_out): i64 {
+    var b = _bzero(76);
+    _bhx(b, 0, "424d4c0000000000000046000000280000000600000003000000010008000100000006000000130b0000130b0000");
+    _bhx(b, 46, "04000000000000000102030004050600070809000a0b0c00000200040001");
+    store64(len_out, 76);
+    return b;
+}
+
+fn fx_b_abs_past_cap(len_out): i64 {
+    var b = _bzero(94);
+    _bhx(b, 0, "424d5e0000000000000046000000280000000600000003000000010008000100000018000000130b0000130b0000");
+    _bhx(b, 46, "04000000000000000102030004050600070809000a0b0c00000a0101010101010101010100000602000006030000");
+    _bhx(b, 92, "0001");
+    store64(len_out, 94);
+    return b;
+}
+
+fn fx_b_abs_at_yh(len_out): i64 {
+    var b = _bzero(90);
+    _bhx(b, 0, "424d5a0000000000000046000000280000000600000003000000010008000100000014000000130b0000130b0000");
+    _bhx(b, 46, "04000000000000000102030004050600070809000a0b0c000601000006020000060300000003010101000001");
+    store64(len_out, 90);
+    return b;
+}
+
+fn fx_b_enc_at_yh(len_out): i64 {
+    var b = _bzero(86);
+    _bhx(b, 0, "424d560000000000000046000000280000000600000003000000010008000100000010000000130b0000130b0000");
+    _bhx(b, 46, "04000000000000000102030004050600070809000a0b0c0006010000060200000603000006030001");
+    store64(len_out, 86);
+    return b;
+}
+
+fn fx_b_abs_pad_row(len_out): i64 {
+    var b = _bzero(96);
+    _bhx(b, 0, "424d60000000000000004600000028000000050000000200000001000800010000001a000000130b0000130b0000");
+    _bhx(b, 46, "04000000000000000102030004050600070809000a0b0c0000080102030102000000000000080302010302000000");
+    _bhx(b, 92, "00000001");
+    store64(len_out, 96);
+    return b;
+}
+
+fn fx_b_bf_noalpha(len_out): i64 {
+    var b = _bzero(146);
+    _bhx(b, 0, "424d92000000000000008a0000007c0000000200000001000000010020000300000008000000130b0000130b");
+    _bhx(b, 56, "ff0000ff0000ff0000000000000042475273");
+    _bhx(b, 138, "3020104d6050404d");
+    store64(len_out, 146);
+    return b;
+}
+
+fn fx_b_abf_noalpha(len_out): i64 {
+    var b = _bzero(78);
+    _bhx(b, 0, "424d4e0000000000000046000000280000000200000001000000010020000600000008000000130b0000130b");
+    _bhx(b, 56, "ff0000ff0000ff000000000000003020104d6050404d");
+    store64(len_out, 78);
+    return b;
+}
+
+fn fx_b_alpha_overlap(len_out): i64 {
+    var b = _bzero(74);
+    _bhx(b, 0, "424d4a0000000000000046000000380000000200000001000000010010000300000004000000130b0000130b0000");
+    _bhx(b, 46, "0000000000000000007c0000e00300001f00000000c000001f7ce003");
+    store64(len_out, 74);
+    return b;
+}
+
+fn fx_b_ovl_rb(len_out): i64 {
+    var b = _bzero(74);
+    _bhx(b, 0, "424d4a0000000000000046000000380000000200000001000000010010000300000004000000130b0000130b0000");
+    _bhx(b, 46, "0000000000000000007c0000e0030000007c0000000000001f7ce003");
+    store64(len_out, 74);
+    return b;
+}
+
+fn fx_b_ovl_gb(len_out): i64 {
+    var b = _bzero(74);
+    _bhx(b, 0, "424d4a0000000000000046000000380000000200000001000000010010000300000004000000130b0000130b0000");
+    _bhx(b, 46, "0000000000000000007c0000e0030000e0030000000000001f7ce003");
+    store64(len_out, 74);
+    return b;
+}
+
+fn fx_b_contig_g(len_out): i64 {
+    var b = _bzero(74);
+    _bhx(b, 0, "424d4a0000000000000046000000380000000200000001000000010010000300000004000000130b0000130b0000");
+    _bhx(b, 46, "0000000000000000007c0000600300001f000000000000001f7ce003");
+    store64(len_out, 74);
+    return b;
+}
+
+fn fx_b_contig_b(len_out): i64 {
+    var b = _bzero(74);
+    _bhx(b, 0, "424d4a0000000000000046000000380000000200000001000000010010000300000004000000130b0000130b0000");
+    _bhx(b, 46, "0000000000000000007c0000e003000015000000000000001f7ce003");
+    store64(len_out, 74);
+    return b;
+}
+
+fn fx_b_contig_a(len_out): i64 {
+    var b = _bzero(78);
+    _bhx(b, 0, "424d4e0000000000000046000000380000000200000001000000010020000300000008000000130b0000130b");
+    _bhx(b, 56, "ff0000ff0000ff000000000000a03020104d6050404d");
+    store64(len_out, 78);
+    return b;
+}
+
+fn fx_b_dataoff_small(len_out): i64 {
+    var b = _bzero(62);
+    _bhx(b, 0, "424d3e0000000000000014000000280000000200000001000000010018000000000008000000130b0000130b0000");
+    _bhx(b, 46, "00000000000000000102030405060000");
+    store64(len_out, 62);
+    return b;
+}
+
+fn fx_b_int_min_h(len_out): i64 {
+    var b = _bzero(58);
+    _bhx(b, 0, "424d3a0000000000000036000000280000000100000000000080010018000000000004000000130b0000130b");
+    store64(len_out, 58);
+    return b;
+}
+
+fn fx_b_bf24(len_out): i64 {
+    var b = _bzero(74);
+    _bhx(b, 0, "424d4a0000000000000042000000280000000200000001000000010018000300000008000000130b0000130b");
+    _bhx(b, 56, "ff0000ff0000ff0000000102030405060000");
+    store64(len_out, 74);
+    return b;
+}
+
+fn fx_b_paln(len_out): i64 {
+    var b = _bzero(70);
+    _bhx(b, 0, "424d460000000000000042000000280000000800000001000000010001000000000004000000130b0000130b0000");
+    _bhx(b, 46, "0300000000000000010203000405060007080900a0000000");
+    store64(len_out, 70);
+    return b;
+}
+
+fn fx_b_rle_off_eq_len(len_out): i64 {
+    var b = _bzero(70);
+    _bhx(b, 0, "424d460000000000000046000000280000000200000002000000010008000100000000000000130b0000130b0000");
+    _bhx(b, 46, "04000000000000000102030004050600070809000a0b0c00");
+    store64(len_out, 70);
+    return b;
+}
+
+fn fx_b_rgb24_off0(len_out): i64 {
+    var b = _bzero(74);
+    _bhx(b, 0, "424d4a000000000000000000000028000000030000000100000001001800000000000c000000130b0000130b0000");
+    _bhx(b, 46, "020000000000000005050500060606003264c8030201070809000000");
+    store64(len_out, 74);
+    return b;
+}
+
+fn fx_b_rgb16_off0(len_out): i64 {
+    var b = _bzero(66);
+    _bhx(b, 0, "424d420000000000000000000000280000000200000001000000010010000000000004000000130b0000130b0000");
+    _bhx(b, 46, "020000000000000005050500060606001f7ce003");
+    store64(len_out, 66);
+    return b;
+}
+
+fn fx_b_pal8_off0(len_out): i64 {
+    var b = _bzero(74);
+    _bhx(b, 0, "424d4a0000000000000000000000280000000200000001000000010008000000000004000000130b0000130b0000");
+    _bhx(b, 46, "04000000000000000102030004050600070809000a0b0c0001020000");
+    store64(len_out, 74);
+    return b;
+}
+
+fn fx_b_os2_comp3_32(len_out): i64 {
+    var b = _bzero(98);
+    _bhx(b, 0, "424d62000000000000005a000000400000000200000001000000010020000300000008000000130b0000130b");
+    _bhx(b, 80, "ff0000ff0000ff0000003020100060504000");
+    store64(len_out, 98);
+    return b;
+}
+
+fn fx_b_os2_comp3_1(len_out): i64 {
+    var b = _bzero(90);
+    _bhx(b, 0, "424d5a0000000000000056000000400000000800000001000000010001000300000004000000130b0000130b");
+    _bhx(b, 82, "ffffff0055000000");
+    store64(len_out, 90);
+    return b;
+}
+
+fn fx_b_wm12(len_out): i64 {
+    var b = _bzero(146);
+    _bhx(b, 0, "424d92000000000000008a0000007c0000000200000001000000010020000300000008000000130b0000130b");
+    _bhx(b, 56, "f0ff00ff0f00ff0000000000000042475273");
+    _bhx(b, 138, "8009f10f0009f0ff");
+    store64(len_out, 146);
+    return b;
+}
+
+fn fx_b_wm24(len_out): i64 {
+    var b = _bzero(146);
+    _bhx(b, 0, "424d92000000000000008a0000007c0000000200000001000000010020000300000008000000130b0000130b0000");
+    _bhx(b, 46, "000000000000000000ffffff00000000ff0000000000000042475273");
+    _bhx(b, 138, "4000810000ffffff");
+    store64(len_out, 146);
+    return b;
+}
+
+fn fx_b_maxpix(len_out): i64 {
+    var b = _bzero(66);
+    _bhx(b, 0, "424d42000000000000003e000000280000000110000001100000010001000000000004000000130b0000130b");
+    _bhx(b, 58, "ffffff0000000000");
+    store64(len_out, 66);
+    return b;
+}
+
+# bmp-gate-3 / gate-4 B-palspan — 8 bpp, clr_used 0 (so 256 entries implied),
+# four entries present, pixel index 200. The span check is the ONLY bound on
+# `pal + idx*pal_str`: neutered, entry 200 is read ~780 bytes past the input.
+fn test_bmp_palette_span_past_the_input_rejected() {
+    var lo = 0;
+    _breject(fx_b_pal_span(&lo), lo, CHITRA_ERR_BMP_PALETTE,
+      "implied 256-entry palette in a 74-byte file rejected");
+    return 0;
+}
+
+# bmp-gate-3 / gate-4 B-rle-delta — a delta is checked AT THE JUMP, per CLAUDE.md
+# BMP 7. 6x3 RLE8: delta (9,0) then end-of-bitmap, and delta (0,4) then
+# end-of-bitmap. Nothing is written after either jump, so the per-write bounds
+# never see it; neutered, both decode rc 0. The existing delta cell wrote after
+# its jump, which is why it could not tell this guard from its absence.
+fn test_bmp_rle_delta_checked_at_the_jump() {
+    var lo = 0;
+    _breject(fx_b_delta_x(&lo), lo, CHITRA_ERR_BMP_RLE, "delta past the right edge, then EOB");
+    var l2 = 0;
+    _breject(fx_b_delta_y(&l2), l2, CHITRA_ERR_BMP_RLE, "delta past the last row, then EOB");
+    return 0;
+}
+
+# bmp-gate-3 / gate-4 B-rle-abs-cap — an absolute run of 10 on a 6-wide row,
+# whose DWORD-padded row holds 8: past `row_cap`, still refused (the absolute
+# half of B-6's "past row_cap is still refused"). Neutered, it decodes.
+fn test_bmp_rle_absolute_run_past_the_padded_row_rejected() {
+    var lo = 0;
+    _breject(fx_b_abs_past_cap(&lo), lo, CHITRA_ERR_BMP_RLE,
+      "absolute run past the DWORD-padded row rejected");
+    return 0;
+}
+
+# bmp-gate-3 / gate-1 / gate-4 B-rle-abs-y, B-rle-enc-y — the `y >= h` half of
+# both RLE write bounds. Three full rows, each closed by end-of-line, leave the
+# cursor at y == h, which both escapes allow; then an absolute run (00 03 ..)
+# or an encoded run (06 03). The store would be `idx + (h-1-h)*w + x`, BEFORE
+# the index plane. Neutered, both decode rc 0 after writing out of bounds.
+fn test_bmp_rle_writes_past_the_last_row_rejected() {
+    var lo = 0;
+    _breject(fx_b_abs_at_yh(&lo), lo, CHITRA_ERR_BMP_RLE, "absolute run at y == h rejected");
+    var l2 = 0;
+    _breject(fx_b_enc_at_yh(&l2), l2, CHITRA_ERR_BMP_RLE, "encoded run at y == h rejected");
+    return 0;
+}
+
+# gate-17 — the absolute-mode half of B-6 (1.0.3). 5x2 RLE8, each row ONE
+# absolute run of 8 covering the DWORD-padded row (indices 1,2,3,1,2 + 3
+# padding, then 3,2,1,3,2 + 3), EOL, EOB. ImageMagick only writes encoded runs,
+# so only that half was pinned; reverted to `x >= w` this is refused at x == 5.
+# ImageMagick and ffmpeg decode it to exactly these pixels.
+fn test_bmp_rle_absolute_run_into_the_padding_decodes() {
+    var lo = 0;
+    var b = fx_b_abs_pad_row(&lo);
+    var err = 0;
+    var img = chitra_bmp_decode(b, lo, &err);
+    assert(img != 0, "absolute runs covering the padded row decode");
+    if (img != 0) {
+        var px = chitra_image_pixels(img);
+        _bpx(px, 0, 12, 11, 10, 255, "abs-pad top row px0");
+        _bpx(px, 1, 9, 8, 7, 255, "abs-pad top row px1");
+        _bpx(px, 2, 6, 5, 4, 255, "abs-pad top row px2");
+        _bpx(px, 3, 12, 11, 10, 255, "abs-pad top row px3");
+        _bpx(px, 4, 9, 8, 7, 255, "abs-pad top row px4");
+        _bpx(px, 5, 6, 5, 4, 255, "abs-pad bottom row px0");
+        _bpx(px, 6, 9, 8, 7, 255, "abs-pad bottom row px1");
+        _bpx(px, 7, 12, 11, 10, 255, "abs-pad bottom row px2");
+        _bpx(px, 8, 6, 5, 4, 255, "abs-pad bottom row px3");
+        _bpx(px, 9, 9, 8, 7, 255, "abs-pad bottom row px4");
+    }
+    return 0;
+}
+
+# bmp-gate-3 — a bitfields file with no alpha mask is opaque BY DECLARATION,
+# whatever its fourth byte holds. 2x1, 32 bpp, masks ff0000/ff00/ff/0, fourth
+# byte 0x4d. Neutered, the BI_RGB padding heuristic speaks for it and alpha
+# comes back 0x4d; ImageMagick and ffmpeg both give 255. The second file is the
+# BI_ALPHABITFIELDS half (four masks after a 40-byte header, the alpha one 0),
+# which both references refuse outright.
+fn test_bmp_bitfields_without_alpha_mask_opaque_by_declaration() {
+    var lo = 0;
+    var b = fx_b_bf_noalpha(&lo);
+    var err = 0;
+    var img = chitra_bmp_decode(b, lo, &err);
+    assert(img != 0, "V5 BI_BITFIELDS, no alpha mask, decodes");
+    if (img != 0) {
+        _bpx(chitra_image_pixels(img), 0, 16, 32, 48, 255, "BI_BITFIELDS no alpha mask px0 opaque");
+        _bpx(chitra_image_pixels(img), 1, 64, 80, 96, 255, "BI_BITFIELDS no alpha mask px1 opaque");
+    }
+    var l2 = 0;
+    var b2 = fx_b_abf_noalpha(&l2);
+    var e2 = 0;
+    var img2 = chitra_bmp_decode(b2, l2, &e2);
+    assert(img2 != 0, "BI_ALPHABITFIELDS with alpha mask 0 decodes");
+    if (img2 != 0) {
+        _bpx(chitra_image_pixels(img2), 0, 16, 32, 48, 255, "BI_ALPHABITFIELDS mask_a 0 px0 opaque");
+    }
+    return 0;
+}
+
+# gate-4 B-contig-g/b/a, B-ovl-rb/gb, bmp-gate-3 B-ovl-a — every mask check,
+# one channel at a time. The existing cells covered red's contiguity and the
+# red/green overlap only; each file here trips exactly one other check, and
+# with that check neutered it decodes. (V3 header, 16 bpp; the alpha
+# contiguity file is 32 bpp, alpha 0xA0000000.)
+fn test_bmp_mask_guards_each_channel() {
+    var lo = 0;
+    _breject(fx_b_contig_g(&lo), lo, CHITRA_ERR_BMP_MASK, "non-contiguous green mask rejected");
+    var l2 = 0;
+    _breject(fx_b_contig_b(&l2), l2, CHITRA_ERR_BMP_MASK, "non-contiguous blue mask rejected");
+    var l3 = 0;
+    _breject(fx_b_contig_a(&l3), l3, CHITRA_ERR_BMP_MASK, "non-contiguous alpha mask rejected");
+    var l4 = 0;
+    _breject(fx_b_ovl_rb(&l4), l4, CHITRA_ERR_BMP_MASK, "red/blue overlap rejected");
+    var l5 = 0;
+    _breject(fx_b_ovl_gb(&l5), l5, CHITRA_ERR_BMP_MASK, "green/blue overlap rejected");
+    var l6 = 0;
+    _breject(fx_b_alpha_overlap(&l6), l6, CHITRA_ERR_BMP_MASK, "alpha 0xC000 over red 0x7C00 rejected");
+    return 0;
+}
+
+# bmp-gate-3 / gate-4 B-dataoffmin — bfOffBits 20 points inside the headers.
+# Neutered, header bytes decode as pixels.
+fn test_bmp_data_offset_inside_the_headers_rejected() {
+    var lo = 0;
+    _breject(fx_b_dataoff_small(&lo), lo, CHITRA_ERR_BMP_HEADER, "data offset 20 rejected");
+    return 0;
+}
+
+# gate-4 B-dibtrunc — the 8-bpp fixture with the input cut 26 bytes into its
+# 40-byte DIB header. Neutered, the header is read from past the input (the
+# rest of this buffer) and the refusal comes later, from the palette span, as
+# BMP_PALETTE.
+fn test_bmp_cut_inside_the_dib_header_is_truncated() {
+    var lo = 0;
+    var b = fx_bmp8_2x2(&lo);
+    _breject(b, 40, CHITRA_ERR_TRUNCATED, "input ending inside the DIB header is TRUNCATED");
+    return 0;
+}
+
+# guards-unreachable — height 0x80000000 (-2^31, top-down). The dedicated
+# i32-floor branch was outcome-identical (its negation is exact in i64 and the
+# CHITRA_MAX_DIM check refuses 2^31) and was removed in 1.1.1; this pins that
+# neither the code nor the cost moved.
+fn test_bmp_i32_floor_height_still_refused_at_the_same_cost() {
+    var lo = 0;
+    var b = fx_b_int_min_h(&lo);
+    var err = 0;
+    var spent = 0;
+    var img = _bcost(b, lo, &err, &spent);
+    assert(img == 0, "height -2^31 rejected");
+    if (err != 0) { assert_eq(chitra_err_code(err), CHITRA_ERR_DIMENSIONS, "-> DIMENSIONS"); }
+    assert_lte(spent, 16, "refused with nothing allocated but the error");
+    return 0;
+}
+
+# gate-4 B-wh0 / B-maxdim / B-maxpix — the dimension ceilings, each alone. The
+# 24-bpp files are the i32-floor fixture with its width and height rewritten.
+# Neutered, each is refused LATER and under the wrong name: a zero or negative
+# side reaches the allocator as a 0 or negative size and comes back OOM (there
+# is no stride check behind it since 1.1.1); 65536 on one side passes the pixel
+# cap and is refused by the data span as TRUNCATED; so is 4097x4097 at 1 bpp,
+# whose stride*height is only 2 MB.
+fn _b24_wh(w, h, len_out): i64 {
+    var b = fx_b_int_min_h(len_out);
+    _ble32(b + 18, w);
+    _ble32(b + 22, h);
+    return b;
+}
+
+fn test_bmp_dimension_ceilings_each_refuse() {
+    var lo = 0;
+    _breject(_b24_wh(0, 1, &lo), lo, CHITRA_ERR_DIMENSIONS, "width 0 rejected");
+    _breject(_b24_wh(1, 0, &lo), lo, CHITRA_ERR_DIMENSIONS, "height 0 rejected");
+    _breject(_b24_wh(0 - 1, 1, &lo), lo, CHITRA_ERR_DIMENSIONS, "width -1 rejected");
+    _breject(_b24_wh(65536, 1, &lo), lo, CHITRA_ERR_DIMENSIONS, "width 65536 rejected");
+    _breject(_b24_wh(1, 65536, &lo), lo, CHITRA_ERR_DIMENSIONS, "height 65536 rejected");
+    var l2 = 0;
+    _breject(fx_b_maxpix(&l2), l2, CHITRA_ERR_DIMENSIONS, "4097x4097 (past CHITRA_MAX_PIXELS) rejected");
+    return 0;
+}
+
+# gate-4 B-bfbpp — BI_BITFIELDS at 24 bpp. Masks only mean anything for packed
+# 16/32-bit pixels; neutered, the masks are skipped and the file decodes as
+# plain 24-bit.
+fn test_bmp_bitfields_at_24bpp_rejected() {
+    var lo = 0;
+    _breject(fx_b_bf24(&lo), lo, CHITRA_ERR_BMP_HEADER, "BI_BITFIELDS at 24 bpp rejected");
+    return 0;
+}
+
+# gate-4 B-paln — clr_used 3 on a 1-bpp image, which can index two entries.
+# Neutered, the extra entry is accepted and the file decodes.
+fn test_bmp_palette_count_past_the_depth_rejected() {
+    var lo = 0;
+    _breject(fx_b_paln(&lo), lo, CHITRA_ERR_BMP_PALETTE, "3 palette entries at 1 bpp rejected");
+    return 0;
+}
+
+# gate-4 B-masktrunc — a 40-byte header with BI_BITFIELDS keeps its masks after
+# the header; here the input ends 4 bytes into them. The buffer past the input
+# holds overlapping masks, so a decoder that reads them anyway (the neutered
+# guard) refuses with BMP_MASK instead of TRUNCATED.
+fn test_bmp_masks_past_the_input_are_truncated() {
+    var lo = 0;
+    var b = fx_b_bf24(&lo);
+    store8(b + 28, 16);                 # 16 bpp
+    _ble32(b + 54, 31744);              # R 0x7C00
+    _ble32(b + 58, 31744);              # G 0x7C00 — overlaps R
+    _ble32(b + 62, 31);                 # B 0x001F
+    _breject(b, 58, CHITRA_ERR_TRUNCATED, "BI_BITFIELDS masks cut off by the input are TRUNCATED");
+    return 0;
+}
+
+# gate-4 B-rledataoff — an RLE8 file whose data offset IS the file length. The
+# stream has no first byte; neutered, the RLE pre-gate divides by a span of 0
+# and calls it DIMENSIONS.
+fn test_bmp_rle_data_offset_at_end_of_file_truncated() {
+    var lo = 0;
+    _breject(fx_b_rle_off_eq_len(&lo), lo, CHITRA_ERR_TRUNCATED, "RLE data offset == file length");
+    return 0;
+}
+
+# bmp-off0-ctable — bfOffBits 0 means "right after the headers", and at 16/24/32
+# bpp a non-zero biClrUsed puts a colour table there. Through 1.1.0 the table
+# was decoded as pixels with no error: 050505 060600 320006 for a file carrying
+# c86432 010203 090807. ImageMagick and ffmpeg refuse a 0 offset, so the
+# expectations are theirs for the same bytes with bfOffBits spelled out (62).
+# The 8-bpp file is the control: there the table IS the palette, already
+# skipped, and nothing moves.
+fn test_bmp_zero_offset_skips_the_colour_table() {
+    var lo = 0;
+    var b = fx_b_rgb24_off0(&lo);
+    var err = 0;
+    var img = chitra_bmp_decode(b, lo, &err);
+    assert(img != 0, "24 bpp, clr_used 2, bfOffBits 0 decodes");
+    if (img != 0) {
+        var px = chitra_image_pixels(img);
+        _bpx(px, 0, 200, 100, 50, 255, "off0 24 bpp px0 = c86432 (was the table's 050505)");
+        _bpx(px, 1, 1, 2, 3, 255, "off0 24 bpp px1 = 010203");
+        _bpx(px, 2, 9, 8, 7, 255, "off0 24 bpp px2 = 090807");
+    }
+    var l2 = 0;
+    var b2 = fx_b_rgb16_off0(&l2);
+    var e2 = 0;
+    var img2 = chitra_bmp_decode(b2, l2, &e2);
+    assert(img2 != 0, "16 bpp, clr_used 2, bfOffBits 0 decodes");
+    if (img2 != 0) {
+        _bpx(chitra_image_pixels(img2), 0, 255, 0, 255, 255, "off0 16 bpp px0 = ff00ff");
+        _bpx(chitra_image_pixels(img2), 1, 0, 255, 0, 255, "off0 16 bpp px1 = 00ff00");
+    }
+    var l3 = 0;
+    var b3 = fx_b_pal8_off0(&l3);
+    var e3 = 0;
+    var img3 = chitra_bmp_decode(b3, l3, &e3);
+    assert(img3 != 0, "8 bpp, bfOffBits 0 still decodes");
+    if (img3 != 0) {
+        _bpx(chitra_image_pixels(img3), 0, 6, 5, 4, 255, "off0 8 bpp px0 = palette entry 1");
+        _bpx(chitra_image_pixels(img3), 1, 9, 8, 7, 255, "off0 8 bpp px1 = palette entry 2");
+    }
+    return 0;
+}
+
+# bmp-os2-compression — on a 64-byte OS/2 2.x header, compression 3 is Huffman
+# 1D and 4 is RLE24. Through 1.1.0 3 was read as BI_BITFIELDS: the 32-bpp file
+# DECODED by masks taken from past the header (ImageMagick renders it black,
+# ffmpeg refuses it), and the 1-bpp one was called a broken header.
+fn test_bmp_os2_huffman_refused_as_compression() {
+    var lo = 0;
+    _breject(fx_b_os2_comp3_32(&lo), lo, CHITRA_ERR_BMP_COMPRESSION,
+      "OS/2 2.x compression 3 at 32 bpp refused, not read as bitfields");
+    var l2 = 0;
+    _breject(fx_b_os2_comp3_1(&l2), l2, CHITRA_ERR_BMP_COMPRESSION,
+      "OS/2 2.x Huffman 1D at 1 bpp is a compression, not a broken header");
+    return 0;
+}
+
+# bmp-wide-mask-rounding — channels wider than 8 bits. 12-12-8 masks: red 0x0FF
+# was truncated to 15 where ImageMagick gives 16, and green 0x109 is 16 where
+# the § 13.13 rescale the audit proposed gives 17 — so this pins ImageMagick's
+# mapping, not merely "rounded". 24-8 masks pin the wider-than-16 branch: red
+# 0x008100 was 0, ImageMagick gives 1. Every expected value is ImageMagick's.
+fn test_bmp_wide_mask_fields_scale_like_imagemagick() {
+    var lo = 0;
+    var b = fx_b_wm12(&lo);
+    var err = 0;
+    var img = chitra_bmp_decode(b, lo, &err);
+    assert(img != 0, "12-12-8 bitfields decode");
+    if (img != 0) {
+        _bpx(chitra_image_pixels(img), 0, 16, 16, 128, 255, "12-bit 0x0FF -> 16, 0x109 -> 16");
+        _bpx(chitra_image_pixels(img), 1, 255, 1, 0, 255, "12-bit 0xFFF -> 255, 0x009 -> 1");
+    }
+    var l2 = 0;
+    var b2 = fx_b_wm24(&l2);
+    var e2 = 0;
+    var img2 = chitra_bmp_decode(b2, l2, &e2);
+    assert(img2 != 0, "24-8 bitfields decode");
+    if (img2 != 0) {
+        _bpx(chitra_image_pixels(img2), 0, 1, 0, 64, 255, "24-bit 0x008100 -> 1");
+        _bpx(chitra_image_pixels(img2), 1, 255, 0, 0, 255, "24-bit 0xFFFFFF -> 255");
+    }
+    return 0;
+}
+
 fn main() {
     test_bmp_rgba8_wrapper_distinguishes_w_from_h();
     test_bmp_rle_dword_padded_row_decodes();
@@ -8772,6 +9368,24 @@ fn main() {
     test_bmp_alphabitfields_without_room_rejected();
     test_bmp_rle_end_of_line_overshoot_rejected();
     test_bmp_rle_single_trailing_end_of_line_decodes();
+    test_bmp_palette_span_past_the_input_rejected();
+    test_bmp_rle_delta_checked_at_the_jump();
+    test_bmp_rle_absolute_run_past_the_padded_row_rejected();
+    test_bmp_rle_writes_past_the_last_row_rejected();
+    test_bmp_rle_absolute_run_into_the_padding_decodes();
+    test_bmp_bitfields_without_alpha_mask_opaque_by_declaration();
+    test_bmp_mask_guards_each_channel();
+    test_bmp_data_offset_inside_the_headers_rejected();
+    test_bmp_cut_inside_the_dib_header_is_truncated();
+    test_bmp_i32_floor_height_still_refused_at_the_same_cost();
+    test_bmp_dimension_ceilings_each_refuse();
+    test_bmp_bitfields_at_24bpp_rejected();
+    test_bmp_palette_count_past_the_depth_rejected();
+    test_bmp_masks_past_the_input_are_truncated();
+    test_bmp_rle_data_offset_at_end_of_file_truncated();
+    test_bmp_zero_offset_skips_the_colour_table();
+    test_bmp_os2_huffman_refused_as_compression();
+    test_bmp_wide_mask_fields_scale_like_imagemagick();
     return assert_summary();
 }
 var exit_code = main();

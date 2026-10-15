@@ -1197,13 +1197,76 @@ fn test_error_names_describe_validity_not_capability() {
       "INTERLACE names an illegal value, not a missing feature");
     assert_streq(chitra_err_name(CHITRA_ERR_BIT_DEPTH), "illegal bit depth for color type",
       "BIT_DEPTH names an illegal combination, not a missing feature");
-    # Every code must have a name — a null here is a downstream deref.
-    var c = 0;
-    while (c <= 34) {
-        assert(chitra_err_name(c) != 0, "every error code has a printable name");
+    return 0;
+}
+
+# One row of the frozen ChitraErrCode table: the symbol must still equal its
+# 1.0 literal, and it must still have a name of its own.
+#
+# ⚠ THE NAME TEST COMPARES AGAINST THE FALLBACK, NOT AGAINST 0 (gate-13/cc-12,
+# 1.1.1). chitra_err_name never returns 0 — an unnamed code gets "unknown
+# error" — so the `!= 0` loop this replaces could not fail, and it also stopped
+# at 34, one short of INFLATE_LIMIT. Deleting a name line passed every suite.
+fn _sf_frozen_code(code, literal, label): i64 {
+    assert_eq(code, literal, label);
+    assert(streq(chitra_err_name(code), "unknown error") == 0, label);
+    return 0;
+}
+
+fn test_error_code_values_are_frozen() {
+    # gate-7 (1.1.1): public-surface.md puts the NUMERIC VALUES of ChitraErrCode
+    # inside the 1.0 promise, and until this cell nothing pinned one. Every test
+    # compared codes symbolically, and check-surface.sh compares only fn names,
+    # so renumbering BUDGET (34 -> 77) or swapping CRC and INTERLACE passed all
+    # 13 suites. A consumer that logs, persists or maps a code (mabda's GpuErr,
+    # an exit-status convention) would silently misreport. The literals below
+    # are the contract; the symbols are what is being checked against it.
+    # check-surface.sh fails if a ChitraErrCode member has no row here.
+    _sf_frozen_code(CHITRA_OK, 0, "CHITRA_OK is frozen at 0");
+    _sf_frozen_code(CHITRA_ERR_SIGNATURE, 1, "CHITRA_ERR_SIGNATURE is frozen at 1");
+    _sf_frozen_code(CHITRA_ERR_TRUNCATED, 2, "CHITRA_ERR_TRUNCATED is frozen at 2");
+    _sf_frozen_code(CHITRA_ERR_BAD_CHUNK, 3, "CHITRA_ERR_BAD_CHUNK is frozen at 3");
+    _sf_frozen_code(CHITRA_ERR_UNSUPPORTED, 4, "CHITRA_ERR_UNSUPPORTED is frozen at 4");
+    _sf_frozen_code(CHITRA_ERR_INFLATE, 5, "CHITRA_ERR_INFLATE is frozen at 5");
+    _sf_frozen_code(CHITRA_ERR_OOM, 6, "CHITRA_ERR_OOM is frozen at 6");
+    _sf_frozen_code(CHITRA_ERR_CRC, 7, "CHITRA_ERR_CRC is frozen at 7");
+    _sf_frozen_code(CHITRA_ERR_INTERLACE, 8, "CHITRA_ERR_INTERLACE is frozen at 8");
+    _sf_frozen_code(CHITRA_ERR_BIT_DEPTH, 9, "CHITRA_ERR_BIT_DEPTH is frozen at 9");
+    _sf_frozen_code(CHITRA_ERR_DIMENSIONS, 10, "CHITRA_ERR_DIMENSIONS is frozen at 10");
+    _sf_frozen_code(CHITRA_ERR_FILTER, 11, "CHITRA_ERR_FILTER is frozen at 11");
+    _sf_frozen_code(CHITRA_ERR_NO_IDAT, 12, "CHITRA_ERR_NO_IDAT is frozen at 12");
+    _sf_frozen_code(CHITRA_ERR_JPEG_MARKER, 13, "CHITRA_ERR_JPEG_MARKER is frozen at 13");
+    _sf_frozen_code(CHITRA_ERR_JPEG_SOF, 14, "CHITRA_ERR_JPEG_SOF is frozen at 14");
+    _sf_frozen_code(CHITRA_ERR_JPEG_DQT, 15, "CHITRA_ERR_JPEG_DQT is frozen at 15");
+    _sf_frozen_code(CHITRA_ERR_JPEG_DHT, 16, "CHITRA_ERR_JPEG_DHT is frozen at 16");
+    _sf_frozen_code(CHITRA_ERR_JPEG_SOS, 17, "CHITRA_ERR_JPEG_SOS is frozen at 17");
+    _sf_frozen_code(CHITRA_ERR_JPEG_ENTROPY, 18, "CHITRA_ERR_JPEG_ENTROPY is frozen at 18");
+    _sf_frozen_code(CHITRA_ERR_JPEG_PROGRESSIVE, 19, "CHITRA_ERR_JPEG_PROGRESSIVE is frozen at 19");
+    _sf_frozen_code(CHITRA_ERR_JPEG_ARITHMETIC, 20, "CHITRA_ERR_JPEG_ARITHMETIC is frozen at 20");
+    _sf_frozen_code(CHITRA_ERR_JPEG_PRECISION, 21, "CHITRA_ERR_JPEG_PRECISION is frozen at 21");
+    _sf_frozen_code(CHITRA_ERR_JPEG_MODE, 22, "CHITRA_ERR_JPEG_MODE is frozen at 22");
+    _sf_frozen_code(CHITRA_ERR_JPEG_COMPONENTS, 23, "CHITRA_ERR_JPEG_COMPONENTS is frozen at 23");
+    _sf_frozen_code(CHITRA_ERR_BMP_HEADER, 24, "CHITRA_ERR_BMP_HEADER is frozen at 24");
+    _sf_frozen_code(CHITRA_ERR_BMP_DEPTH, 25, "CHITRA_ERR_BMP_DEPTH is frozen at 25");
+    _sf_frozen_code(CHITRA_ERR_BMP_COMPRESSION, 26, "CHITRA_ERR_BMP_COMPRESSION is frozen at 26");
+    _sf_frozen_code(CHITRA_ERR_BMP_PALETTE, 27, "CHITRA_ERR_BMP_PALETTE is frozen at 27");
+    _sf_frozen_code(CHITRA_ERR_GIF_HEADER, 28, "CHITRA_ERR_GIF_HEADER is frozen at 28");
+    _sf_frozen_code(CHITRA_ERR_GIF_LZW, 29, "CHITRA_ERR_GIF_LZW is frozen at 29");
+    _sf_frozen_code(CHITRA_ERR_GIF_PALETTE, 30, "CHITRA_ERR_GIF_PALETTE is frozen at 30");
+    _sf_frozen_code(CHITRA_ERR_GIF_NO_IMAGE, 31, "CHITRA_ERR_GIF_NO_IMAGE is frozen at 31");
+    _sf_frozen_code(CHITRA_ERR_BMP_RLE, 32, "CHITRA_ERR_BMP_RLE is frozen at 32");
+    _sf_frozen_code(CHITRA_ERR_BMP_MASK, 33, "CHITRA_ERR_BMP_MASK is frozen at 33");
+    _sf_frozen_code(CHITRA_ERR_BUDGET, 34, "CHITRA_ERR_BUDGET is frozen at 34");
+    _sf_frozen_code(CHITRA_ERR_INFLATE_LIMIT, 35, "CHITRA_ERR_INFLATE_LIMIT is frozen at 35");
+    _sf_frozen_code(CHITRA_ERR_OTHER, 99, "CHITRA_ERR_OTHER is frozen at 99");
+    # Everything between the last assigned code and the catch-all is unassigned.
+    # A value here that has a name is a new code nobody added to this table.
+    var c = 36;
+    while (c < 99) {
+        assert_streq(chitra_err_name(c), "unknown error",
+          "an unassigned code has no name (pin a new ChitraErrCode above)");
         c = c + 1;
     }
-    assert(chitra_err_name(99) != 0, "the catch-all has a name too");
     return 0;
 }
 
@@ -1243,6 +1306,7 @@ fn main(): i64 {
     test_chitra_image_record_layout_is_append_only();
     test_chitra_err_record_is_gpuerr_compatible();
     test_error_names_describe_validity_not_capability();
+    test_error_code_values_are_frozen();
     test_signature_predicates_are_reachable_and_exclusive();
     test_version_is_packed_consistently();
     return assert_summary();

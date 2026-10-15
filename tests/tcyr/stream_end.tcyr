@@ -2193,7 +2193,596 @@ fn test_jpeg_restart_markers_still_report_closed() {
     return 0;
 }
 
+# ================================================================
+# jpeg-5 / jpeg-6 (1.1.1) — restart intervals and `seen_iend`.
+#
+# jpeg-5: a restart-interval JPEG cut inside its entropy data reached the next
+# restart boundary with the span exhausted, `_jpeg_br_restart` returned -1, and
+# the file was refused as CHITRA_ERR_JPEG_ENTROPY ("corrupt entropy stream") —
+# while the SAME cut without DRI decodes with seen_iend = 0 under the 0.7.0
+# policy, and djpeg decodes both ("Premature end of JPEG file"). On this fixture
+# the MCUs that carry real data match djpeg -nosmooth byte for byte; the
+# fabricated tail differs, as it does without DRI.
+#
+# jpeg-6: restart markers were accepted in any order and unconsumed entropy
+# bytes were never noticed, so a scan with an interval lost, repeated or
+# renumbered — djpeg: "found marker 0xd2 instead of RST3", "9 extraneous bytes
+# before marker 0xd9" — still reported seen_iend = 1. Neither is fabrication,
+# so neither touches BR_EOD (CLAUDE.md JPEG item 5); BR_DAMAGED and the tail
+# check carry them.
+#
+# ⚠ BOTH DIRECTIONS ARE PINNED. The intact cell and the trailing-RSTn cell are
+# the guard on the guard: a legitimate restart must not flag, and neither must
+# a stray RSTn after the last interval, which libjpeg passes silently.
+# ⚠ MUTATION-CHECKED: the truncation cells fail (err 18) without the
+# `pos >= end` return; the out-of-sequence cells fail (seen_iend 1) without the
+# BR_DAMAGED store; the extraneous-bytes cells fail without the tail check; the
+# trailing-RSTn cell fails if the tail check refuses markers.
+# ================================================================
+# 24x16 baseline grayscale JPEG with a restart interval of ONE MCU (jpeg-5 / jpeg-6,
+# 1.1.1): six 8x8 MCUs, five restart markers RST0..RST4, byte sum 278,325 —
+# byte-identical to djpeg -nosmooth. Regenerate (g2.pgm: the header recipe of
+# tests/tcyr/jpeg_noninterleaved.tcyr):
+#   cjpeg -quality 80 -grayscale -restart 1B -outfile rstg.jpg g2.pgm
+# Layout: DRI @318, SOS @324, entropy @334..388, EOI @388. Each of the first five
+# intervals is 7 bytes followed by its FF Dn: RST0 @341, RST1 @350, RST2 @359,
+# RST3 @368, RST4 @377; the last interval is 9 bytes, @379.
+fn fx_se_jpeg_rst(len_out): i64 {
+    var b = alloc(390);
+    store64(len_out, 390);
+    var i = 0;
+    while (i < 390) {
+        store8(b + i, 0);
+        i = i + 1;
+    }
+    store8(b + 0, 0xFF);
+    store8(b + 1, 0xD8);
+    store8(b + 2, 0xFF);
+    store8(b + 3, 0xE0);
+    store8(b + 5, 0x10);
+    store8(b + 6, 0x4A);
+    store8(b + 7, 0x46);
+    store8(b + 8, 0x49);
+    store8(b + 9, 0x46);
+    store8(b + 11, 0x01);
+    store8(b + 12, 0x01);
+    store8(b + 15, 0x01);
+    store8(b + 17, 0x01);
+    store8(b + 20, 0xFF);
+    store8(b + 21, 0xDB);
+    store8(b + 23, 0x43);
+    store8(b + 25, 0x06);
+    store8(b + 26, 0x04);
+    store8(b + 27, 0x05);
+    store8(b + 28, 0x06);
+    store8(b + 29, 0x05);
+    store8(b + 30, 0x04);
+    store8(b + 31, 0x06);
+    store8(b + 32, 0x06);
+    store8(b + 33, 0x05);
+    store8(b + 34, 0x06);
+    store8(b + 35, 0x07);
+    store8(b + 36, 0x07);
+    store8(b + 37, 0x06);
+    store8(b + 38, 0x08);
+    store8(b + 39, 0x0A);
+    store8(b + 40, 0x10);
+    store8(b + 41, 0x0A);
+    store8(b + 42, 0x0A);
+    store8(b + 43, 0x09);
+    store8(b + 44, 0x09);
+    store8(b + 45, 0x0A);
+    store8(b + 46, 0x14);
+    store8(b + 47, 0x0E);
+    store8(b + 48, 0x0F);
+    store8(b + 49, 0x0C);
+    store8(b + 50, 0x10);
+    store8(b + 51, 0x17);
+    store8(b + 52, 0x14);
+    store8(b + 53, 0x18);
+    store8(b + 54, 0x18);
+    store8(b + 55, 0x17);
+    store8(b + 56, 0x14);
+    store8(b + 57, 0x16);
+    store8(b + 58, 0x16);
+    store8(b + 59, 0x1A);
+    store8(b + 60, 0x1D);
+    store8(b + 61, 0x25);
+    store8(b + 62, 0x1F);
+    store8(b + 63, 0x1A);
+    store8(b + 64, 0x1B);
+    store8(b + 65, 0x23);
+    store8(b + 66, 0x1C);
+    store8(b + 67, 0x16);
+    store8(b + 68, 0x16);
+    store8(b + 69, 0x20);
+    store8(b + 70, 0x2C);
+    store8(b + 71, 0x20);
+    store8(b + 72, 0x23);
+    store8(b + 73, 0x26);
+    store8(b + 74, 0x27);
+    store8(b + 75, 0x29);
+    store8(b + 76, 0x2A);
+    store8(b + 77, 0x29);
+    store8(b + 78, 0x19);
+    store8(b + 79, 0x1F);
+    store8(b + 80, 0x2D);
+    store8(b + 81, 0x30);
+    store8(b + 82, 0x2D);
+    store8(b + 83, 0x28);
+    store8(b + 84, 0x30);
+    store8(b + 85, 0x25);
+    store8(b + 86, 0x28);
+    store8(b + 87, 0x29);
+    store8(b + 88, 0x28);
+    store8(b + 89, 0xFF);
+    store8(b + 90, 0xC0);
+    store8(b + 92, 0x0B);
+    store8(b + 93, 0x08);
+    store8(b + 95, 0x10);
+    store8(b + 97, 0x18);
+    store8(b + 98, 0x01);
+    store8(b + 99, 0x01);
+    store8(b + 100, 0x11);
+    store8(b + 102, 0xFF);
+    store8(b + 103, 0xC4);
+    store8(b + 105, 0x1F);
+    store8(b + 108, 0x01);
+    store8(b + 109, 0x05);
+    store8(b + 110, 0x01);
+    store8(b + 111, 0x01);
+    store8(b + 112, 0x01);
+    store8(b + 113, 0x01);
+    store8(b + 114, 0x01);
+    store8(b + 115, 0x01);
+    store8(b + 124, 0x01);
+    store8(b + 125, 0x02);
+    store8(b + 126, 0x03);
+    store8(b + 127, 0x04);
+    store8(b + 128, 0x05);
+    store8(b + 129, 0x06);
+    store8(b + 130, 0x07);
+    store8(b + 131, 0x08);
+    store8(b + 132, 0x09);
+    store8(b + 133, 0x0A);
+    store8(b + 134, 0x0B);
+    store8(b + 135, 0xFF);
+    store8(b + 136, 0xC4);
+    store8(b + 138, 0xB5);
+    store8(b + 139, 0x10);
+    store8(b + 141, 0x02);
+    store8(b + 142, 0x01);
+    store8(b + 143, 0x03);
+    store8(b + 144, 0x03);
+    store8(b + 145, 0x02);
+    store8(b + 146, 0x04);
+    store8(b + 147, 0x03);
+    store8(b + 148, 0x05);
+    store8(b + 149, 0x05);
+    store8(b + 150, 0x04);
+    store8(b + 151, 0x04);
+    store8(b + 154, 0x01);
+    store8(b + 155, 0x7D);
+    store8(b + 156, 0x01);
+    store8(b + 157, 0x02);
+    store8(b + 158, 0x03);
+    store8(b + 160, 0x04);
+    store8(b + 161, 0x11);
+    store8(b + 162, 0x05);
+    store8(b + 163, 0x12);
+    store8(b + 164, 0x21);
+    store8(b + 165, 0x31);
+    store8(b + 166, 0x41);
+    store8(b + 167, 0x06);
+    store8(b + 168, 0x13);
+    store8(b + 169, 0x51);
+    store8(b + 170, 0x61);
+    store8(b + 171, 0x07);
+    store8(b + 172, 0x22);
+    store8(b + 173, 0x71);
+    store8(b + 174, 0x14);
+    store8(b + 175, 0x32);
+    store8(b + 176, 0x81);
+    store8(b + 177, 0x91);
+    store8(b + 178, 0xA1);
+    store8(b + 179, 0x08);
+    store8(b + 180, 0x23);
+    store8(b + 181, 0x42);
+    store8(b + 182, 0xB1);
+    store8(b + 183, 0xC1);
+    store8(b + 184, 0x15);
+    store8(b + 185, 0x52);
+    store8(b + 186, 0xD1);
+    store8(b + 187, 0xF0);
+    store8(b + 188, 0x24);
+    store8(b + 189, 0x33);
+    store8(b + 190, 0x62);
+    store8(b + 191, 0x72);
+    store8(b + 192, 0x82);
+    store8(b + 193, 0x09);
+    store8(b + 194, 0x0A);
+    store8(b + 195, 0x16);
+    store8(b + 196, 0x17);
+    store8(b + 197, 0x18);
+    store8(b + 198, 0x19);
+    store8(b + 199, 0x1A);
+    store8(b + 200, 0x25);
+    store8(b + 201, 0x26);
+    store8(b + 202, 0x27);
+    store8(b + 203, 0x28);
+    store8(b + 204, 0x29);
+    store8(b + 205, 0x2A);
+    store8(b + 206, 0x34);
+    store8(b + 207, 0x35);
+    store8(b + 208, 0x36);
+    store8(b + 209, 0x37);
+    store8(b + 210, 0x38);
+    store8(b + 211, 0x39);
+    store8(b + 212, 0x3A);
+    store8(b + 213, 0x43);
+    store8(b + 214, 0x44);
+    store8(b + 215, 0x45);
+    store8(b + 216, 0x46);
+    store8(b + 217, 0x47);
+    store8(b + 218, 0x48);
+    store8(b + 219, 0x49);
+    store8(b + 220, 0x4A);
+    store8(b + 221, 0x53);
+    store8(b + 222, 0x54);
+    store8(b + 223, 0x55);
+    store8(b + 224, 0x56);
+    store8(b + 225, 0x57);
+    store8(b + 226, 0x58);
+    store8(b + 227, 0x59);
+    store8(b + 228, 0x5A);
+    store8(b + 229, 0x63);
+    store8(b + 230, 0x64);
+    store8(b + 231, 0x65);
+    store8(b + 232, 0x66);
+    store8(b + 233, 0x67);
+    store8(b + 234, 0x68);
+    store8(b + 235, 0x69);
+    store8(b + 236, 0x6A);
+    store8(b + 237, 0x73);
+    store8(b + 238, 0x74);
+    store8(b + 239, 0x75);
+    store8(b + 240, 0x76);
+    store8(b + 241, 0x77);
+    store8(b + 242, 0x78);
+    store8(b + 243, 0x79);
+    store8(b + 244, 0x7A);
+    store8(b + 245, 0x83);
+    store8(b + 246, 0x84);
+    store8(b + 247, 0x85);
+    store8(b + 248, 0x86);
+    store8(b + 249, 0x87);
+    store8(b + 250, 0x88);
+    store8(b + 251, 0x89);
+    store8(b + 252, 0x8A);
+    store8(b + 253, 0x92);
+    store8(b + 254, 0x93);
+    store8(b + 255, 0x94);
+    store8(b + 256, 0x95);
+    store8(b + 257, 0x96);
+    store8(b + 258, 0x97);
+    store8(b + 259, 0x98);
+    store8(b + 260, 0x99);
+    store8(b + 261, 0x9A);
+    store8(b + 262, 0xA2);
+    store8(b + 263, 0xA3);
+    store8(b + 264, 0xA4);
+    store8(b + 265, 0xA5);
+    store8(b + 266, 0xA6);
+    store8(b + 267, 0xA7);
+    store8(b + 268, 0xA8);
+    store8(b + 269, 0xA9);
+    store8(b + 270, 0xAA);
+    store8(b + 271, 0xB2);
+    store8(b + 272, 0xB3);
+    store8(b + 273, 0xB4);
+    store8(b + 274, 0xB5);
+    store8(b + 275, 0xB6);
+    store8(b + 276, 0xB7);
+    store8(b + 277, 0xB8);
+    store8(b + 278, 0xB9);
+    store8(b + 279, 0xBA);
+    store8(b + 280, 0xC2);
+    store8(b + 281, 0xC3);
+    store8(b + 282, 0xC4);
+    store8(b + 283, 0xC5);
+    store8(b + 284, 0xC6);
+    store8(b + 285, 0xC7);
+    store8(b + 286, 0xC8);
+    store8(b + 287, 0xC9);
+    store8(b + 288, 0xCA);
+    store8(b + 289, 0xD2);
+    store8(b + 290, 0xD3);
+    store8(b + 291, 0xD4);
+    store8(b + 292, 0xD5);
+    store8(b + 293, 0xD6);
+    store8(b + 294, 0xD7);
+    store8(b + 295, 0xD8);
+    store8(b + 296, 0xD9);
+    store8(b + 297, 0xDA);
+    store8(b + 298, 0xE1);
+    store8(b + 299, 0xE2);
+    store8(b + 300, 0xE3);
+    store8(b + 301, 0xE4);
+    store8(b + 302, 0xE5);
+    store8(b + 303, 0xE6);
+    store8(b + 304, 0xE7);
+    store8(b + 305, 0xE8);
+    store8(b + 306, 0xE9);
+    store8(b + 307, 0xEA);
+    store8(b + 308, 0xF1);
+    store8(b + 309, 0xF2);
+    store8(b + 310, 0xF3);
+    store8(b + 311, 0xF4);
+    store8(b + 312, 0xF5);
+    store8(b + 313, 0xF6);
+    store8(b + 314, 0xF7);
+    store8(b + 315, 0xF8);
+    store8(b + 316, 0xF9);
+    store8(b + 317, 0xFA);
+    store8(b + 318, 0xFF);
+    store8(b + 319, 0xDD);
+    store8(b + 321, 0x04);
+    store8(b + 323, 0x01);
+    store8(b + 324, 0xFF);
+    store8(b + 325, 0xDA);
+    store8(b + 327, 0x08);
+    store8(b + 328, 0x01);
+    store8(b + 329, 0x01);
+    store8(b + 332, 0x3F);
+    store8(b + 334, 0xF2);
+    store8(b + 335, 0xBF);
+    store8(b + 336, 0x0F);
+    store8(b + 337, 0xDA);
+    store8(b + 338, 0x7D);
+    store8(b + 339, 0xDE);
+    store8(b + 340, 0x2B);
+    store8(b + 341, 0xFF);
+    store8(b + 342, 0xD0);
+    store8(b + 343, 0xB3);
+    store8(b + 344, 0xE1);
+    store8(b + 345, 0xFB);
+    store8(b + 346, 0x4F);
+    store8(b + 347, 0xBB);
+    store8(b + 348, 0xC5);
+    store8(b + 349, 0x7F);
+    store8(b + 350, 0xFF);
+    store8(b + 351, 0xD1);
+    store8(b + 352, 0xF6);
+    store8(b + 353, 0x7F);
+    store8(b + 354, 0x0F);
+    store8(b + 355, 0xDA);
+    store8(b + 356, 0x7D);
+    store8(b + 357, 0xDE);
+    store8(b + 358, 0x2B);
+    store8(b + 359, 0xFF);
+    store8(b + 360, 0xD2);
+    store8(b + 361, 0xC7);
+    store8(b + 362, 0xF0);
+    store8(b + 363, 0xFD);
+    store8(b + 364, 0xA7);
+    store8(b + 365, 0xDD);
+    store8(b + 366, 0xE2);
+    store8(b + 367, 0xBF);
+    store8(b + 368, 0xFF);
+    store8(b + 369, 0xD3);
+    store8(b + 370, 0xF4);
+    store8(b + 371, 0x5F);
+    store8(b + 372, 0x0F);
+    store8(b + 373, 0xDA);
+    store8(b + 374, 0x7D);
+    store8(b + 375, 0xDE);
+    store8(b + 376, 0x2B);
+    store8(b + 377, 0xFF);
+    store8(b + 378, 0xD4);
+    store8(b + 379, 0xFA);
+    store8(b + 380, 0x73);
+    store8(b + 381, 0x4B);
+    store8(b + 382, 0x84);
+    store8(b + 383, 0x45);
+    store8(b + 384, 0x08);
+    store8(b + 385, 0x38);
+    store8(b + 386, 0xE6);
+    store8(b + 387, 0xBF);
+    store8(b + 388, 0xFF);
+    store8(b + 389, 0xD9);
+    return b;
+}
+
+# Copy `src` with `n` bytes of `seg` inserted at `at`.
+fn _se_splice(src, lo, at, seg, n, len_out): i64 {
+    var out = alloc(lo + n);
+    store64(len_out, lo + n);
+    var i = 0;
+    while (i < at) {
+        store8(out + i, load8(src + i));
+        i = i + 1;
+    }
+    i = 0;
+    while (i < n) {
+        store8(out + at + i, load8(seg + i));
+        i = i + 1;
+    }
+    i = at;
+    while (i < lo) {
+        store8(out + n + i, load8(src + i));
+        i = i + 1;
+    }
+    return out;
+}
+
+fn _se_decode(b, lo, err_out): i64 {
+    store64(err_out, 0);
+    var err = 0;
+    var img = chitra_jpeg_decode(b, lo, &err);
+    if (img == 0) {
+        if (err != 0) { store64(err_out, chitra_err_code(err)); }
+    }
+    return img;
+}
+
+fn test_jpeg_restart_fixture_is_what_it_claims() {
+    var lo = 0;
+    var b = fx_se_jpeg_rst(&lo);
+    assert_eq(load8(b + 319), 0xDD, "fixture: DRI at 318");
+    assert_eq(load8(b + 342), 0xD0, "fixture: RST0 at 341");
+    assert_eq(load8(b + 360), 0xD2, "fixture: RST2 at 359");
+    assert_eq(load8(b + 378), 0xD4, "fixture: RST4 at 377");
+    assert_eq(load8(b + 389), 0xD9, "fixture: EOI at 388");
+    var code = 0;
+    var img = _se_decode(b, lo, &code);
+    assert(img != 0, "restart-interval JPEG decodes");
+    if (img != 0) {
+        assert_eq(_se_sum(img), 278325, "restart-interval JPEG: djpeg's bytes");
+        assert_eq(chitra_image_seen_iend(img), 1,
+          "a real restart-interval JPEG reports a clean close (restarts are not damage)");
+    }
+    return 0;
+}
+
+fn test_jpeg_truncated_restart_file_decodes_partially() {
+    var lo = 0;
+    var b = fx_se_jpeg_rst(&lo);
+    var code = 0;
+    var img = _se_decode(b, 360, &code);
+    assert(img != 0, "jpeg-5: DRI JPEG cut mid-scan still decodes, as without DRI");
+    assert_eq(code, 0, "jpeg-5: no CHITRA_ERR_JPEG_ENTROPY for a truncation");
+    if (img != 0) {
+        assert_eq(chitra_image_seen_iend(img), 0, "jpeg-5: truncated DRI JPEG: seen_iend = 0");
+        assert_neq(_se_sum(img), 278325, "jpeg-5: the tail really is fabricated");
+    }
+    # The same cut with a genuine EOI appended: djpeg "found marker 0xd9
+    # instead of RST2", and an image.
+    var eoi = alloc(2);
+    store8(eoi + 0, 0xFF);
+    store8(eoi + 1, 0xD9);
+    var l2 = 0;
+    var c = _se_splice(b, 360, 360, eoi, 2, &l2);
+    var code2 = 0;
+    var img2 = _se_decode(c, l2, &code2);
+    assert(img2 != 0, "jpeg-5: DRI JPEG cut mid-scan + real EOI still decodes");
+    assert_eq(code2, 0, "jpeg-5: cut + EOI: no error");
+    if (img2 != 0) {
+        assert_eq(chitra_image_seen_iend(img2), 0, "jpeg-5: cut + real EOI: seen_iend = 0");
+    }
+    return 0;
+}
+
+fn test_jpeg_restart_markers_out_of_sequence_report_not_closed() {
+    # Every RSTn rewritten to RST0.
+    var lo = 0;
+    var b = fx_se_jpeg_rst(&lo);
+    store8(b + 351, 0xD0);
+    store8(b + 360, 0xD0);
+    store8(b + 369, 0xD0);
+    store8(b + 378, 0xD0);
+    var code = 0;
+    var img = _se_decode(b, lo, &code);
+    assert(img != 0, "jpeg-6: all-RST0 JPEG decodes");
+    if (img != 0) {
+        assert_eq(chitra_image_seen_iend(img), 0,
+          "jpeg-6: restart markers out of sequence: seen_iend = 0 (djpeg: found 0xd0 instead of RST1)");
+    }
+    # Interval 2 and its RST2 repeated, numbers kept: the image after it is
+    # shifted by one interval although every bit is real.
+    var l2 = 0;
+    var src = fx_se_jpeg_rst(&l2);
+    var l3 = 0;
+    var c = _se_splice(src, l2, 361, src + 352, 9, &l3);
+    var code2 = 0;
+    var img2 = _se_decode(c, l3, &code2);
+    assert(img2 != 0, "jpeg-6: repeated-interval JPEG decodes");
+    if (img2 != 0) {
+        assert_eq(chitra_image_seen_iend(img2), 0,
+          "jpeg-6: a repeated restart interval: seen_iend = 0 (djpeg: found 0xd2 instead of RST3)");
+        assert_neq(_se_sum(img2), 278325, "jpeg-6: the repeated interval really moved pixels");
+    }
+    return 0;
+}
+
+fn test_jpeg_unconsumed_entropy_bytes_report_not_closed() {
+    # Interval 2 repeated and every marker renumbered so the sequence is
+    # perfect: only the 9 bytes no MCU consumes show it (djpeg: "9 extraneous
+    # bytes before marker 0xd9").
+    var lo = 0;
+    var src = fx_se_jpeg_rst(&lo);
+    var l2 = 0;
+    var c = _se_splice(src, lo, 361, src + 352, 9, &l2);
+    store8(c + 369, 0xD3);
+    store8(c + 378, 0xD4);
+    store8(c + 387, 0xD5);
+    var code = 0;
+    var img = _se_decode(c, l2, &code);
+    assert(img != 0, "jpeg-6: renumbered repeated-interval JPEG decodes");
+    if (img != 0) {
+        assert_eq(chitra_image_seen_iend(img), 0,
+          "jpeg-6: entropy bytes no MCU consumed: seen_iend = 0");
+    }
+    # Three bytes spliced in before EOI.
+    var junk = alloc(3);
+    store8(junk + 0, 0);
+    store8(junk + 1, 0);
+    store8(junk + 2, 0);
+    var l3 = 0;
+    var d = _se_splice(src, lo, 388, junk, 3, &l3);
+    var code2 = 0;
+    var img2 = _se_decode(d, l3, &code2);
+    assert(img2 != 0, "jpeg-6: junk-before-EOI JPEG decodes");
+    if (img2 != 0) {
+        assert_eq(_se_sum(img2), 278325, "jpeg-6: junk before EOI: the pixels are still right");
+        assert_eq(chitra_image_seen_iend(img2), 0, "jpeg-6: junk before EOI: seen_iend = 0");
+    }
+    return 0;
+}
+
+fn test_jpeg_trailing_restart_marker_is_not_damage() {
+    var lo = 0;
+    var src = fx_se_jpeg_rst(&lo);
+    var rst = alloc(2);
+    store8(rst + 0, 0xFF);
+    store8(rst + 1, 0xD5);
+    var l2 = 0;
+    var c = _se_splice(src, lo, 388, rst, 2, &l2);
+    var code = 0;
+    var img = _se_decode(c, l2, &code);
+    assert(img != 0, "jpeg-6: trailing-RST5 JPEG decodes");
+    if (img != 0) {
+        assert_eq(_se_sum(img), 278325, "jpeg-6: trailing RSTn: pixels unchanged");
+        assert_eq(chitra_image_seen_iend(img), 1,
+          "jpeg-6: a stray RSTn after the last interval is a marker, not data (libjpeg is silent)");
+    }
+    return 0;
+}
+
+fn test_jpeg_data_where_a_restart_marker_must_be_rejected() {
+    # gate-4 (1.1.1): the `rrc != 0` refusal had no cell. RST0 overwritten
+    # with two data bytes: at the first restart boundary the span still holds
+    # bytes, and they are not a marker — corruption, not truncation, so it is
+    # refused (djpeg: "9 extraneous bytes before marker 0xd1"). Without the
+    # check the decode runs on, misaligned, and reports success.
+    # ⚠ MUTATION-CHECKED: with `rrc != 0` neutered this reads 0.
+    var lo = 0;
+    var b = fx_se_jpeg_rst(&lo);
+    store8(b + 341, 0x00);
+    store8(b + 342, 0x00);
+    var code = 0;
+    var img = _se_decode(b, lo, &code);
+    assert(img == 0, "gate-4: data bytes in place of RST0 are refused");
+    assert_eq(code, CHITRA_ERR_JPEG_ENTROPY, "gate-4: data in place of RST0 -> JPEG_ENTROPY");
+    return 0;
+}
+
 fn main(): i64 {
+    test_jpeg_data_where_a_restart_marker_must_be_rejected();
+    test_jpeg_restart_fixture_is_what_it_claims();
+    test_jpeg_truncated_restart_file_decodes_partially();
+    test_jpeg_restart_markers_out_of_sequence_report_not_closed();
+    test_jpeg_unconsumed_entropy_bytes_report_not_closed();
+    test_jpeg_trailing_restart_marker_is_not_damage();
     test_jpeg_unexpected_rstn_reports_not_closed();
     test_jpeg_restart_markers_still_report_closed();
     test_jpeg_complete_stream_reports_closed();

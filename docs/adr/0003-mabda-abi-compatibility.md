@@ -25,10 +25,11 @@ consumer boundary:
 
 - **`ChitraErr`** — `src/error.cyr:9-11`: a 16-byte record, `+0` code,
   `+8` detail pointer. Returned by-pointer through the `err_out` slot of
-  `chitra_png_decode` (`src/png.cyr:102`).
-- **`ChitraImage`** — `src/png.cyr:20-38`: the decode result. As of
+  `chitra_png_decode` (`src/png.cyr:106`).
+- **`ChitraImage`** — `src/png.cyr:21-41`: the decode result. As of
   0.2.1 it is 48 bytes: `width@0`, `height@8`, `pixels@16` (owned RGBA8),
-  `channels@24` (always 4), `seen_iend@32`, `src_ctype@40`.
+  `channels@24` (always 4), `seen_iend@32`, `src_ctype@40` — and 56 since
+  0.9.0 appended `src_depth@48` under rule (b) below.
 
 A decision was needed about how these layouts may evolve, because a
 silent reorder or width-repurpose would corrupt mabda's reads at runtime
@@ -41,7 +42,7 @@ contract, with two specific rules.**
 
 (a) **`ChitraErr` is a fixed 16-byte record deliberately
 layout-compatible with mabda's `GpuErr`** — `+0` code, `+8` detail
-pointer (`src/error.cyr:9-11`, `chitra_err_new` at `:104`). The shared
+pointer (layout: `ChitraErr`, `src/error.cyr:9-11`; `chitra_err_new` at `:115`). The shared
 shape means a chitra decode failure maps onto `GPU_ERR_IMAGE_DECODE`
 with zero translation: mabda reads the code and detail pointer at the
 offsets its own `GpuErr` already uses.
@@ -49,7 +50,7 @@ offsets its own `GpuErr` already uses.
 (b) **`ChitraImage` fields are append-only.** The 0.1.x quartet —
 `width@0`, `height@8`, `pixels@16`, `channels@24` — keeps those offsets
 forever. 0.2.0 added `seen_iend@32` and `src_ctype@40` strictly at the
-end and bumped `CHITRA_IMAGE_SIZE` from 32 to 48 (`src/png.cyr:38`);
+end and bumped `CHITRA_IMAGE_SIZE` from 32 to 48 (`src/png.cyr:41`, 56 since 0.9.0);
 existing accessors and mabda's reads were untouched. Any future field
 appends at the next free offset and bumps the size constant. **No field
 ever reorders, shrinks, or is repurposed within a major version.**
@@ -94,7 +95,7 @@ consumer contract and may change freely.
   would, at no abstraction cost.
 - **A tagged-union `Result` instead of the `(ptr, err_out)` pair.**
   Rejected: the `(ptr, 0-on-fail, *err_out set)` shape matches the
-  established `chitra_png_parse_raw` convention (`src/png.cyr:63-83`) and
+  established `chitra_png_parse_raw` convention (`src/png_filter.cyr:360`) and
   maps directly onto mabda's `GpuErr` flow. A tagged union would add a
   carrier record with its own layout contract and buy nothing the pair
   does not already give.

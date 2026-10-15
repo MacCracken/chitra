@@ -52,7 +52,13 @@ at roughly 1,473:1 against a minimal one.
 guarded `== 0`, and **per frame rather than per definition** (a single DHT may
 carry thousands of definitions, so per-definition allocation would trade a flat
 cost for one that scales with file size). A refused JPEG now costs the frame
-record plus the `ChitraErr`. For contrast: a JPEG rejected at the **signature**
+record plus the `ChitraErr`. ⚠ *"First defines something" became exact only in
+1.1.1*: the allocation sat at segment entry, so an empty or malformed DQT/DHT
+still paid the whole store (the 12-byte `FF D8 FF DB 00 02 FF C4 00 02 FF D9`
+spent 22,160 bytes); it now waits until a table header has validated. The same
+cut moved three more refusals in front of the allocations they used to follow —
+PNG's chunk-list verdicts, GIF's palette check and JPEG's summed-span gate (see
+SECURITY.md). For contrast: a JPEG rejected at the **signature**
 costs 16 bytes, and a malformed PNG costs ~16.5 KB once — that one is sankoch's
 table setup, memoized — then ~120 B per call.
 
@@ -60,7 +66,7 @@ Reducing this was the named prerequisite for the byte-budget surface, and both
 halves shipped in 0.6.1: [`../adr/0007-byte-budget-surface-deferred.md`](../adr/0007-byte-budget-surface-deferred.md)
 decided the shape, [`../adr/0008-byte-budget-as-shipped.md`](../adr/0008-byte-budget-as-shipped.md)
 records what it became — two names rather than eight, with a refusal costing 16
-bytes (144 for BMP).
+bytes (128 for BMP).
 
 ## The `*_free` no-ops
 

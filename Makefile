@@ -6,8 +6,9 @@
 #
 # Quick reference:
 #   make test           — CPU-only tests (globs tests/tcyr/*.tcyr domain suites)
-#   make fuzz           — adversarial-input harnesses (globs fuzz/*.fcyr)
+#   make fuzz           — adversarial-input harnesses, poisoned (fuzz/*.fcyr)
 #   make bench          — decode benchmarks (tests/bcyr/chitra.bcyr)
+#   make bench-build    — compile the bench harness without running it
 #   make bench-record   — bench + append to bench-history.csv
 #   make build          — link-check the library (programs/smoke.cyr)
 #   make dist           — regenerate dist/chitra.cyr via `cyrius distlib`
@@ -16,7 +17,8 @@
 #                         chitra_version() agree
 #   make check-surface  — dist exports vs docs/development/public-surface.md
 #   make count-assertions — NUL-safe assertion total across suites
-#   make test-all       — version-check + dist regen + CPU tests + fuzz
+#   make test-all       — version-check + dist regen + CPU tests + fuzz +
+#                         bench-build
 #   make clean          — scrub build/
 
 CYRIUS ?= cyrius
@@ -53,13 +55,23 @@ test: check-lib-wiring
 	@for f in tests/tcyr/*.tcyr; do $(CYRIUS) test "$$f" || exit 1; done
 
 .PHONY: lint
+# A `warn` line fails, and so does lint's OWN non-zero exit (gate-9, 1.1.1):
+# `cyrius lint` exits 1 on a file it cannot compile WITHOUT running a single
+# check, and this loop used to read only the `warn` lines — so a file that did
+# not even parse was reported lint-clean. Same loop as ci.yml's Lint step.
+# `--strict-deferrals` (gate-14, 1.1.1): an untracked deferral note ("not yet",
+# "deferred", "later") now fails lint's own exit. Turned on only once every
+# linted file had zero of them — the 13 that 6.7.9 reported were reworded, not
+# silenced. Proven: a probe file reading "not yet implemented" exits 2.
 lint: check-surface
 	@fail=0; \
 	for f in src/*.cyr programs/*.cyr tests/tcyr/*.tcyr tests/bcyr/*.bcyr fuzz/*.fcyr; do \
-		out=$$($(CYRIUS) lint $$f 2>&1); echo "$$out"; \
-		echo "$$out" | grep -qE '^\s*warn ' && fail=1; \
+		[ -e "$$f" ] || continue; \
+		out=$$($(CYRIUS) lint --strict-deferrals "$$f" 2>&1); rc=$$?; echo "$$out"; \
+		if [ $$rc -ne 0 ]; then echo "lint: $$f exited $$rc — it was NOT linted"; fail=1; fi; \
+		if echo "$$out" | grep -qE '^[[:space:]]*warn '; then echo "lint: warnings in $$f"; fail=1; fi; \
 	done; \
-	[ $$fail -eq 0 ] || { echo "lint: warnings present"; exit 1; }
+	[ $$fail -eq 0 ] || { echo "lint: warnings or lint failures present"; exit 1; }
 
 .PHONY: fmt-check
 fmt-check:
@@ -90,12 +102,27 @@ dist:
 	$(CYRIUS) distlib
 
 .PHONY: fuzz
-# Adversarial-input harnesses under fuzz/ (`cyrius fuzz` globs fuzz/*.fcyr).
-# Each drives a public decode entry with random / signature-prefixed /
-# bit-flipped / truncated / entropy-mutated input and asserts BOTH the
-# survival invariant and the documented (0 + *err_out set) contract.
+# Adversarial-input harnesses under fuzz/. Each drives a public decode entry
+# with random / signature-prefixed / bit-flipped / truncated / entropy-mutated
+# input and asserts BOTH the survival invariant and the documented
+# (0 + *err_out set) contract.
+#
+# This IS the CI fuzz step — ci.yml runs `make fuzz` — so there is one
+# definition (gate-16, 1.1.1: bare `cyrius fuzz` also walks tests/, CI's own
+# loop did not, and the two gates ran different harness sets). A harness
+# outside fuzz/ is refused rather than silently skipped by both.
+#
+# `--poison` (gate-2, 1.1.1) arms allocator redzones and exits 86 on an
+# overwrite. A plain run sees only crashes, and a small overflow into the next
+# bump allocation does not crash: dropping GIF's frame-rect guard passed every
+# plain harness and fails this one.
 fuzz: check-lib-wiring
-	$(CYRIUS) fuzz
+	@stray=$$(find . -name '*.fcyr' -not -path './fuzz/*' -not -path './lib/*' | sort); \
+	if [ -n "$$stray" ]; then \
+		echo "fuzz: harnesses outside fuzz/ would be skipped by this gate:"; \
+		echo "$$stray"; exit 1; \
+	fi
+	@for f in fuzz/*.fcyr; do $(CYRIUS) fuzz --poison "$$f" || exit 1; done
 
 .PHONY: bench
 # Decode benchmarks (tests/bcyr/chitra.bcyr). The harness GENERATES its
@@ -105,6 +132,15 @@ fuzz: check-lib-wiring
 # load-dependent, so gating CI on them would be a flake source.
 bench: check-lib-wiring
 	$(CYRIUS) bench tests/bcyr/chitra.bcyr
+
+.PHONY: bench-build
+# Compile the bench harness WITHOUT running it (gate-9, 1.1.1). Nothing else
+# compiles tests/bcyr/chitra.bcyr, and lint passes a file it cannot compile,
+# so this is the gate that keeps `make bench` / `make bench-record` working.
+# CI runs it; timing numbers stay out of CI.
+bench-build: check-lib-wiring
+	@mkdir -p build
+	$(CYRIUS) build tests/bcyr/chitra.bcyr build/chitra_bench
 
 .PHONY: bench-record
 # Run the benchmarks and append the results to bench-history.csv.
@@ -120,7 +156,7 @@ count-assertions:
 	@./scripts/count-test-assertions.sh
 
 .PHONY: test-all
-test-all: version-check dist test fuzz
+test-all: version-check dist test fuzz bench-build
 
 .PHONY: clean
 clean:

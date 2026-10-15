@@ -3990,7 +3990,10 @@ fn test_bomb_still_reports_as_a_bomb() {
 # `_sankoch_alloc(8)`, which consumed injection index 0, so the table was #1.
 # sankoch 2.8.x (the 6.6.20 pin, 1.0.4) arms it with a plain `alloc(8)`, so
 # the table is now #0 — and index 1 landed inside zlib_decompress, refusing
-# the decode as CHITRA_ERR_INFLATE (5) while the CRC table built fine.
+# the decode as CHITRA_ERR_INFLATE (5) while the CRC table built fine. (That
+# code was itself the misclassification png-2 repaired in 1.1.1: an allocation
+# failure inside zlib_decompress is now CHITRA_ERR_OOM — see
+# test_inflate_oom_is_oom_not_inflate.)
 # ⇒ The `crc32_table` assertions below pin WHICH allocation failed, so the
 # next reorder fails as "the injection missed the table", not as a code
 # mismatch that reads like a chitra regression.
@@ -4311,6 +4314,723 @@ fn test_png_rgba8_wrapper_distinguishes_w_from_h() {
     return 0;
 }
 
+# ================================================================
+# 1.1.1 P(-1) — fixtures BUILT AT RUN TIME, with real CRCs.
+#
+# Every cell from here down sits ONE field away from a valid file, and that field
+# is the whole test. Building the file chunk by chunk, with each CRC computed
+# rather than pasted, keeps every other byte honest: a fixture whose CRC is stale
+# trips CHITRA_ERR_CRC before the guard it exists to reach — which is exactly how
+# test_bomb_still_reports_as_a_bomb was once vacuous. Each group also carries a
+# CONTROL, the same builder with the one field left valid, which must decode.
+# ================================================================
+fn _put_u32be(p, v): i64 {
+    store8(p + 0, (v >> 24) & 255);
+    store8(p + 1, (v >> 16) & 255);
+    store8(p + 2, (v >> 8) & 255);
+    store8(p + 3, v & 255);
+    return 0;
+}
+
+# Builder record (16 bytes): +0 buffer base, +8 bytes written. Starts with the
+# 8-byte signature already in place.
+fn _pb_new(cap): i64 {
+    crc32_init_table();
+    var pb = alloc(16);
+    store64(pb, alloc(cap));
+    store64(pb + 8, 0);
+    var sig = "\x89PNG\r\n\x1a\n";
+    var i = 0;
+    while (i < 8) {
+        _pb_u8(pb, load8(sig + i));
+        i = i + 1;
+    }
+    return pb;
+}
+
+fn _pb_u8(pb, v): i64 {
+    var o = load64(pb + 8);
+    store8(load64(pb) + o, v & 255);
+    store64(pb + 8, o + 1);
+    return 0;
+}
+
+fn _pb_u32(pb, v): i64 {
+    _pb_u8(pb, v >> 24);
+    _pb_u8(pb, v >> 16);
+    _pb_u8(pb, v >> 8);
+    _pb_u8(pb, v);
+    return 0;
+}
+
+fn _pb_buf(pb): i64 { return load64(pb); }
+fn _pb_len(pb): i64 { return load64(pb + 8); }
+
+# One chunk (§ 5.3): length, type, `n` data bytes, CRC-32 over type + data.
+fn _pb_chunk(pb, type, data, n): i64 {
+    _pb_u32(pb, n);
+    var tstart = load64(pb) + load64(pb + 8);
+    var i = 0;
+    while (i < 4) {
+        _pb_u8(pb, load8(type + i));
+        i = i + 1;
+    }
+    i = 0;
+    while (i < n) {
+        _pb_u8(pb, load8(data + i));
+        i = i + 1;
+    }
+    _pb_u32(pb, crc32(tstart, 4 + n) & 4294967295);
+    return 0;
+}
+
+# IHDR (§ 11.2.2) with every field explicit, so a cell can lie in exactly one.
+fn _pb_ihdr(pb, w, h, depth, ct, comp, filt, il): i64 {
+    var d[16];
+    _put_u32be(&d, w);
+    _put_u32be(&d + 4, h);
+    store8(&d + 8, depth);
+    store8(&d + 9, ct);
+    store8(&d + 10, comp);
+    store8(&d + 11, filt);
+    store8(&d + 12, il);
+    _pb_chunk(pb, "IHDR", &d, 13);
+    return 0;
+}
+
+fn _pb_iend(pb): i64 {
+    _pb_chunk(pb, "IEND", 0, 0);
+    return 0;
+}
+
+# zlib (RFC 1950) around ONE stored DEFLATE block (RFC 1951 § 3.2.4) of
+# `n` <= 65535 bytes — no compression, so the inflated stream is exactly the
+# bytes a cell names.
+fn _z_stored(data, n, len_out): i64 {
+    var z = alloc(n + 11);
+    store8(z + 0, 120);          # CMF 0x78: deflate, 32 KiB window
+    store8(z + 1, 1);            # FLG 0x01: (0x78 * 256 + 1) % 31 == 0
+    store8(z + 2, 1);            # BFINAL = 1, BTYPE = 00 (stored)
+    store8(z + 3, n & 255);
+    store8(z + 4, (n >> 8) & 255);
+    store8(z + 5, (n ^ 65535) & 255);
+    store8(z + 6, ((n ^ 65535) >> 8) & 255);
+    memcpy(z + 7, data, n);
+    _put_u32be(z + 7 + n, adler32(data, n) & 4294967295);
+    store64(len_out, n + 11);
+    return z;
+}
+
+# LSB-first bit writer for the fixed-Huffman stream below.
+# Record (32 bytes): +0 base, +8 bytes written, +16 bit accumulator, +24 bit count.
+fn _bw_bit(bw, bit): i64 {
+    var nb = load64(bw + 24);
+    var acc = load64(bw + 16) | ((bit & 1) << nb);
+    nb = nb + 1;
+    if (nb == 8) {
+        store8(load64(bw) + load64(bw + 8), acc);
+        store64(bw + 8, load64(bw + 8) + 1);
+        acc = 0;
+        nb = 0;
+    }
+    store64(bw + 16, acc);
+    store64(bw + 24, nb);
+    return 0;
+}
+
+# A Huffman code goes in MSB-first (RFC 1951 § 3.1.1), unlike every other field.
+fn _bw_code(bw, code, nbits): i64 {
+    var i = nbits;
+    while (i > 0) {
+        i = i - 1;
+        _bw_bit(bw, code >> i);
+    }
+    return 0;
+}
+
+# A VALID zlib stream inflating to `n` >= 1 zero bytes, fixed Huffman (§ 3.2.6):
+# one literal 0, then 258-byte copies at distance 1 (13 bits each), then literal
+# zeros for the remainder. That is ~1/160 of the output, so a 4096x4096 depth-1
+# image's scanlines fit in ~13 KB and sit far inside CHITRA_MAX_INFLATE_RATIO —
+# these cost fixtures are big images, not bombs, and the bomb caps pass them.
+fn _z_zeros(n, len_out): i64 {
+    var z = alloc(n / 128 + 512);
+    store8(z + 0, 120);
+    store8(z + 1, 1);
+    var bw[32];
+    store64(&bw, z + 2);
+    store64(&bw + 8, 0);
+    store64(&bw + 16, 0);
+    store64(&bw + 24, 0);
+    _bw_bit(&bw, 1);             # BFINAL
+    _bw_bit(&bw, 1);             # BTYPE = 01 (fixed Huffman), LSB first
+    _bw_bit(&bw, 0);
+    _bw_code(&bw, 48, 8);        # literal 0 = 00110000
+    var left = n - 1;
+    while (left >= 258) {
+        _bw_code(&bw, 197, 8);   # length 258 = symbol 285 = 11000101, no extra bits
+        _bw_code(&bw, 0, 5);     # distance 1 = distance code 0, no extra bits
+        left = left - 258;
+    }
+    while (left > 0) {
+        _bw_code(&bw, 48, 8);
+        left = left - 1;
+    }
+    _bw_code(&bw, 0, 7);         # end of block = symbol 256 = 0000000
+    if (load64(&bw + 24) > 0) {
+        store8(load64(&bw) + load64(&bw + 8), load64(&bw + 16));
+        store64(&bw + 8, load64(&bw + 8) + 1);
+    }
+    var o = 2 + load64(&bw + 8);
+    # Adler-32 of n zero bytes: s1 stays 1, s2 = n mod 65521.
+    _put_u32be(z + o, ((n % 65521) << 16) | 1);
+    store64(len_out, o + 4);
+    return z;
+}
+
+# A PNG whose every scanline is filter-0 zeros: IHDR, an optional PLTE of
+# `plte_len` bytes and an optional tRNS of `trns_len` bytes ((0 - 1) = no such
+# chunk), one IDAT, IEND. Every PLTE entry is (10, 20, 30) and every tRNS byte
+# 0x80, so a decode that succeeds shows which chunk it used.
+fn fx_zero_png(w, h, depth, ct, plte_len, trns_len, len_out): i64 {
+    var row = (w * chitra_png_color_channels(ct) * depth + 7) / 8;
+    var zl = 0;
+    var z = _z_zeros(h * (1 + row), &zl);
+    var pb = _pb_new(zl + 2048);
+    _pb_ihdr(pb, w, h, depth, ct, 0, 0, 0);
+    var i = 0;
+    if (plte_len >= 0) {
+        var p = alloc(plte_len + 1);
+        i = 0;
+        while (i < plte_len) {
+            store8(p + i, 10 + (i % 3) * 10);
+            i = i + 1;
+        }
+        _pb_chunk(pb, "PLTE", p, plte_len);
+    }
+    if (trns_len >= 0) {
+        var t = alloc(trns_len + 1);
+        i = 0;
+        while (i < trns_len) {
+            store8(t + i, 128);
+            i = i + 1;
+        }
+        _pb_chunk(pb, "tRNS", t, trns_len);
+    }
+    _pb_chunk(pb, "IDAT", z, zl);
+    _pb_iend(pb);
+    store64(len_out, _pb_len(pb));
+    return _pb_buf(pb);
+}
+
+# A refusal is pinned by its COST as well as its code: for every cell that uses
+# this, the code was already right before the repair — what was wrong was the
+# bill. 64 KiB is three orders of magnitude under what each one used to spend;
+# allocator alignment and the err record are not this test's business.
+fn _expect_cheap_reject(b, lo, code, label): i64 {
+    var err = 0;
+    var before = alloc_used();
+    var img = chitra_png_decode(b, lo, &err);
+    var spent = alloc_used() - before;
+    assert_eq(img, 0, label);
+    assert(err != 0, label);
+    if (err != 0) { assert_eq(chitra_err_code(err), code, label); }
+    assert(spent < 65536, label);
+    if (spent >= 65536) {
+        syscall(1, 2, "        ...it spent ", 20);
+        efmt_int(spent);
+        syscall(1, 2, " bytes to refuse (bound: 65536)\n", 32);
+    }
+    return 0;
+}
+
+# ================================================================
+# png-1 / cc-5 (1.1.1) — refusals the chunk list already decides are made
+# BEFORE the first allocation.
+#
+# Through 1.1.0 every file below was refused with the RIGHT code by the colour
+# pass — after parse_raw had allocated the IDAT concatenation, the inflate
+# buffer and the scanline buffer, and the colour pass its npix*4 RGBA buffer.
+# The refusal is now made at the end of pass 1, after the bomb caps.
+# ⚠ MEASURED (1.1.1): the 4096x4096 depth-1 palette image with no PLTE below
+# spent 71,321,272 B to return CHITRA_ERR_BAD_CHUNK before the repair (the
+# sweep's 2,116-byte version of it: 71,335,368 B), and spends 120 B after.
+# ⛔ The CODE assertions pass both before and after the repair; only the cost
+# assertion can tell the two apart, which is why every cell asserts it.
+# ================================================================
+fn test_png1_validity_refused_before_allocating() {
+    var lo = 0;
+    # Control: the generator's stream is valid, so a refusal below is the chunk
+    # list's doing and not the inflate's. 1024x1024 keeps the control cheap.
+    var ok = fx_zero_png(1024, 1024, 1, 3, 3, 0 - 1, &lo);
+    var err = 0;
+    var img = chitra_png_decode(ok, lo, &err);
+    assert(img != 0, "png-1: control — 1024x1024 depth-1 palette with a PLTE decodes");
+    if (img != 0) {
+        _assert_px(chitra_image_pixels(img), 0, 10, 20, 30, 255, "png-1: control px0 = PLTE[0]");
+    }
+    _expect_cheap_reject(fx_zero_png(4096, 4096, 1, 3, 0 - 1, 0 - 1, &lo), lo, CHITRA_ERR_BAD_CHUNK,
+      "png-1: colour type 3 with NO PLTE refused before allocating (< 64 KiB)");
+    _expect_cheap_reject(fx_zero_png(4096, 4096, 1, 3, 0, 0 - 1, &lo), lo, CHITRA_ERR_BAD_CHUNK,
+      "png-1: colour type 3 with a ZERO-LENGTH PLTE refused before allocating");
+    _expect_cheap_reject(fx_zero_png(4096, 4096, 1, 3, 3, 2, &lo), lo, CHITRA_ERR_BAD_CHUNK,
+      "png-1: a palette tRNS longer than the PLTE refused before allocating");
+    _expect_cheap_reject(fx_zero_png(4096, 4096, 1, 0, 0 - 1, 3, &lo), lo, CHITRA_ERR_BAD_CHUNK,
+      "png-1: a 3-byte tRNS on depth-1 greyscale refused before allocating");
+    _expect_cheap_reject(fx_zero_png(1024, 1024, 8, 0, 0 - 1, 1, &lo), lo, CHITRA_ERR_BAD_CHUNK,
+      "png-1: a 1-byte tRNS on depth-8 greyscale refused before allocating");
+    _expect_cheap_reject(fx_zero_png(1024, 1024, 8, 2, 0 - 1, 3, &lo), lo, CHITRA_ERR_BAD_CHUNK,
+      "png-1: a 3-byte tRNS on RGB refused before allocating");
+    return 0;
+}
+
+# A ZERO-length tRNS means "no key" to the colour pass (`has_trns` is
+# `trns_len > 0`), and the early check mirrors that rather than refusing it. This
+# file decoded before the repair and must still decode — the cell that keeps the
+# early check from becoming stricter than the pass it front-runs.
+fn test_png1_zero_length_trns_still_decodes() {
+    var lo = 0;
+    var b = fx_zero_png(2, 1, 8, 0, 0 - 1, 0, &lo);
+    var err = 0;
+    var img = chitra_png_decode(b, lo, &err);
+    assert(img != 0, "png-1: a zero-length tRNS on greyscale still decodes (no key)");
+    if (img != 0) {
+        _assert_px(chitra_image_pixels(img), 0, 0, 0, 0, 255, "png-1: zero-length tRNS px0 opaque");
+    }
+    return 0;
+}
+
+# ================================================================
+# The colour pass's own copies of those checks are now DEFENCE IN DEPTH: on the
+# public path parse_raw refuses first, so a decode-level cell can no longer see
+# them. They are pinned here instead, by handing the @internal colour pass a raw
+# that parse_raw built from a VALID file and that the cell then edits — the
+# "hand-built raw" its header says it must be safe on.
+# ================================================================
+fn _colour_pass_refuses(w, depth, ct, plte_len, trns_len, poke_off, poke_val, label): i64 {
+    var lo = 0;
+    var b = fx_zero_png(w, 1, depth, ct, plte_len, trns_len, &lo);
+    var err = 0;
+    var raw = chitra_png_parse_raw(b, lo, &err);
+    assert(raw != 0, "colour-pass cell: the unedited file parses (else the cell proves nothing)");
+    if (raw != 0) {
+        var e1 = 0;
+        assert(chitra_png_color_to_rgba8(raw, b, lo, &e1) != 0,
+          "colour-pass cell: the unedited raw converts (control)");
+        store64(raw + poke_off, poke_val);
+        var e2 = 0;
+        var out = chitra_png_color_to_rgba8(raw, b, lo, &e2);
+        assert_eq(out, 0, label);
+        assert(e2 != 0, label);
+        if (e2 != 0) { assert_eq(chitra_err_code(e2), CHITRA_ERR_BAD_CHUNK, label); }
+    }
+    return 0;
+}
+
+fn test_colour_pass_trns_checks_are_live() {
+    _colour_pass_refuses(2, 1, 0, 0 - 1, 2, RAW_TRNS_LEN_OFFSET, 3,
+      "colour pass: depth-1 greyscale tRNS of length 3 refused");
+    _colour_pass_refuses(2, 8, 0, 0 - 1, 2, RAW_TRNS_LEN_OFFSET, 1,
+      "colour pass: depth-8 greyscale tRNS of length 1 refused");
+    _colour_pass_refuses(2, 8, 2, 0 - 1, 6, RAW_TRNS_LEN_OFFSET, 3,
+      "colour pass: RGB tRNS of length 3 refused");
+    _colour_pass_refuses(2, 1, 3, 3, 1, RAW_TRNS_LEN_OFFSET, 2,
+      "colour pass: depth-1 palette tRNS longer than PLTE refused");
+    _colour_pass_refuses(2, 8, 3, 3, 1, RAW_TRNS_LEN_OFFSET, 2,
+      "colour pass: depth-8 palette tRNS longer than PLTE refused");
+    return 0;
+}
+
+# ================================================================
+# gate-8 (1.1.1) — the IHDR pixel cap had no cost cell.
+#
+# The colour pass repeats the CHITRA_MAX_PIXELS check as defence in depth, so
+# deleting the IHDR copy kept the verdict and moved it after both parse_raw
+# allocations: a 16000x8000 depth-1 greyscale image inflates to 16,008,000 B
+# (under DECOMPRESS_MAX_OUTPUT) and unfilters to 16,000,000 B, so the refusal
+# cost ~32 MB instead of ~100 B. Only a cost assertion can see that.
+# ================================================================
+fn test_pixel_cap_refuses_before_allocating() {
+    var lo = 0;
+    var b = fx_zero_png(16000, 8000, 1, 0, 0 - 1, 0 - 1, &lo);
+    _expect_cheap_reject(b, lo, CHITRA_ERR_DIMENSIONS,
+      "gate-8: 16000x8000 (past CHITRA_MAX_PIXELS) refused at IHDR, before allocating");
+    return 0;
+}
+
+# ================================================================
+# png-2 / cc-6 (1.1.1) — an allocation failure INSIDE zlib_decompress is
+# CHITRA_ERR_OOM, not CHITRA_ERR_INFLATE.
+#
+# B-1 (above, and first) covers the CRC table. Once that is warm, the only
+# allocation sankoch makes on a warm decode is the 32-byte bit-reader in
+# br_init, and through 1.1.0 its failure came back as CHITRA_ERR_INFLATE —
+# "a corrupt stream" — for a valid file.
+# ⚠ THE INJECTION INDEX IS SANKOCH'S INTERNAL ORDER, as B-1 learned. So this cell
+# pins its own preconditions — every lazily built decode table is already warm —
+# and then that the one-shot injection was actually CONSUMED by the decode. A
+# future sankoch that reorders or drops the allocation fails here, loudly, as
+# "the injection missed", not as a chitra regression.
+# ⚠ MUTATION-CHECKED: with the mapping removed this fails with got 5, expected 6.
+# ================================================================
+fn test_inflate_oom_is_oom_not_inflate() {
+    var lo = 0;
+    var bytes = fx_rgba8_2x2(&lo);
+    var e0 = 0;
+    assert(chitra_png_decode(bytes, lo, &e0) != 0, "png-2: warm-up decode succeeds");
+    assert_eq(_huff_tables_allocd, 1, "png-2: sankoch's Huffman tables are warm before the injection");
+    assert(_huff_fixed_litlen_lens != 0, "png-2: ...and its fixed-code lengths");
+    assert(_ddec_cl_order != 0, "png-2: ...and its dynamic-header workspace");
+    _sankoch_alloc_set_fail_at(0);
+    var err = 0;
+    var img = chitra_png_decode(bytes, lo, &err);
+    var consumed = 0;
+    if (_sankoch_alloc_fail_at == 0 - 1) { consumed = 1; }
+    _sankoch_alloc_set_fail_at(0 - 1);
+    assert_eq(consumed, 1, "png-2: the injected failure fired inside the decode (else sankoch's alloc order moved)");
+    assert_eq(img, 0, "png-2: a failed allocation inside zlib_decompress refuses the decode");
+    assert(err != 0, "png-2: ...with err_out set");
+    if (err != 0) {
+        assert_eq(chitra_err_code(err), CHITRA_ERR_OOM,
+          "png-2: ...as CHITRA_ERR_OOM, not CHITRA_ERR_INFLATE (the stream is fine)");
+    }
+    var e2 = 0;
+    assert(chitra_png_decode(bytes, lo, &e2) != 0, "png-2: the next decode of the same bytes succeeds");
+    return 0;
+}
+
+# ================================================================
+# png-3 / cc-2 (1.1.1) — pin the inflate STRICTNESS chitra's own build links.
+#
+# Each stream below is a hand-written dynamic-Huffman block (the sweep's
+# tools/kraft.py) with a VALID Adler-32, wrapped in a 20x1 greyscale PNG. zlib and
+# ImageMagick refuse every "reject" stream; chitra must too.
+# ⛔ The first five are the ones that DECODE under sankoch 2.8.3 — the stdlib
+# leaf a consumer with its own "sankoch" links at toolchain 6.7.9: a Kraft-
+# incomplete literal/length code, HDIST of 31 and of 32, an incomplete
+# code-length code, and an incomplete two-code distance tree. sankoch 2.8.6
+# made them errors. Nothing in chitra can raise a consumer's bundle (closest-
+# wins), so these cells pin the floor for chitra's OWN build: a sankoch pin
+# below 2.8.6 fails here. Verified by building this suite in that shape.
+# ⚠ The controls matter as much: an incomplete code with a SINGLE distance code
+# of length 1, no distance codes at all, HDIST 30 and an EOB-only block are all
+# legal to zlib, and a decoder that refused them would be wrong the other way.
+# ================================================================
+fn _kraft_hex_nib(c): i64 {
+    if (c >= 97) { return c - 87; }
+    return c - 48;
+}
+
+fn fx_gray20_idat(hex, len_out): i64 {
+    var zl = strlen(hex) / 2;
+    var z = alloc(zl + 1);
+    var i = 0;
+    while (i < zl) {
+        store8(z + i, _kraft_hex_nib(load8(hex + 2 * i)) * 16 + _kraft_hex_nib(load8(hex + 2 * i + 1)));
+        i = i + 1;
+    }
+    var pb = _pb_new(zl + 128);
+    _pb_ihdr(pb, 20, 1, 8, 0, 0, 0, 0);
+    _pb_chunk(pb, "IDAT", z, zl);
+    _pb_iend(pb);
+    store64(len_out, _pb_len(pb));
+    return _pb_buf(pb);
+}
+
+fn _kraft_reject(hex, label): i64 {
+    var lo = 0;
+    var b = fx_gray20_idat(hex, &lo);
+    _expect_reject(b, lo, CHITRA_ERR_INFLATE, label);
+    return 0;
+}
+
+# A legal stream: decodes, and pixel `i` has grey value `v`.
+fn _kraft_accept(hex, i, v, label): i64 {
+    var lo = 0;
+    var b = fx_gray20_idat(hex, &lo);
+    var err = 0;
+    var img = chitra_png_decode(b, lo, &err);
+    assert(img != 0, label);
+    if (img != 0) { _assert_px(chitra_image_pixels(img), i, v, v, v, 255, label); }
+    return 0;
+}
+
+fn test_png3_inflate_strictness() {
+    # ---- refused by sankoch >= 2.8.6, DECODED by 2.8.3 ----
+    _kraft_reject("780105c0810000000080a0fca90f00000400150001",
+      "png-3: Kraft-incomplete literal/length code refused");
+    _kraft_reject("780105de81000000000010ffd59c00008000150001",
+      "png-3: HDIST = 31 refused (zlib: too many length or distance symbols)");
+    _kraft_reject("780105df81000000000010ffd5a400008000150001",
+      "png-3: HDIST = 32 refused");
+    _kraft_reject("780105c001010000000020fcab0600001000150001",
+      "png-3: incomplete code-length code refused");
+    _kraft_reject("780105c1810000000080a0fca97b00001000150001",
+      "png-3: incomplete two-code distance tree refused");
+    # ---- refused by every sankoch in the field ----
+    _kraft_reject("780105c081000000000010fea70100000000150001",
+      "png-3: over-subscribed literal/length code refused");
+    _kraft_reject("780104c081040000000090fed4c1001100eeff0405060708090a0b0c0d0e0f101112131405a900cd",
+      "png-3: over-subscribed code-length code refused");
+    _kraft_reject("78010cc0010900000080a0fa7fba60051100eeff0405060708090a0b0c0d0e0f101112131405a900cd",
+      "png-3: a distance code used where none is defined refused");
+    _kraft_reject("78010cc0010900000080a0fa7fbae4051100eeff0405060708090a0b0c0d0e0f101112131405a900cd",
+      "png-3: the unassigned half of a one-code distance tree refused");
+    _kraft_reject("780104c0810800000000a0f7b786001100eeff0405060708090a0b0c0d0e0f101112131405a900cd",
+      "png-3: a literal/length code with no end-of-block symbol refused");
+    # ---- controls: legal to zlib, and decoded ----
+    _kraft_accept("780105c081000000000010ffd500008000150001", 19, 0,
+      "png-3: control — a complete dynamic block decodes");
+    _kraft_accept("78010cc0010900000080a0fa7fba64051100eeff0405060708090a0b0c0d0e0f101112131405a900cd", 19, 20,
+      "png-3: control — a single distance code of length 1 decodes");
+    _kraft_accept("780104c0810800000000a0fda90f061100eeff0405060708090a0b0c0d0e0f101112131405a900cd", 3, 4,
+      "png-3: control — a block with no distance codes decodes");
+    _kraft_accept("780104dd810800000000a0fda93781011100eeff0405060708090a0b0c0d0e0f101112131405a900cd", 3, 4,
+      "png-3: control — HDIST = 30 decodes");
+    _kraft_accept("780104c0810800000000207feb131500eaff000000000405060708090a0b0c0d0e0f101112131405a900cd", 19, 20,
+      "png-3: control — an end-of-block-only dynamic block decodes");
+    return 0;
+}
+
+# ================================================================
+# png-4 / gate-4 (1.1.1) — two load-bearing guards nothing pinned.
+#
+# Both could be DELETED with all 13 suites and fuzz_png green, and each deletion
+# turns a refusal into a successful decode of a different image:
+#   - `n != inflated_size` (png_filter.cyr): a stream that ends early with a
+#     valid Adler-32 came back with its missing rows as zero-filled pixels —
+#     fresh bump memory, which after an alloc_reset() can hold an EARLIER
+#     decode's bytes. ImageMagick: "Not enough image data".
+#   - the IHDR CRC (_chitra_parse_ihdr): the chunk walk starts AFTER IHDR, so
+#     this compare is the only CRC IHDR gets. ImageMagick: "IHDR: CRC error".
+# ================================================================
+fn fx_gray8_4x3_rows(rows, len_out): i64 {
+    var raw = alloc(16);
+    var i = 0;
+    while (i < 15) {
+        store8(raw + i, (i % 5) * 10 + (i / 5) * 50);
+        i = i + 1;
+    }
+    store8(raw + 0, 0);
+    store8(raw + 5, 0);
+    store8(raw + 10, 0);
+    var zl = 0;
+    var z = _z_stored(raw, rows * 5, &zl);
+    var pb = _pb_new(zl + 128);
+    _pb_ihdr(pb, 4, 3, 8, 0, 0, 0, 0);
+    _pb_chunk(pb, "IDAT", z, zl);
+    _pb_iend(pb);
+    store64(len_out, _pb_len(pb));
+    return _pb_buf(pb);
+}
+
+fn fx_rgb8_2x1(comp, il, len_out): i64 {
+    var raw = alloc(8);
+    store8(raw + 0, 0);
+    store8(raw + 1, 255);
+    store8(raw + 2, 0);
+    store8(raw + 3, 0);
+    store8(raw + 4, 0);
+    store8(raw + 5, 255);
+    store8(raw + 6, 0);
+    var zl = 0;
+    var z = _z_stored(raw, 7, &zl);
+    var pb = _pb_new(zl + 128);
+    _pb_ihdr(pb, 2, 1, 8, 2, comp, 0, il);
+    _pb_chunk(pb, "IDAT", z, zl);
+    _pb_iend(pb);
+    store64(len_out, _pb_len(pb));
+    return _pb_buf(pb);
+}
+
+fn test_png4_short_inflate_and_ihdr_crc() {
+    var lo = 0;
+    var err = 0;
+    # Control: all three declared rows present.
+    var img = chitra_png_decode(fx_gray8_4x3_rows(3, &lo), lo, &err);
+    assert(img != 0, "png-4: control — 4x3 greyscale with all 3 rows decodes");
+    if (img != 0) {
+        _assert_px(chitra_image_pixels(img), 11, 140, 140, 140, 255, "png-4: control px(3,2) = 140");
+    }
+    # The IHDR declares 3 rows; the stream holds 2, and its Adler-32 is right.
+    _expect_reject(fx_gray8_4x3_rows(2, &lo), lo, CHITRA_ERR_INFLATE,
+      "png-4: a stream that inflates short of the IHDR's rows refused (no fabricated rows)");
+
+    var ok = fx_rgb8_2x1(0, 0, &lo);
+    var e2 = 0;
+    var img2 = chitra_png_decode(ok, lo, &e2);
+    assert(img2 != 0, "png-4: control — the 2x1 RGB file decodes before its IHDR CRC is touched");
+    if (img2 != 0) {
+        _assert_px(chitra_image_pixels(img2), 1, 0, 255, 0, 255, "png-4: control px1 green");
+    }
+    # One bit of the IHDR's stored CRC (signature 8 + length 4 + type 4 + data 13 = 29..32).
+    store8(ok + 32, load8(ok + 32) ^ 1);
+    _expect_reject(ok, lo, CHITRA_ERR_CRC, "png-4: a corrupt IHDR CRC refused as CHITRA_ERR_CRC");
+    return 0;
+}
+
+# gate-4 (1.1.1): the IHDR method gates, both unpinned until now. With either
+# deleted, the file decodes — a compression method chitra does not implement is
+# inflated as zlib anyway, and interlace method 2 falls through to the
+# non-interlaced path. § 11.2.2 defines compression method 0 and interlace 0/1.
+fn test_ihdr_method_gates() {
+    var lo = 0;
+    _expect_reject(fx_rgb8_2x1(1, 0, &lo), lo, CHITRA_ERR_UNSUPPORTED,
+      "gate-4: IHDR compression method 1 refused as CHITRA_ERR_UNSUPPORTED");
+    _expect_reject(fx_rgb8_2x1(0, 2, &lo), lo, CHITRA_ERR_INTERLACE,
+      "gate-4: IHDR interlace method 2 refused as CHITRA_ERR_INTERLACE");
+    return 0;
+}
+
+# ================================================================
+# png-8 (1.1.1) — a SECOND IHDR is CHITRA_ERR_BAD_CHUNK.
+#
+# Through 1.1.0 it reached the unrecognised-critical branch and came back as
+# CHITRA_ERR_UNSUPPORTED, which error.cyr defines as "the file is valid; chitra
+# declines it". IHDR is recognised and § 5.6 allows exactly one, so the file is
+# invalid. ImageMagick: "IHDR: out of place".
+# ⚠ MUTATION-CHECKED: without the repair this fails with got 4, expected 3.
+# ================================================================
+fn test_second_ihdr_is_bad_chunk() {
+    var raw = alloc(8);
+    store8(raw + 0, 0);
+    store8(raw + 1, 255);
+    store8(raw + 2, 0);
+    store8(raw + 3, 0);
+    store8(raw + 4, 0);
+    store8(raw + 5, 255);
+    store8(raw + 6, 0);
+    var zl = 0;
+    var z = _z_stored(raw, 7, &zl);
+    var pb = _pb_new(zl + 128);
+    _pb_ihdr(pb, 2, 1, 8, 2, 0, 0, 0);
+    _pb_ihdr(pb, 2, 1, 8, 2, 0, 0, 0);
+    _pb_chunk(pb, "IDAT", z, zl);
+    _pb_iend(pb);
+    _expect_reject(_pb_buf(pb), _pb_len(pb), CHITRA_ERR_BAD_CHUNK,
+      "png-8: a second IHDR refused as CHITRA_ERR_BAD_CHUNK, not CHITRA_ERR_UNSUPPORTED");
+    return 0;
+}
+
+# ================================================================
+# png-5 / gate-4 (1.1.1) — each PLTE guard, isolated.
+#
+# Four PLTE guards (at most one, before IDAT, <= 768 bytes, a multiple of 3)
+# could each be deleted with every suite green. test_reject_plte_after_empty_idat
+# was written for the before-IDAT rule, but its greyscale fixture is refused
+# first by the 0.7.1 PLTE-on-greyscale rule, and idat_closed would refuse its
+# trailing IDAT anyway — two other guards satisfy it. Each file below differs
+# from the control in ONE chunk, and only the guard it names can refuse it.
+# All are 2x1 colour type 3 depth 8, indices (0, 1).
+# ================================================================
+# Chunk-order codes for fx_pal2x1: P = PLTE (two entries), Q = a second,
+# different PLTE, I = the IDAT, E = an empty IDAT, 7 / 9 = a PLTE of 7 / 771
+# bytes, A = PLTE on this IHDR's colour type (ct4 variant), T = a 2-byte tRNS.
+fn fx_pal2x1(ct, order, len_out): i64 {
+    var raw = alloc(8);
+    var rawlen = 3;
+    store8(raw + 0, 0);
+    store8(raw + 1, 0);
+    store8(raw + 2, 1);
+    if (ct == 4) {
+        rawlen = 5;
+        store8(raw + 1, 90);
+        store8(raw + 2, 255);
+        store8(raw + 3, 180);
+        store8(raw + 4, 255);
+    }
+    var zl = 0;
+    var z = _z_stored(raw, rawlen, &zl);
+    var big = alloc(776);
+    var i = 0;
+    while (i < 776) {
+        store8(big + i, 0);
+        i = i + 1;
+    }
+    store8(big + 0, 255);        # entry 0 = red
+    store8(big + 5, 255);        # entry 1 = blue
+    var other = alloc(8);
+    store8(other + 0, 9);
+    store8(other + 1, 9);
+    store8(other + 2, 9);
+    store8(other + 3, 0);
+    store8(other + 4, 0);
+    store8(other + 5, 255);
+    store8(other + 6, 0);
+    var pb = _pb_new(zl + 1024);
+    _pb_ihdr(pb, 2, 1, 8, ct, 0, 0, 0);
+    i = 0;
+    while (load8(order + i) != 0) {
+        var c = load8(order + i);
+        if (c == 80) { _pb_chunk(pb, "PLTE", big, 6); }        # 'P'
+        if (c == 81) { _pb_chunk(pb, "PLTE", other, 6); }      # 'Q'
+        if (c == 55) { _pb_chunk(pb, "PLTE", big, 7); }        # '7'
+        if (c == 57) { _pb_chunk(pb, "PLTE", big, 771); }      # '9'
+        if (c == 84) { _pb_chunk(pb, "tRNS", other, 2); }      # 'T'
+        if (c == 73) { _pb_chunk(pb, "IDAT", z, zl); }         # 'I'
+        if (c == 69) { _pb_chunk(pb, "IDAT", z, 0); }          # 'E'
+        i = i + 1;
+    }
+    _pb_iend(pb);
+    store64(len_out, _pb_len(pb));
+    return _pb_buf(pb);
+}
+
+fn test_png5_plte_guards_isolated() {
+    var lo = 0;
+    var err = 0;
+    var img = chitra_png_decode(fx_pal2x1(3, "PI", &lo), lo, &err);
+    assert(img != 0, "png-5: control — IHDR/PLTE/IDAT/IEND palette file decodes");
+    if (img != 0) {
+        _assert_px(chitra_image_pixels(img), 0, 255, 0, 0, 255, "png-5: control px0 = PLTE[0]");
+        _assert_px(chitra_image_pixels(img), 1, 0, 0, 255, 255, "png-5: control px1 = PLTE[1]");
+    }
+    _expect_reject(fx_pal2x1(3, "EP", &lo), lo, CHITRA_ERR_BAD_CHUNK,
+      "png-5: PLTE after an EMPTY IDAT refused (not NO_IDAT)");
+    _expect_reject(fx_pal2x1(3, "IP", &lo), lo, CHITRA_ERR_BAD_CHUNK,
+      "png-5: PLTE after the last IDAT refused");
+    _expect_reject(fx_pal2x1(3, "PQI", &lo), lo, CHITRA_ERR_BAD_CHUNK,
+      "png-5: a second PLTE refused (the second palette never silently wins)");
+    _expect_reject(fx_pal2x1(3, "7I", &lo), lo, CHITRA_ERR_BAD_CHUNK,
+      "png-5: a 7-byte PLTE (not a multiple of 3) refused");
+    _expect_reject(fx_pal2x1(3, "9I", &lo), lo, CHITRA_ERR_BAD_CHUNK,
+      "png-5: a 771-byte PLTE (over 256 entries) refused");
+    # gate-4: colour type 4 is greyscale+alpha. The 0.7.1 rules were pinned only
+    # for ct0 (PLTE) and ct6 (tRNS); the ct4 halves could be deleted unseen.
+    var e4 = 0;
+    var img4 = chitra_png_decode(fx_pal2x1(4, "I", &lo), lo, &e4);
+    assert(img4 != 0, "gate-4: control — the 2x1 grey+alpha file decodes");
+    if (img4 != 0) {
+        _assert_px(chitra_image_pixels(img4), 1, 180, 180, 180, 255, "gate-4: control px1");
+    }
+    _expect_reject(fx_pal2x1(4, "PI", &lo), lo, CHITRA_ERR_BAD_CHUNK,
+      "gate-4: PLTE on colour type 4 refused (§ 11.2.3)");
+    _expect_reject(fx_pal2x1(4, "TI", &lo), lo, CHITRA_ERR_BAD_CHUNK,
+      "gate-4: tRNS on colour type 4 refused (§ 11.3.2)");
+    return 0;
+}
+
+# png-5 (1.1.1): the per-chunk length cap fires BEFORE the remaining-bytes check,
+# so a chunk declaring 0x20000000 bytes is a malformed chunk (BAD_CHUNK), not a
+# truncated file. With the cap deleted it reported CHITRA_ERR_TRUNCATED.
+fn test_png5_chunk_length_cap() {
+    var pb = _pb_new(128);
+    _pb_ihdr(pb, 2, 1, 8, 2, 0, 0, 0);
+    _pb_u32(pb, 536870912);
+    _pb_u8(pb, 116);             # "tEXt"
+    _pb_u8(pb, 69);
+    _pb_u8(pb, 88);
+    _pb_u8(pb, 116);
+    var i = 0;
+    while (i < 16) {
+        _pb_u8(pb, 0);
+        i = i + 1;
+    }
+    _expect_reject(_pb_buf(pb), _pb_len(pb), CHITRA_ERR_BAD_CHUNK,
+      "png-5: a chunk length past CHITRA_MAX_RAW_BYTES refused as BAD_CHUNK, not TRUNCATED");
+    return 0;
+}
+
 fn main() {
     # ⛔ MUST STAY FIRST — see the comment on this test. It detects displacement
     # itself, which is how the B-12 additions were caught when they landed above it.
@@ -4364,6 +5084,18 @@ fn main() {
     test_consecutive_idats_still_decode();
     test_inflate_limit_is_its_own_error();
     test_bomb_still_reports_as_a_bomb();
+    # 1.1.1 P(-1) repairs and the guards it found unpinned.
+    test_inflate_oom_is_oom_not_inflate();
+    test_png1_validity_refused_before_allocating();
+    test_png1_zero_length_trns_still_decodes();
+    test_colour_pass_trns_checks_are_live();
+    test_pixel_cap_refuses_before_allocating();
+    test_png3_inflate_strictness();
+    test_png4_short_inflate_and_ihdr_crc();
+    test_ihdr_method_gates();
+    test_second_ihdr_is_bad_chunk();
+    test_png5_plte_guards_isolated();
+    test_png5_chunk_length_cap();
     return assert_summary();
 }
 

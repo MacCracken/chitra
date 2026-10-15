@@ -450,6 +450,20 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
                     return 0;
                 }
 
+                # § 5.6: IHDR "shall be first", and a file has exactly one.
+                # _chitra_parse_ihdr consumed the first before this walk began,
+                # so every IHDR the walk meets is a second one. Through 1.1.0 it
+                # was not in the known-critical set below and fell through to
+                # the unrecognised-critical branch, which reported
+                # CHITRA_ERR_UNSUPPORTED — "the file is valid; chitra declines
+                # it" — for a file the spec makes invalid. IHDR is not
+                # unrecognised; it is out of place (png-8, 1.1.1). Checked
+                # AFTER the CRC so a corrupt chunk still reports as one.
+                if (_chunk_is_ihdr(type_ptr) == 1) {
+                    store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
+                    return 0;
+                }
+
                 if (is_idat == 1) {
                     # Spec § 5.6: "there shall not be any other chunks between
                     # the IDAT chunks". chitra fused every IDAT it met through
@@ -647,6 +661,55 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
         return 0;
     }
 
+    # ⛔⛔ REFUSE WHAT THE CHUNK LIST HAS ALREADY DECIDED, BEFORE THE FIRST ALLOCATION (png-1 / cc-5,
+    # 1.1.1). The colour pass refuses a palette image with no PLTE (or an empty one), a palette tRNS
+    # longer than the palette, and a tRNS of the wrong length for colour types 0 and 2 — but through
+    # 1.1.0 it did so only AFTER the IDAT concatenation, the inflate buffer, the scanline buffer AND
+    # the npix*4 RGBA buffer were allocated. Every one of those facts is final when pass 1 ends: the
+    # colour type is IHDR's, and both spans were captured by the walk that just finished (which
+    # also refused any PLTE or tRNS arriving after IDAT). Nothing pass 2 does can change them.
+    # ⚠ MEASURED (1.1.1 P(-1)): a 2,116-byte 4096x4096 depth-1 palette PNG with no PLTE spent
+    # 71,335,368 B to return CHITRA_ERR_BAD_CHUNK, in an arena that never frees. Its valid twin
+    # spends the same, so this is waste on a refusal rather than a new ceiling — the 1.0.3 "a cap
+    # belongs BEFORE the allocation it exists to prevent" shape, in its fourth format.
+    # ⛔ ORDER: after the bomb caps, so a bomb keeps CHITRA_ERR_DIMENSIONS, a file with no IDAT data
+    # keeps CHITRA_ERR_NO_IDAT and an over-ceiling one keeps CHITRA_ERR_INFLATE_LIMIT; before
+    # `alloc(idat_total)`, which is the whole point.
+    # ⚠ These MIRROR the colour pass's conditions exactly — `> 0` on the tRNS length is its
+    # `has_trns`, because a zero-length tRNS means "no key" there and must mean it here too — so no
+    # accept/reject outcome moves, only what the refusal costs. The colour-pass checks stay, as
+    # defence in depth for its @internal entry, which can be handed a raw this walk never built.
+    var early_ct = load64(raw + RAW_COLOR_TYPE_OFFSET);
+    var early_entries = load64(raw + RAW_PLTE_LEN_OFFSET) / 3;
+    var early_trns = load64(raw + RAW_TRNS_LEN_OFFSET);
+    if (early_ct == 3) {
+        # § 11.2.3: PLTE is REQUIRED for colour type 3 (libpng: "Missing PLTE before IDAT").
+        if (early_entries <= 0) {
+            store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
+            return 0;
+        }
+        # § 11.3.2: a palette tRNS is one alpha per entry — never more entries than PLTE has.
+        if (early_trns > early_entries) {
+            store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
+            return 0;
+        }
+    }
+    if (early_trns > 0) {
+        # § 11.3.2: one 2-byte grey sample for colour type 0, three of them for colour type 2.
+        if (early_ct == 0) {
+            if (early_trns != 2) {
+                store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
+                return 0;
+            }
+        }
+        if (early_ct == 2) {
+            if (early_trns != 6) {
+                store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
+                return 0;
+            }
+        }
+    }
+
     # ---- pass 2: concatenate IDAT payloads ----
     var idat_buf = alloc(idat_total);
     if (idat_buf == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
@@ -678,6 +741,14 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
     var inflated = alloc(inflated_size);
     if (inflated == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
     var n = zlib_decompress(idat_buf, idat_total, inflated, inflated_size);
+    # ⛔ AN ALLOCATION FAILURE IS NOT A CORRUPT STREAM (png-2 / cc-6, 1.1.1). sankoch returns
+    # `-ERR_OOM` when its own allocations fail: the lazily built decode tables on a process's first
+    # inflate (or the first after an alloc_reset()), and the 32-byte bit-reader on every call. Every
+    # negative return used to become CHITRA_ERR_INFLATE, which the guide tells a caller means a
+    # damaged file — so a valid PNG decoded under memory pressure was reported, and could be cached,
+    # as corrupt. B-1 (1.0.3) restored the OOM contract for crc32_init_table only; this is the other
+    # half of it. Every other negative return is still the stream's fault.
+    if (n == 0 - ERR_OOM) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
     if (n < 0) { store64(err_out, chitra_err(CHITRA_ERR_INFLATE)); return 0; }
     if (n != inflated_size) { store64(err_out, chitra_err(CHITRA_ERR_INFLATE)); return 0; }
 

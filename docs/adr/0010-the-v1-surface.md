@@ -79,7 +79,14 @@ The comment now enumerates them.
 
 Note the set shrank on its own: 0.6.0 added a multi-scan meaning and **0.8.0
 removed it** when multi-scan started decoding, and the non-baseline JPEG modes
-never used this code — they carry their own (19..23).
+never used this code — they carry their own (19..23). It narrowed once more in
+**1.1.1**, without a code changing: the APP14 case now arises only where the
+transform decides the colour space — a 3-component frame with no JFIF APP0,
+judged at the first SOS — so a grey or JFIF file carrying an unknown transform
+decodes (as djpeg decodes it) and a 4-component YCCK file reports
+`CHITRA_ERR_JPEG_COMPONENTS`. And a second PNG IHDR, which fell through to the
+unrecognised-critical-chunk case, is now `CHITRA_ERR_BAD_CHUNK`: it is not
+unrecognised, it is out of place.
 
 ### 4. The 45 internal names are not renamed
 

@@ -1,6 +1,6 @@
 # chitra
 
-Version: 1.1.0
+Version: 1.1.1
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder, a sibling AGNOS package in the mould of `sakshi` /
@@ -34,7 +34,7 @@ decoder. If you already know the format, `chitra_{png,jpeg,bmp,gif}_decode`
 have the identical shape, each with a `_rgba8` convenience wrapper.
 
 The budgeted variant (0.6.1) refuses **before beginning** any decode whose
-RGBA8 output would exceed `max_bytes` — a refusal allocates 16 bytes, the `ChitraErr` itself, for PNG, JPEG and GIF, and 144 for BMP. It bounds
+RGBA8 output would exceed `max_bytes` — a refusal allocates 16 bytes, the `ChitraErr` itself, for PNG, JPEG and GIF, and 128 for BMP. It bounds
 the output, not the peak, and the function's own comment says exactly what it
 does not cover, because a memory guarantee that is not exact is not a
 guarantee. It matters more than it sounds: the bump allocator never frees, so
@@ -84,10 +84,12 @@ Untrusted bytes are the whole input surface, so the guards are the product:
   ~64 MB. PNG's remaining amplification case is documented as **accepted
   risk** rather than capped, because there the bomb and a legitimate solid
   image are the same file shape.
-- **`make fuzz`** — one harness per format, **~2.6 M adversarial decode cases,
-  10,732,113 assertions, 0 failures**, run in CI. They assert *both* that the decoder
-  survives and that it honours the documented `(0, *err_out set)` contract —
-  the invariant a crash-only fuzzer misses.
+- **`make fuzz`** — one harness per format, **11,185,700 assertions, 0
+  failures** at 1.1.1. CI runs exactly `make fuzz`, under
+  `--poison`: allocator redzones catch the small overflow into the next bump
+  allocation that a plain run cannot see. The harnesses assert *both* that the
+  decoder survives and that it honours the documented `(0, *err_out set)`
+  contract — the invariant a crash-only fuzzer misses.
 - **`make bench`** — 17 decode benchmarks with committed
   [CSV history](bench-history.csv). BMP **6 ns/px** (RLE8 **18**, where
   per-opcode branching costs more than the bytes it saves), JPEG grayscale and
@@ -100,8 +102,9 @@ Untrusted bytes are the whole input surface, so the guards are the product:
   spent every item, and two were deliberately **declined** after a reference
   check contradicted the spec reading rather than fixed — which is the more
   useful outcome and is recorded as such.
-- **Four security audits** in [`docs/audit/`](docs/audit/) — one per decode
-  path, the last (0.5.3) covering BMP and GIF. None found a memory-safety
+- **Six security audits** in [`docs/audit/`](docs/audit/) — PNG and JPEG
+  individually, then four P(-1) sweeps (PNG + JPEG, BMP + GIF, and two of the
+  whole tree including its gates, the last on 2026-10-15 gating 1.1.1). None found a memory-safety
   defect. What they did find is the reason the reference cross-checks are not
   optional: **seven of nine findings in the 0.5.3 sweep were silent wrong
   output** — a real 32-bpp file decoding with red and blue swapped, a V4 file
@@ -120,9 +123,10 @@ signature predicates, eight `ChitraImage` accessors, six error-API functions
 and `chitra_version` — plus the 56-byte `ChitraImage` and 16-byte `ChitraErr`
 layouts and the `ChitraErrCode` numeric values, cannot change without a major
 bump and an ADR. `dist/chitra.cyr` is a strip-concatenated bundle, so it also
-exports **45 internal names**; the same file lists them, and
+exports **46 internal names**; the same file lists them, and
 `scripts/check-surface.sh` fails the build if the bundle and that list ever
-disagree in either direction.
+disagree in either direction, or if a `ChitraErrCode` member lacks a name or a
+literal value pin.
 
 Four things are deliberately outside the promise: the internal names, the
 human-readable `chitra_err_name` strings (the *codes* are frozen — match on
@@ -170,16 +174,18 @@ All deps are pinned in `cyrius.cyml`; the toolchain pin is
 ```bash
 cyrius deps          # resolve stdlib + sankoch (zlib profile) into lib/
 make build           # link-check the include chain (→ build/chitra_smoke)
-make test            # 3086 assertions across tests/tcyr/
-make fuzz            # ~2.6 M adversarial decode cases (fuzz/*.fcyr)
+make test            # 3949 assertions across tests/tcyr/ (at 1.1.1)
+make fuzz            # ~2.6 M adversarial decode cases (fuzz/*.fcyr, under --poison — what CI runs)
 make bench           # 17 decode benchmarks (tests/bcyr/chitra.bcyr)
 make dist            # regenerate dist/chitra.cyr — the artifact consumers link
-make test-all        # version-check + dist + test + fuzz (the pre-release gate)
+make test-all        # version-check + dist + test + fuzz + bench-build (the pre-release gate)
 ```
 
-`make bench` is deliberately **not** part of `test-all`: benchmark numbers are
+`make bench` is deliberately **not** run by `test-all`: benchmark numbers are
 host- and load-dependent, so gating a correctness run on them would only
-manufacture flakes. Record a series with `make bench-record`.
+manufacture flakes. `test-all` and CI do *compile* the harness
+(`make bench-build`), because nothing else would notice it stop building.
+Record a series with `make bench-record`.
 
 ## Design
 

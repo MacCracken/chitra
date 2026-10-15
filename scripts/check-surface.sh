@@ -14,6 +14,9 @@
 #   * a name in the manifest that the bundle no longer has — a removal that
 #     slipped through, or a manifest gone stale.
 #
+# It also fails when a member of `enum ChitraErrCode` has no chitra_err_name
+# arm, or no literal value pin in tests/tcyr/surface.tcyr (see below).
+#
 # It deliberately does NOT parse @public markers. Those are carried two
 # different ways (a file-level banner and a per-function marker), which is
 # exactly the ambiguity a freeze should not codify.
@@ -58,11 +61,53 @@ if [ -s "$tmp/missing" ]; then
     rc=1
 fi
 
+# ChitraErrCode coverage (1.1.1, gate-7 / gate-13). The freeze covers the
+# NUMERIC VALUES of the enum, and those are pinned literally by the
+# _sf_frozen_code table in tests/tcyr/surface.tcyr — which also asserts each
+# code has a name of its own. Both that table and chitra_err_name are lists a
+# new enum member can silently miss (the old name loop stopped at 34 and never
+# saw INFLATE_LIMIT), so every member of the bundle's enum must appear in both.
+PINS="$ROOT/tests/tcyr/surface.tcyr"
+awk '/^enum ChitraErrCode[[:space:]]*\{/,/^}/' "$BUNDLE" \
+    | grep -oE '^[[:space:]]*CHITRA_[A-Z0-9_]+[[:space:]]*=' \
+    | grep -oE 'CHITRA_[A-Z0-9_]+' | sort -u > "$tmp/enum" || true
+awk '/^fn chitra_err_name\(/,/^}/' "$BUNDLE" \
+    | grep -oE 'code == CHITRA_[A-Z0-9_]+' \
+    | grep -oE 'CHITRA_[A-Z0-9_]+' | sort -u > "$tmp/named" || true
+if [ -f "$PINS" ]; then
+    grep -oE '_sf_frozen_code\(CHITRA_[A-Z0-9_]+,' "$PINS" \
+        | grep -oE 'CHITRA_[A-Z0-9_]+' | sort -u > "$tmp/pinned" || true
+else
+    : > "$tmp/pinned"
+fi
+if [ ! -s "$tmp/enum" ]; then
+    # Fail closed: an enum this script cannot read is not an enum it has checked.
+    echo "check-surface: could not read 'enum ChitraErrCode' from $BUNDLE"
+    rc=1
+else
+    comm -23 "$tmp/enum" "$tmp/named" > "$tmp/unnamed"
+    comm -23 "$tmp/enum" "$tmp/pinned" > "$tmp/unpinned"
+    if [ -s "$tmp/unnamed" ]; then
+        echo "check-surface: ChitraErrCode members with no chitra_err_name arm —"
+        echo "  they print \"unknown error\"."
+        sed 's/^/    /' "$tmp/unnamed"
+        rc=1
+    fi
+    if [ -s "$tmp/unpinned" ]; then
+        echo "check-surface: ChitraErrCode members with no _sf_frozen_code row in"
+        echo "  tests/tcyr/surface.tcyr — their numeric value is frozen by nothing."
+        sed 's/^/    /' "$tmp/unpinned"
+        rc=1
+    fi
+fi
+
 if [ $rc -eq 0 ]; then
     frozen=$(awk '/^## FROZEN/,/^## INTERNAL_NAMES/' "$MANIFEST" \
         | awk '/^```/ { infence = !infence; next } infence { print }' \
         | grep -oE 'chitra_[a-z0-9_]+' | sort -u | wc -l)
     total=$(wc -l < "$tmp/bundle")
-    echo "check-surface: bundle and manifest agree — ${total} exports, ${frozen} frozen"
+    codes=$(wc -l < "$tmp/enum")
+    echo "check-surface: bundle and manifest agree — ${total} exports, ${frozen} frozen;" \
+        "${codes} ChitraErrCode members, each named and value-pinned"
 fi
 exit $rc

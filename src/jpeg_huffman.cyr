@@ -90,11 +90,14 @@ fn _jpeg_huff_build(table, bits): i64 {
 # pull over the entropy-coded segment after SOS. A 0xFF in the stream is either
 # followed by 0x00 (a stuffing byte to discard, the 0xFF is real data) or by a
 # marker code (RSTn / EOI / ...), at which point the reader stops and records
-# the marker; subsequent bit reads pad with zeros. The 56-byte record:
+# the marker; subsequent bit reads pad with zeros. The 72-byte record:
 #   +0 base  +8 pos  +16 end  +24 buf (current byte)  +32 cnt (bits left in buf)
 #   +40 marker (the marker byte after a 0xFF, or 0)
 #   +48 eod — set when the reader needs a byte its span does not contain, which
 #             is what distinguishes "ran out of scan" from a real EOI (0.7.0)
+#   +56 rstnext — the n of the RSTn the next restart must find (1.1.1)
+#   +64 damaged — set when the scan is structurally inconsistent although no
+#             bit was fabricated: a restart marker out of sequence (1.1.1)
 # ================================================================
 var BR_BASE   = 0;
 var BR_POS    = 8;
@@ -108,7 +111,16 @@ var BR_MARKER = 40;
 # flag tells them apart. That distinction is what lets a caller learn its JPEG
 # was truncated (0.7.0), which it previously could not.
 var BR_EOD    = 48;
-var BR_SIZE   = 56;
+# ⛔ jpeg-6 (1.1.1) — T.81 § B.2.1 numbers restart markers modulo 8, and a scan
+# whose markers do not follow that sequence has lost or repeated an interval.
+# _jpeg_br_restart used to accept ANY D0..D7, so a duplicated interval decoded
+# shifted by one interval, or every marker rewritten to D0, still reported
+# seen_iend = 1 — djpeg says "found marker 0xd2 instead of RST3" for the same
+# bytes. That is NOT fabrication, so it must not touch BR_EOD (CLAUDE.md JPEG
+# item 5: BR_EOD is the fabrication point and nothing else); it has its own flag.
+var BR_RSTNEXT = 56;
+var BR_DAMAGED = 64;
+var BR_SIZE   = 72;
 
 fn _jpeg_br_init(reader, base, len): i64 {
     store64(reader + BR_BASE, base);
@@ -118,6 +130,8 @@ fn _jpeg_br_init(reader, base, len): i64 {
     store64(reader + BR_CNT, 0);
     store64(reader + BR_MARKER, 0);
     store64(reader + BR_EOD, 0);
+    store64(reader + BR_RSTNEXT, 0);
+    store64(reader + BR_DAMAGED, 0);
     return 0;
 }
 
@@ -125,17 +139,32 @@ fn _jpeg_br_marker(reader): i64 { return load64(reader + BR_MARKER); }
 # 1 once the reader has had to fabricate bits because the input ran out.
 fn _jpeg_br_eod(reader): i64    { return load64(reader + BR_EOD); }
 fn _jpeg_br_pos(reader): i64    { return load64(reader + BR_POS); }
+# 1 once a restart marker arrived out of its modulo-8 sequence (jpeg-6, 1.1.1).
+fn _jpeg_br_damaged(reader): i64 { return load64(reader + BR_DAMAGED); }
 
 # Resync at a restart-interval boundary (T.81 § F.2.1.3.1 / E.1.1): discard the
 # partial byte (byte-align), then consume the expected RSTn marker (FF D0..D7).
 # After decoding `restart_interval` MCUs the stream is byte-aligned at an RSTn;
 # BR_POS points at its 0xFF (whether or not the bit-reader auto-detected it).
-# Returns 0 on success, -1 if the restart marker is missing/malformed.
+# Returns 0 on success (including "the span is exhausted" — see below), -1 if
+# something other than a restart marker sits where one must be.
 fn _jpeg_br_restart(reader): i64 {
     store64(reader + BR_CNT, 0);
     var base = load64(reader + BR_BASE);
     var pos = load64(reader + BR_POS);
     var end = load64(reader + BR_END);
+    # ⛔ jpeg-5 (1.1.1) — THE SCAN RAN OUT, WHICH IS TRUNCATION, NOT CORRUPTION.
+    # With the span exhausted there is no marker to consume and nothing wrong
+    # with what was read, so this returns 0 and the caller resets the DC
+    # predictors as at any restart. The next bit the decoder asks for cannot be
+    # supplied, and `_jpeg_br_bit` sets BR_EOD at that FABRICATION point, exactly
+    # as for a truncated scan without DRI — so `seen_iend` comes back 0. Through
+    # 1.1.0 this returned -1 and the decoder refused the file as
+    # CHITRA_ERR_JPEG_ENTROPY, "corrupt entropy stream": a partial download of
+    # any restart-interval JPEG (common from cameras and phones) was refused
+    # outright, while the same cut without DRI decoded with seen_iend = 0 and
+    # djpeg decodes both ("Premature end of JPEG file").
+    if (pos >= end) { return 0; }
     # Skip 0xFF fill bytes (T.81 § B.1.1.2), leaving pos on the LAST 0xFF so
     # the marker code sits at pos+1.
     var skip = 1;
@@ -155,9 +184,69 @@ fn _jpeg_br_restart(reader): i64 {
     var m = load8(base + pos + 1);
     if (m < 0xD0) { return 0 - 1; }
     if (m > 0xD7) { return 0 - 1; }
+    # jpeg-6 (1.1.1): restart markers count D0..D7 modulo 8 (T.81 § B.2.1). A
+    # marker out of sequence means an interval was lost or repeated. The decode
+    # still resyncs on it — that is what a restart marker is for — but the scan
+    # did not close cleanly, and the caller reports that through seen_iend.
+    var want = load64(reader + BR_RSTNEXT);
+    if (m != 0xD0 + want) { store64(reader + BR_DAMAGED, 1); }
+    store64(reader + BR_RSTNEXT, (want + 1) & 7);
     store64(reader + BR_POS, pos + 2);
     store64(reader + BR_MARKER, 0);
     return 0;
+}
+
+# 1 iff every entropy byte the reader has NOT consumed is part of a restart
+# marker (jpeg-6, 1.1.1). Called once the last MCU of a scan has decoded: a
+# well-formed scan ends with at most a partial byte of 1-bit padding, which the
+# reader has already loaded, so nothing is left. Anything else — data bytes, or
+# a stuffed FF 00 — is entropy data no MCU used: an interval repeated in the
+# stream, or bytes spliced in before the marker that ends the scan. libjpeg
+# reports it as "N extraneous bytes before marker". A trailing RSTn is tolerated
+# because libjpeg is silent about one: it is a marker, not data.
+fn _jpeg_br_tail_clean(reader): i64 {
+    var base = load64(reader + BR_BASE);
+    var i = load64(reader + BR_POS);
+    var end = load64(reader + BR_END);
+    var clean = 1;
+    var b = 0;
+    var fill = 0;
+    while (i < end) {
+        b = load8(base + i);
+        i = i + 1;
+        if (b != 0xFF) {
+            clean = 0;
+            i = end;
+        }
+        if (b == 0xFF) {
+            # Collapse a fill run (§ B.1.1.2) to the marker code it precedes.
+            fill = 1;
+            while (fill == 1) {
+                fill = 0;
+                if (i < end) {
+                    if (load8(base + i) == 0xFF) {
+                        i = i + 1;
+                        fill = 1;
+                    }
+                }
+            }
+            b = 0;
+            if (i < end) {
+                b = load8(base + i);
+                i = i + 1;
+            }
+            # Only an RSTn may follow; FF 00 is a stuffed DATA byte.
+            if (b < 0xD0) {
+                clean = 0;
+                i = end;
+            }
+            if (b > 0xD7) {
+                clean = 0;
+                i = end;
+            }
+        }
+    }
+    return clean;
 }
 
 # Load one data byte (8 bits) into the buffer. Only called when CNT == 0. On a
@@ -293,6 +382,11 @@ fn _jpeg_decode(reader, table): i64 {
             }
         }
     }
+    # The three refusals below back each other up (gate-4, 1.1.1): for a table
+    # _jpeg_huff_build made from the BITS that also set its count, a code that
+    # matches length L indexes inside the table, and one that matches no length
+    # reaches L = 17, where the index checks refuse it. Neutering any one alone
+    # is an equivalent mutant; they are defence in depth, kept deliberately.
     if (bad == 1) { return 0 - 1; }
     var idx = _jpeg_huff_valptr(table, L) + code - _jpeg_huff_mincode(table, L);
     if (idx < 0) { return 0 - 1; }
@@ -301,7 +395,7 @@ fn _jpeg_decode(reader, table): i64 {
 }
 
 # Decode one 8x8 block's 64 coefficients in zig-zag order into zz_out (64 i64,
-# de-zig-zag deferred to dequant). DC is differential against `pred`; AC uses
+# de-zig-zag is done at dequant). DC is differential against `pred`; AC uses
 # run/size (RRRR/SSSS) coding with ZRL (16-zero run) and EOB (T.81 § F.2.2.2).
 # Returns the new DC predictor value; on a corrupt stream sets *err_out to a
 # CHITRA_ERR_JPEG_ENTROPY ChitraErr and returns 0.

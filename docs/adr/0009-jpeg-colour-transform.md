@@ -44,6 +44,22 @@ undefined. Assuming YCbCr for an unrecognised value is *precisely* the guess
 that produced the defect this parser exists to fix, so the parser does not
 repeat it in a smaller form.
 
+> ⚠ **Amended — the order gained a rule above rule 1, and the decline a
+> scope.** *1.0.3:* a JFIF APP0 outranks all three rules (JFIF § 4.1 defines
+> three components as Y/Cb/Cr; libjpeg's `default_decompress_parms` tests
+> `saw_JFIF_marker` first). *1.1.1 (2026-10-15):* an APP0 counts as JFIF only
+> with a payload of at least 14 bytes (libjpeg's `APP0_DATA_LEN`) — a bare
+> `"JFIF\0"` had outranked `transform=0` and put RGB samples back through
+> BT.601. The evidence is what precedes the **first** SOS: APP0 and APP14
+> between scans are skipped, so a later segment cannot re-decide samples
+> already decoded. And the transform is judged once, at that first SOS, and
+> declined (`CHITRA_ERR_UNSUPPORTED`) only where it decides the colour space —
+> a 3-component frame with no JFIF. A grey or JFIF frame ignores the byte, as
+> libjpeg does, and a 4-component YCCK frame reports
+> `CHITRA_ERR_JPEG_COMPONENTS` from SOF0; refusing at the segment had turned
+> away files djpeg decodes byte-identically to the same files without the
+> APP14.
+
 **The result reports which space it decoded**: `source_color_type` gains
 `0x113` for RGB, alongside `0x101` grayscale and `0x103` YCbCr. Without it an
 Adobe `transform=0` file would report `0x103` and a consumer would be told
@@ -66,7 +82,8 @@ Adobe `transform=0` file would report `0x103` and a consumer would be told
   exhaustively on it needs a case, and one switching on `0x103` to mean
   "3-component JPEG" must switch on the low nibble instead.
 - chitra now rejects a file it previously decoded: an Adobe segment declaring
-  `transform >= 2`. That file decoded to garbage before, so this is a
+  `transform >= 2` (since 1.1.1, on a 3-component non-JFIF frame only — see the
+  amendment above). That file decoded to garbage before, so this is a
   correction rather than a regression, but it *is* a behaviour change.
 
 **Neutral**

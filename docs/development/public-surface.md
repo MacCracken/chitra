@@ -5,7 +5,11 @@
 > two blocks below, so a name cannot appear or vanish unnoticed. Note what the
 > gate does and does not check: it compares the **union** of the two blocks
 > against the bundle. *Which* block a name sits in — and therefore whether it
-> is promised — is enforced by review, not by the script.
+> is promised — is enforced by review, not by the script. Since 1.1.1 the same
+> script also fails when a member of the bundle's `enum ChitraErrCode` has no
+> `chitra_err_name` arm or no literal value pin in `tests/tcyr/surface.tcyr`,
+> because the promise covers the enum's numeric values and a new member could
+> otherwise ship unpinned.
 >
 > This file is a **contract**, not documentation of one. Prose about what these
 > functions do lives in [`../guides/getting-started.md`](../guides/getting-started.md)
@@ -16,7 +20,7 @@
 `dist/chitra.cyr` is a strip-concatenated bundle, so *every* `chitra_`-prefixed
 function in it is callable by a consumer whether or not it was meant to be.
 Before this file, "the surface is frozen" was an assertion with nothing behind
-it: 45 of the 74 exported names are internal, and nothing distinguished them
+it: 45 of the then-74 exported names were internal (46 of 75 since 1.0.3), and nothing distinguished them
 from the 29 that are not.
 
 The distinction matters most at v1.0, because the promise being made is about

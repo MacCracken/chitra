@@ -45,7 +45,11 @@ not a guarantee:**
 > chitra will not **begin** a decode whose RGBA8 output would exceed
 > `max_bytes`. A refusal returns `0` with `*err_out = CHITRA_ERR_BUDGET`,
 > having allocated **16 bytes** — the `ChitraErr` itself — for PNG, JPEG and
-> GIF, and **144** for BMP.
+> GIF, and **128** for BMP.
+>
+> ⚠ *Corrected at 1.1.1: this read **144** from 0.6.1 until the 2026-10-15
+> sweep measured it. It has been 128 (`BMP_HDR_SIZE` 112 + the 16-byte
+> `ChitraErr`) since 0.5.2 — the figure was a misquote, not a regression.*
 
 What it does **not** cover, named rather than glossed:
 
@@ -76,6 +80,16 @@ Two changes, both of which stand on their own merits:
    stores are allocated when a DQT or DHT first defines something, guarded by
    `== 0` so it happens at most once per frame. A table-less refusal costs 400
    bytes instead of 22,160, for *every* caller — not only budgeted ones.
+
+   ⚠ *Corrected at 1.1.1: "when a DQT or DHT first defines something" was the
+   intent, not the code, until the 2026-10-15 sweep.* Both parsers allocated on
+   segment **entry**, ahead of every table header, so a segment that defined
+   nothing (`Lq` / `Lh` = 2) or whose first header was malformed still paid the
+   whole store — the 12-byte `FF D8 FF DB 00 02 FF C4 00 02 FF D9` spent all
+   22,160 bytes, and the 7-byte `FF D8 FF C4 00 03 00` 20,112. The allocation now
+   sits immediately before the first store, once that table's header has
+   validated, so the sentence above is what the code does: an empty DQT or DHT
+   costs nothing, and the guard still makes it at most once per frame.
 
    The `== 0` guard is not tidiness, it is the whole thing. A single DHT
    segment may carry up to **3,854 table definitions** (`_jpeg_huff_build`
@@ -128,7 +142,8 @@ thumbnailing untrusted input wants both.
 - A caller can bound untrusted decode for the first time, and the refusal path
   is genuinely cheap rather than nominally cheap.
 - The lazy-allocation half benefits every caller, budgeted or not: a hostile
-  flood of malformed JPEGs now costs 400 bytes each instead of 22,160.
+  flood of malformed JPEGs now costs 400 bytes each instead of 22,160 —
+  including, since 1.1.1, malformed ones whose only tables are empty or broken.
 - The surface added before the freeze is two names, both of which
   `chitra_image_decode_into` would subsume cleanly if it ever lands.
 

@@ -236,11 +236,48 @@ fn test_alloc_reset_actually_reclaims() {
     return 0;
 }
 
+# ================================================================
+# png-2 / cc-6 (1.1.1) — a sankoch TABLE allocation that fails inside
+# zlib_decompress is CHITRA_ERR_OOM, not CHITRA_ERR_INFLATE.
+#
+# This suite owns the cold-table state: an alloc_reset() makes sankoch drop
+# every table it memoized, so the next inflate rebuilds them — 13 table
+# allocations plus the bit-reader on the first decode of a process or of an
+# arena, against the bit-reader alone on a warm decode (png.tcyr's sibling cell). Through 1.1.0 every
+# one of them failing came back as CHITRA_ERR_INFLATE, "a corrupt stream", for a
+# perfectly good file — which a caller that retries OOM but discards damaged
+# files would have thrown away.
+# ⚠ crc32_init_table() is called FIRST, on purpose: it runs sankoch's arena guard,
+# which sees the reset, drops the tables, and rebuilds the CRC table alone — so
+# the CRC table (B-1's case) is not what the injection hits.
+# ⚠ MUTATION-CHECKED: with the mapping removed this fails with got -5, expected -6.
+# ================================================================
+fn test_cold_table_oom_is_oom_not_inflate() {
+    var scratch[16];
+    assert_eq(ar_decode_into(&scratch), 1, "png-2: warm-up decode before the reset");
+    alloc_reset();
+    assert_eq(crc32_init_table(), 0, "png-2: the CRC table rebuilds after the reset");
+    assert_eq(_huff_tables_allocd, 0,
+      "png-2: the reset dropped sankoch's decode tables (so the injection hits their rebuild)");
+    _sankoch_alloc_set_fail_at(0);
+    var r = ar_decode_into(&scratch);
+    var consumed = 0;
+    if (_sankoch_alloc_fail_at == 0 - 1) { consumed = 1; }
+    _sankoch_alloc_set_fail_at(0 - 1);
+    assert_eq(consumed, 1, "png-2: the injected failure fired inside the decode");
+    assert_eq(_huff_tables_allocd, 0, "png-2: ...on the decode-table rebuild (else sankoch's alloc order moved)");
+    assert_eq(r, 0 - CHITRA_ERR_OOM,
+      "png-2: a failed table allocation inside zlib_decompress is CHITRA_ERR_OOM, not CHITRA_ERR_INFLATE");
+    assert_eq(ar_decode_into(&scratch), 1, "png-2: the next decode rebuilds the tables and succeeds");
+    return 0;
+}
+
 fn main() {
     test_decode_after_alloc_reset();
     test_pixels_identical_across_reset();
     test_repeated_decode_reset_cycles();
     test_alloc_reset_actually_reclaims();
+    test_cold_table_oom_is_oom_not_inflate();
     return assert_summary();
 }
 

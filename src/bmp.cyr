@@ -161,9 +161,10 @@ fn _bmp_mask_contiguous(m): i64 {
     return 0;
 }
 
-# Scale a `width`-bit field to a full 8-bit sample, by BIT REPLICATION: shift
-# the field left and fill the vacated low bits with copies of its own high
-# bits, until eight bits are covered.
+# Scale a `width`-bit field to a full 8-bit sample. A field NARROWER than 8
+# bits is widened by BIT REPLICATION: shift the field left and fill the
+# vacated low bits with copies of its own high bits, until eight bits are
+# covered. (Wider than 8 bits: see the second note below.)
 #
 # The obvious alternative — `v * 255 / max` — is wrong, and wrong in a way that
 # only a reference decoder catches. A plain left-shift is worse still: it tops
@@ -174,11 +175,33 @@ fn _bmp_mask_contiguous(m): i64 {
 # actually is. Checked against ImageMagick across 5- and 6-bit channels at
 # several values; replication matches all of them, division does not.
 #
-# The loop form handles any width: widths below 4 need the field repeated more
-# than twice to cover eight bits.
+# The loop form handles any narrower width: widths below 4 need the field
+# repeated more than twice to cover eight bits.
+#
+# WIDER THAN 8 BITS IS A DIFFERENT QUESTION (bmp-wide-mask-rounding, 1.1.1).
+# Replication only ever ran one pass there, which reduced to `v >> (width-8)`:
+# TRUNCATION, the method PNG's 16-bit path dropped for disagreeing with every
+# reference by up to 1. ImageMagick (ffmpeg refuses these layouts) places the
+# field at the TOP of a 16-bit sample — `v << (16-width)`, or the top 16 bits
+# of a field wider than 16 — and rounds that sample to 8 bits, round(x / 257).
+# That is what is done here. For a 16-bit field it is exactly the § 13.13
+# rescale round(v * 255 / 65535); for 9..15 bits it is NOT, because the low
+# bits of the 16-bit sample are zero rather than replicated, and the § 13.13
+# form the audit proposed disagrees with ImageMagick in BOTH directions.
+# Measured against ImageMagick 7.1.2 over every value of 9-, 10-, 11-, 12-,
+# 16- and 24-bit fields: truncation is off by 1 on ~25% of samples at every
+# width; the § 13.13 rescale is still off on up to 25% (9-bit: no better at
+# all) and moves up to 94 samples per layout further AWAY; this form matches
+# every sample. A 12-bit 0x0FF is 16 (truncation said 15); a 12-bit 0x109 is
+# 16 (§ 13.13 says 17).
 fn _bmp_scale_to_8(v, width): i64 {
     if (width == 0) { return 0; }
     if (width == 8) { return v; }
+    if (width > 8) {
+        var x16 = 0;
+        if (width <= 16) { x16 = v << (16 - width); } else { x16 = v >> (width - 16); }
+        return (x16 * 2 + 257) / 514;          # round(x16 / 257)
+    }
     var r = 0;
     var bits = 0;
     while (bits < 8) {
@@ -317,6 +340,22 @@ fn _bmp_parse_header(src, len, err_out): i64 {
     # Compression. BI_RGB, the two run-length modes and the two bitfield modes
     # decode; everything else rejects with its own code, so the caller can tell
     # "chitra won't" from "this file is broken".
+    #
+    # OS/2 2.x numbers its compressions differently from 3 up
+    # (bmp-os2-compression, 1.1.1). 0/1/2 are RGB/RLE8/RLE4 in both formats,
+    # but on a BITMAPCOREHEADER2 3 is HUFFMAN 1D and 4 is RLE24, not BI_BITFIELDS
+    # and BI_JPEG. Mapping 3 to bitfields decoded a 32-bpp file by masks read
+    # from just past a header that has no mask fields, a layout neither OS/2
+    # nor any reference decoder uses (ImageMagick renders it black, ffmpeg
+    # refuses it), and refused a real Huffman-1D file as a broken header rather
+    # than as a compression chitra does not implement. Both are refused here
+    # as BMP_COMPRESSION.
+    if (dib_size == BMP_OS22X_HEADER_SIZE) {
+        if (compression >= 3) {
+            store64(err_out, chitra_err(CHITRA_ERR_BMP_COMPRESSION));
+            return 0;
+        }
+    }
     var is_rle = 0;
     if (compression == BMP_BI_RLE8) { is_rle = 1; }
     if (compression == BMP_BI_RLE4) { is_rle = 1; }
@@ -351,7 +390,6 @@ fn _bmp_parse_header(src, len, err_out): i64 {
     # declared alongside one — `compression` stays BI_RGB there by construction.
 
     # Row order. A negative height means top-down; the magnitude is the height.
-    # Guard the negation against the i32 floor before taking it.
     var top_down = 0;
     var h = h_signed;
     if (h_signed < 0) {
@@ -362,10 +400,8 @@ fn _bmp_parse_header(src, len, err_out): i64 {
             store64(err_out, chitra_err(CHITRA_ERR_BMP_HEADER));
             return 0;
         }
-        if (h_signed == (0 - 2147483648)) {
-            store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
-            return 0;
-        }
+        # No i32-floor case (guards-unreachable, 1.1.1): -2^31 negates exactly
+        # in i64, and the CHITRA_MAX_DIM check below refuses the 2^31 it gives.
         top_down = 1;
         h = 0 - h_signed;
     }
@@ -404,11 +440,11 @@ fn _bmp_parse_header(src, len, err_out): i64 {
     }
 
     # Row stride: each row padded up to a 4-byte boundary.
+    # Always >= 4 (guards-unreachable, 1.1.1): w >= 1 and bpp >= 1 from above.
     var stride = ((w * bpp + 31) / 32) * 4;
-    if (stride <= 0) {
-        store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
-        return 0;
-    }
+    # Cannot fire while the ceilings keep their 1.1.0 values (gate-4, 1.1.1):
+    # stride <= 4*w, so stride*h <= 4*CHITRA_MAX_PIXELS = 64 MB < 256 MB. It
+    # stays as the statement of this buffer's own ceiling if those are retuned.
     if (stride * h > CHITRA_MAX_RAW_BYTES) {
         store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
         return 0;
@@ -577,6 +613,17 @@ fn _bmp_parse_header(src, len, err_out): i64 {
     # into a clean rejection instead of an overread.
     if (data_off == 0) {
         data_off = BMP_FILE_HEADER_SIZE + dib_size + pal_n * pal_stride;
+        # At 16/24/32 bpp there is no palette, but a non-zero biClrUsed still
+        # declares an optional colour table between the headers and the bits
+        # (MS: "specifies the size of the color table used to optimize
+        # performance"). pal_n is 0 at those depths, so through 1.1.0 the
+        # inferred start landed ON the table and decoded its entries as pixels
+        # with no error (bmp-off0-ctable, 1.1.1). Skipped, not refused: the
+        # file says where its bits are, it just says it by layout. ImageMagick
+        # and ffmpeg refuse a 0 offset outright, so the check is the same
+        # pixels written with the offset spelled out, which they decode as
+        # this does now.
+        if (indexed == 0) { data_off = data_off + clr_used * pal_stride; }
         # A 40-byte header with BI_BITFIELDS keeps its masks in the space a
         # palette would occupy, so they push the implicit data start along too.
         if (has_mask_fields == 0) {
@@ -923,7 +970,7 @@ fn chitra_bmp_decode(src, len, err_out): i64 {
         # not computable in advance, and measuring against the available span
         # lets an attacker pad the file to raise their own allowance.
         # The index plane allocated above is bounded by CHITRA_MAX_PIXELS; this
-        # protects the 4x-larger RGBA buffer, which is not yet allocated.
+        # protects the 4x-larger RGBA buffer, which is allocated only after this check.
         if (out_size > consumed * CHITRA_MAX_BMP_RLE_RATIO) {
             store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
             return 0;

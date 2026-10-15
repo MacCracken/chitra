@@ -1179,7 +1179,7 @@ fn _bud_refuses(b, lo, budget, limit, name): i64 {
 
 fn test_budget_refusal_is_cheap_every_format() {
     # A 1-byte budget refuses everything. What matters is the price of saying
-    # no: 16 bytes (the ChitraErr) for PNG, JPEG and GIF, and 144 for BMP,
+    # no: 16 bytes (the ChitraErr) for PNG, JPEG and GIF, and 128 for BMP,
     # whose dimension read goes through the real header parser. The bounds
     # below are deliberately just above the measured figures — loosen them and
     # the cell stops being able to see a regression.

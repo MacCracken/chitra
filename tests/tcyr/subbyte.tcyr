@@ -681,6 +681,77 @@ fn fx_rgb_depth4_reject(len_out): i64 {
     store8(b + 32, 114);
     return b;
 }
+
+# ================================================================
+# gate-1 (1.1.1) — the sub-byte palette index bound had no test.
+#
+# `png_color.cyr`'s sub-byte palette branch is the only thing between a d-bit
+# index and `plte_ptr + idx*3`. At depth 4 an index reaches 15, so a 1-entry
+# PLTE leaves fourteen entries' worth of reads landing past the palette — into
+# the CRC, the IDAT, and, in this 82-byte file, past the end of the input.
+# ⚠ MEASURED (1.1.1 P(-1)): with the guard replaced by `if (0)`, all 13 suites
+# and 2,934,964 fuzz_png cases stayed green, and this file decoded to rc 0 with
+# a pixel made of whatever bytes followed the PLTE. The depth-8 sibling has
+# always had test_reject_palette_oob; the sub-byte one never did.
+# ImageMagick refuses the same file ("invalid colormap index").
+#
+# Fixtures are python3 struct/zlib, as the rest of this suite's: 2x1, depth 4,
+# colour type 3, PLTE = one entry (255,0,0); the row is 0x0F (indices 0, 15) in
+# the refusal and 0x00 (indices 0, 0) in the control. Carried as hex because the
+# two differ only in the IDAT and its CRC, which is easier to see that way.
+# ================================================================
+fn _sb_hex_nib(c): i64 {
+    if (c >= 97) { return c - 87; }
+    return c - 48;
+}
+
+# Decode `head` then `tail` (hex, no separators) into one buffer; *len_out = bytes.
+fn _sb_hex(head, tail, len_out): i64 {
+    var nh = strlen(head) / 2;
+    var n = nh + strlen(tail) / 2;
+    var b = alloc(n + 1);
+    var i = 0;
+    while (i < n) {
+        var s = head;
+        var k = i;
+        if (i >= nh) {
+            s = tail;
+            k = i - nh;
+        }
+        store8(b + i, _sb_hex_nib(load8(s + 2 * k)) * 16 + _sb_hex_nib(load8(s + 2 * k + 1)));
+        i = i + 1;
+    }
+    store64(len_out, n);
+    return b;
+}
+
+fn test_reject_subbyte_palette_index_past_plte() {
+    # Signature + IHDR + PLTE, shared by both files.
+    var head = "89504e470d0a1a0a0000000d4948445200000002000000010403000000060c62b900000003504c5445ff000019e20937";
+    var lo = 0;
+    # IDAT + IEND, indices (0, 0).
+    var ok = _sb_hex(head, "0000000a4944415478da6360000000020001e527defc0000000049454e44ae426082", &lo);
+    var err = 0;
+    var img = chitra_png_decode(ok, lo, &err);
+    # The control: the same file with in-range indices decodes, so the refusal
+    # below is the index bound and not a stale CRC or a broken stream.
+    assert(img != 0, "gate-1: the in-range twin decodes (control)");
+    if (img != 0) {
+        _assert_px(chitra_image_pixels(img), 1, 255, 0, 0, 255, "gate-1: control px1 = PLTE[0]");
+    }
+    var lo2 = 0;
+    # IDAT + IEND, indices (0, 15).
+    var bad = _sb_hex(head, "0000000a4944415478da63e007000011001004e4396d0000000049454e44ae426082", &lo2);
+    var err2 = 0;
+    var img2 = chitra_png_decode(bad, lo2, &err2);
+    assert_eq(img2, 0, "gate-1: depth-4 index 15 against a 1-entry PLTE is refused");
+    assert(err2 != 0, "gate-1: ...with err_out set");
+    if (err2 != 0) {
+        assert_eq(chitra_err_code(err2), CHITRA_ERR_BAD_CHUNK, "gate-1: ...as CHITRA_ERR_BAD_CHUNK");
+    }
+    return 0;
+}
+
 fn main() {
     test_gray1_8x1();
     test_gray2_4x1();
@@ -689,6 +760,7 @@ fn main() {
     test_pal1_8x1();
     test_pal4_trns();
     test_reject_rgb_depth4();
+    test_reject_subbyte_palette_index_past_plte();
     return assert_summary();
 }
 

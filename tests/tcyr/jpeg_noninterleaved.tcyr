@@ -3221,7 +3221,7 @@ fn test_ni_interleaved_blocks_over_10_rejected() {
 }
 
 # ================================================================
-# Deferred, not malformed — see ADR 0006
+# Refused in 0.6.0 and decoded since 0.8.0 — see ADR 0006 (amended)
 # ================================================================
 fn test_ni_multiscan_now_decodes() {
     # 0.8.0 REVERSES this cell. It pinned the deferral from 0.6.0 to 0.7.3;
@@ -3257,9 +3257,12 @@ fn test_ni_partial_scan_now_decodes() {
 # Ns validity — still malformed, and still says so
 # ================================================================
 fn test_ni_sos_ns_zero_rejected() {
-    # Ns = 0 violates T.81 § B.2.3 (1 <= Ns <= 4). It must NOT be reported as a
-    # deferral: neuter the ns < 1 guard and this file comes back as code 4,
-    # chitra claiming it declines a file that is simply broken.
+    # Ns = 0 violates T.81 § B.2.3 (1 <= Ns <= 4), and is refused as malformed.
+    # ⚠ gate-6 (1.1.1): this cell does NOT pin the ns < 1 guard, whatever it
+    # used to say — the "code 4" branch it described was deleted in 0.8.0, and
+    # with the guard neutered this fixture is still refused with the same 17
+    # (its Ns = 0 header leaves bad Ss/Se bytes behind). The guard's own pin is
+    # test_ms_empty_scan_before_a_real_one_rejected in jpeg_multiscan.tcyr.
     var lo = 0;
     var b = fx_jpeg_ni_gray(&lo);
     assert_eq(load8(b + 320), 0x00, "fixture: SOS length high byte at 320");

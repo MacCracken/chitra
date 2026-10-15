@@ -40,7 +40,7 @@
 # Returns an owned RGBA8 buffer (width*height*4 bytes) on success, or 0
 # with *err_out set. *err_out is left 0 on the success path.
 #
-# New reject paths over the parse stage:
+# Reject paths (PLTE/tRNS ones: defence in depth, parse_raw refuses first, png-1):
 #   - palette index >= PLTE entry count        -> CHITRA_ERR_BAD_CHUNK
 #   - color_type 3 with no/short PLTE          -> CHITRA_ERR_BAD_CHUNK
 #   - tRNS span out of (src, len) bounds       -> CHITRA_ERR_BAD_CHUNK

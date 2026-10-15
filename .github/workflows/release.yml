@@ -72,10 +72,19 @@ jobs:
         # lib/ is a real directory populated by `cyrius deps`, never a symlink
         # to a cyrius checkout (cross-repo writes). chitra is pure-Cyrius — no
         # external C libs to fetch.
+        # gate-10 (1.1.1): the same lock gate as ci.yml — the artifacts below
+        # are built from THIS resolve, so a plain `cyrius deps` that silently
+        # re-pins would ship a closure no committed lock describes.
         run: |
           rm -rf lib
           mkdir lib
+          git ls-files --error-unmatch cyrius.lock > /dev/null || {
+            echo "ERROR: cyrius.lock is not committed."; exit 1; }
+          cyrius deps --locked
           cyrius deps
+          git diff --exit-code -- cyrius.lock || {
+            echo "ERROR: resolving rewrote cyrius.lock — commit the lock the tags resolve to."
+            exit 1; }
 
       - name: Build (link-check, DCE on)
         run: |

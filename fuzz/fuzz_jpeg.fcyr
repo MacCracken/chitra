@@ -23,6 +23,15 @@
 # Case 5 below mutates ONLY the post-SOS entropy segment, so the marker
 # parse succeeds and hostile bits reach the bit-reader / DECODE directly.
 #
+# FIXTURES (1.1.1, gate-3). Mode 5 said it drove "restart resync" and none of
+# its fixtures carried a DRI, so _jpeg_br_restart never ran under fuzzing; no
+# fixture was RGB either, so the APP14-transform-0 output path never ran. Two
+# real cjpeg files now join the rotation — fx_jpeg_dri (`cjpeg -restart 1B`,
+# 32x32 4:2:0, three RSTn) and fx_jpeg_rgb (`cjpeg -rgb`, Adobe transform 0, no
+# JFIF) — both byte-identical to `djpeg -nosmooth` when decoded. The self-check
+# decodes every fixture, and modes 3, 4, 5 and 10 rotate across them. Run under
+# `cyrius fuzz --poison` (make fuzz / CI).
+#
 # Stack-array pointer note: `var buf[N]` reserves N bytes, but `buf` as an
 # rvalue yields the first 8 bytes, not the address — pass `&buf`.
 
@@ -51,6 +60,92 @@ fn _fuzz_fill(buf, len): i64 {
         i = i + 1;
     }
     return 0;
+}
+
+# Hex-literal fixture support (1.1.1): decode once, copy per call.
+fn _fx_hexval(c): i64 {
+    if (c >= 48 && c <= 57) { return c - 48; }
+    if (c >= 97 && c <= 102) { return c - 87; }
+    return c - 55;
+}
+
+fn _fx_hex(b, off, s): i64 {
+    var i = 0;
+    var n = strlen(s);
+    while (i + 1 < n) {
+        store8(b + off, _fx_hexval(load8(s + i)) * 16 + _fx_hexval(load8(s + i + 1)));
+        off = off + 1;
+        i = i + 2;
+    }
+    return off;
+}
+
+fn _fx_copy(src, n): i64 {
+    var b = alloc(n);
+    var i = 0;
+    while (i < n) {
+        store8(b + i, load8(src + i));
+        i = i + 1;
+    }
+    return b;
+}
+
+# `cjpeg -restart 1B -optimize -quality 75` of a 32x32 plasma: JFIF, 4:2:0, a
+# restart interval of ONE MCU (DRI at 303), so the four MCUs are separated by
+# RST0..RST2 (at 377, 431, 479). The only fixture here that reaches
+# _jpeg_br_restart.
+var _fx_jpeg_dri_cache = 0;
+
+fn fx_jpeg_dri(len_out): i64 {
+    if (_fx_jpeg_dri_cache == 0) {
+        var c = alloc(531);
+        var o = 0;
+        o = _fx_hex(c, o, "ffd8ffe000104a46494600010100000100010000ffdb004300080606070605080707070909080a0c");
+        o = _fx_hex(c, o, "140d0c0b0b0c1912130f141d1a1f1e1d1a1c1c20242e2720222c231c1c2837292c30313434341f27");
+        o = _fx_hex(c, o, "393d38323c2e333432ffdb0043010909090c0b0c180d0d1832211c21323232323232323232323232");
+        o = _fx_hex(c, o, "3232323232323232323232323232323232323232323232323232323232323232323232323232ffc0");
+        o = _fx_hex(c, o, "0011080020002003012200021101031101ffc4001900000300030000000000000000000000000304");
+        o = _fx_hex(c, o, "06020507ffc400261000020202020004070000000000000000010203110021041213314151051422");
+        o = _fx_hex(c, o, "234281a1ffc400190100010500000000000000000000000000070203040506ffc4001e1100010402");
+        o = _fx_hex(c, o, "0301000000000000000000000100020511032104123141ffdd00040001ffda000c03010002110311");
+        o = _fx_hex(c, o, "003f0093e3731597a4a496fc77bc6a580940ea4aeb6a777921f34caddbb119b287e2ab24291ab752");
+        o = _fx_hex(c, o, "a6c027431a6469aea56f9b2192fab5e28affd09175658fee200c4ddde628de27d00511bdfae1630f");
+        o = _fx_hex(c, o, "22b3486e85d815fac4e77109340d13ab3b0712619c0dfa89fc795071d38ec2ffd1e46cc185922cff");
+        o = _fx_hex(c, o, "00719e300c56c0d1c4e0424f5f307dfd30eac61b5a35e62b08d9224ec01bf8a6f1f9c3b073bc5fff");
+        o = _fx_hex(c, o, "d284e0c8d04a365a33a23d313e639139ad0bbaf6c5a1e7f4adf91bc04bcbf1652c491784d645b9ad");
+        o = _fx_hex(c, o, "d856b92471136c356bffd9");
+        if (o != 531) { return 0; }
+        _fx_jpeg_dri_cache = c;
+    }
+    store64(len_out, 531);
+    return _fx_copy(_fx_jpeg_dri_cache, 531);
+}
+
+# `cjpeg -rgb -optimize -quality 80` of a 16x16 plasma: three components with
+# ids 'R','G','B', an Adobe APP14 with transform 0 and NO JFIF APP0 — the file
+# CLAUDE.md JPEG rule 14 is about. Decodes with source_color_type 0x113.
+var _fx_jpeg_rgb_cache = 0;
+
+fn fx_jpeg_rgb(len_out): i64 {
+    if (_fx_jpeg_rgb_cache == 0) {
+        var c = alloc(419);
+        var o = 0;
+        o = _fx_hex(c, o, "ffd8ffee000e41646f626500640000000000ffdb00430006040506050406060506070706080a100a");
+        o = _fx_hex(c, o, "0a09090a140e0f0c1017141818171416161a1d251f1a1b231c1616202c20232627292a29191f2d30");
+        o = _fx_hex(c, o, "2d283025282928ffc00011080010001003521100471100421100ffc4001b00000104030000000000");
+        o = _fx_hex(c, o, "000000000000000401020608030507ffc4002b100002010204040505010000000000000001020304");
+        o = _fx_hex(c, o, "110005213112134161060722519114157181f0b1ffda000c03520047004200003f00e2b51e5e5493");
+        o = _fx_hex(c, o, "22404ac886c6e0ff007fbbfc4cfc4fe125e6cf2e5a3990caa071c5b7527f0012715a3ee6ef4ef0ca");
+        o = _fx_hex(c, o, "4924150585cf6b9f9c1f57e0e9eaf2460b10faea752ac8c7d446f71aebfdd71ba34626c851441285");
+        o = _fx_hex(c, o, "58c0660743b0e16beffbefae3038e6502b850a236b5fdce98b6b55e5faf345434464720282a35522");
+        o = _fx_hex(c, o, "db81b8d3132cce9e9f33ca92954726606dcb1a31f707bdbdf0d5a69e3e1a892063086b9257d26c76");
+        o = _fx_hex(c, o, "3f182a3f2fa969b3086510a4b0b8b3f0ad88d3beb6fddf0af92ccb2031c564d8f5e2d0ea469afe70");
+        o = _fx_hex(c, o, "5e495cb4b50f0d50b412fa5ba709e87e71ffd9");
+        if (o != 419) { return 0; }
+        _fx_jpeg_rgb_cache = c;
+    }
+    store64(len_out, 419);
+    return _fx_copy(_fx_jpeg_rgb_cache, 419);
 }
 
 fn fx_jpeg_gray_8x8(len_out): i64 {
@@ -706,7 +801,9 @@ fn _jpeg_contract(buf, n, label): i64 {
         assert(err != 0, label);
         if (err != 0) {
             assert(chitra_err_code(err) != CHITRA_OK, label);
-            assert(chitra_err_name(chitra_err_code(err)) != 0, label);
+            # Not `!= 0`: chitra_err_name never returns 0, so that could not
+            # fail (gate-13, 1.1.1). An unnamed code prints the fallback.
+            assert(streq(chitra_err_name(chitra_err_code(err)), "unknown error") == 0, label);
         }
     }
     if (img != 0) {
@@ -774,6 +871,23 @@ fn _find_entropy_start(b, n): i64 {
     return hit;
 }
 
+# The single-scan fixtures, in rotation: 0 gray_8x8, 1 real gradient, 2 DRI,
+# 3 RGB. Modes that take `k % 4` reach all four.
+fn _jpeg_fixture(k, len_out): i64 {
+    if (k == 1) { return fx_jpeg_real_gradient(len_out); }
+    if (k == 2) { return fx_jpeg_dri(len_out); }
+    if (k == 3) { return fx_jpeg_rgb(len_out); }
+    return fx_jpeg_gray_8x8(len_out);
+}
+
+# Every fixture, for the modes that should see all six: the four above, then
+# the non-interleaved and the multi-scan file.
+fn _jpeg_any_fixture(k, len_out): i64 {
+    if (k == 4) { return fx_jpeg_ni_gray(len_out); }
+    if (k == 5) { return fx_jpeg_multiscan(len_out); }
+    return _jpeg_fixture(k, len_out);
+}
+
 # ---- 1. Pure random bytes -------------------------------------------
 fn fuzz_jpeg_random(seed, n): i64 {
     _fuzz_seed(seed);
@@ -804,10 +918,17 @@ fn fuzz_jpeg_soiprefix(seed, n): i64 {
 }
 
 # ---- 3. Bit-flipped valid fixture ------------------------------------
+# 1.1.1: through 1.1.0 this was gray_8x8 alone, so no header it corrupted was
+# colour, restart or RGB. The gradient, DRI and RGB files now take one case in
+# sixteen each (6,250 apiece). They are weighted down because a flip in their
+# SOF can declare a far larger frame, which the decoder then walks up to the
+# amplification cap — the right thing to fuzz, at ~0.2 ms a case.
 fn fuzz_jpeg_mutate(seed, nmut): i64 {
     _fuzz_seed(seed);
     var lo = 0;
-    var b = fx_jpeg_gray_8x8(&lo);
+    var k = (seed % 16) - 12;
+    if (k < 0) { k = 0; }
+    var b = _jpeg_fixture(k, &lo);
     var m = 0;
     var pos = 0;
     while (m < nmut) {
@@ -821,25 +942,41 @@ fn fuzz_jpeg_mutate(seed, nmut): i64 {
 }
 
 # ---- 4. Truncation sweep ---------------------------------------------
+# Every prefix of gray_8x8, the DRI file and the RGB file (1.1.1: a cut inside
+# a restart interval, or between an RSTn and the next MCU, is a new shape).
 fn fuzz_jpeg_truncate(): i64 {
+    var k = 0;
     var lo = 0;
-    var b = fx_jpeg_gray_8x8(&lo);
+    var b = 0;
     var cut = 0;
-    while (cut <= lo) {
-        _jpeg_contract(b, cut, "jpeg truncated prefix");
-        cut = cut + 1;
+    while (k < 4) {
+        if (k != 1) {
+            b = _jpeg_fixture(k, &lo);
+            cut = 0;
+            while (cut <= lo) {
+                _jpeg_contract(b, cut, "jpeg truncated prefix");
+                cut = cut + 1;
+            }
+        }
+        k = k + 1;
     }
     return 0;
 }
 
 # ---- 5. Entropy-segment mutation (the priority target) ----------------
 # Header stays intact so the marker walk SUCCEEDS; only post-SOS entropy
-# bytes are corrupted. This is the path with no checksum and the newest
-# code: bit-reader, DECODE, RECEIVE/EXTEND, restart resync, IDCT.
+# bytes are corrupted. This is the path with no checksum: bit-reader, DECODE,
+# RECEIVE/EXTEND, IDCT — and, on the DRI fixture, restart resync, where a flip
+# can delete, duplicate or reorder an RSTn. 1.1.1: through 1.1.0 this mode used
+# gray_8x8 alone, which has no DRI, so the comment's "restart resync" never ran.
+# It now rotates gray_8x8 / DRI / RGB (the gradient is mode 5b's).
 fn fuzz_jpeg_entropy(seed, nmut): i64 {
     _fuzz_seed(seed);
     var lo = 0;
-    var b = fx_jpeg_gray_8x8(&lo);
+    var k = 0;                       # 0 gray_8x8, 2 DRI, 3 RGB
+    if ((seed % 3) == 1) { k = 2; }
+    if ((seed % 3) == 2) { k = 3; }
+    var b = _jpeg_fixture(k, &lo);
     var es = _find_entropy_start(b, lo);
     if (es < 0) { return 0; }
     var span = lo - es;
@@ -925,6 +1062,51 @@ fn fuzz_jpeg_selfcheck(): i64 {
     var merr = 0;
     assert(chitra_jpeg_decode(mb, mlo, &merr) != 0, "selfcheck: multi-scan fixture decodes clean");
     assert(_find_entropy_start(mb, mlo) > 0, "selfcheck: multi-scan first SOS located");
+
+    # 1.1.1: the DRI fixture must decode AND still be the shape it is here for —
+    # a DRI segment, and RSTn markers inside its entropy span — or modes 3/4/5
+    # would quietly stop reaching restart resync again.
+    var dlo = 0;
+    var db = fx_jpeg_dri(&dlo);
+    assert(db != 0, "selfcheck: DRI fixture builds");
+    var derr = 0;
+    var dimg = chitra_jpeg_decode(db, dlo, &derr);
+    assert(dimg != 0, "selfcheck: DRI fixture decodes clean");
+    if (dimg != 0) {
+        assert(chitra_image_width(dimg) == 32, "selfcheck: DRI fixture is 32 wide");
+        assert(chitra_image_source_color_type(dimg) == 0x103, "selfcheck: DRI fixture is YCbCr");
+    }
+    var des = _find_entropy_start(db, dlo);
+    assert(des > 0, "selfcheck: DRI fixture SOS located");
+    var i = 0;
+    var dri_seen = 0;
+    var rst_seen = 0;
+    while (i + 1 < dlo) {
+        if (load8(db + i) == 0xFF) {
+            if (load8(db + i + 1) == 0xDD) { dri_seen = dri_seen + 1; }
+            if (i > des) {
+                if (load8(db + i + 1) >= 0xD0) {
+                    if (load8(db + i + 1) <= 0xD7) { rst_seen = rst_seen + 1; }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    assert(dri_seen == 1, "selfcheck: DRI fixture carries a DRI segment");
+    assert(rst_seen >= 3, "selfcheck: DRI fixture carries RSTn markers in its scan");
+
+    # ...and the RGB fixture must decode AS RGB (0x113), or mode 3/5 cases on it
+    # would exercise the YCbCr path a second time.
+    var rlo = 0;
+    var rb = fx_jpeg_rgb(&rlo);
+    assert(rb != 0, "selfcheck: RGB fixture builds");
+    var rerr = 0;
+    var rimg = chitra_jpeg_decode(rb, rlo, &rerr);
+    assert(rimg != 0, "selfcheck: RGB fixture decodes clean");
+    if (rimg != 0) {
+        assert(chitra_image_source_color_type(rimg) == 0x113, "selfcheck: RGB fixture decodes as RGB");
+    }
+    assert(_find_entropy_start(rb, rlo) > 0, "selfcheck: RGB fixture SOS located");
     return 0;
 }
 
@@ -1719,6 +1901,72 @@ fn fuzz_jpeg_multiscan(seed, nmut): i64 {
     return 0;
 }
 
+# ---- 10. decode_budget (1.1.1, cc-11) ---------------------------------
+# chitra_image_decode_budget is frozen, and for JPEG it reads the attacker's
+# bytes with a SECOND segment walker (_jpeg_declared_dims) before the real one
+# runs. No harness called it through 1.1.0. If the two walkers ever disagree on
+# which SOF0 counts, the budget is either void (the walker returns 0 and the
+# decode proceeds unbudgeted) or wrong. Its one promise is that no image it
+# returns exceeds max_bytes of RGBA8; its failure shape is (0, *err_out set). A
+# budget of exactly the output must decode — a refusal there is the walker
+# disagreeing with the decoder — and one byte under must refuse as BUDGET.
+fn _budget_one(buf, n, max, code_out, label): i64 {
+    var err = 0;
+    store64(code_out, 0);
+    var img = chitra_image_decode_budget(buf, n, max, &err);
+    if (img == 0) {
+        assert(err != 0, label);
+        if (err != 0) {
+            store64(code_out, chitra_err_code(err));
+            assert(chitra_err_code(err) != CHITRA_OK, label);
+        }
+    }
+    if (img != 0) {
+        assert(err == 0, label);
+        assert(chitra_image_width(img) * chitra_image_height(img) * 4 <= max, label);
+    }
+    return img;
+}
+
+fn _budget_contract(buf, n, label): i64 {
+    var err = 0;
+    var code = 0;
+    var ref = chitra_image_decode(buf, n, &err);
+    if (ref != 0) {
+        var out = chitra_image_width(ref) * chitra_image_height(ref) * 4;
+        assert(_budget_one(buf, n, out - 1, &code, label) == 0, label);
+        assert(code == CHITRA_ERR_BUDGET, label);
+        assert(_budget_one(buf, n, out, &code, label) != 0, label);
+    }
+    if (ref == 0) {
+        # An input that does not decode: an arbitrary budget, 0 to ~16 MB on a
+        # log scale, must still refuse with *err_out set. (At most two decodes a
+        # case — every one is heap the bump allocator never gives back.)
+        var r = (_fuzz_next() << 16) | (_fuzz_next() << 8) | _fuzz_next();
+        _budget_one(buf, n, r >> (_fuzz_next() % 24), &code, label);
+    }
+    return 0;
+}
+
+# All six fixtures: untouched, flipped in the header (before the first SOS —
+# where the two walkers read), or flipped in the entropy data.
+fn fuzz_jpeg_budget(seed): i64 {
+    _fuzz_seed(seed);
+    var lo = 0;
+    var b = _jpeg_any_fixture(seed % 6, &lo);
+    var kind = (seed / 6) % 3;
+    var es = _find_entropy_start(b, lo);
+    if (es <= 0) { es = lo; }
+    if (kind == 1) {
+        store8(b + 2 + (_fuzz_next() * 256 + _fuzz_next()) % (es - 2), _fuzz_next());
+    }
+    if (kind == 2) {
+        if (es < lo) { store8(b + es + (_fuzz_next() * 256 + _fuzz_next()) % (lo - es), _fuzz_next()); }
+    }
+    _budget_contract(b, lo, "jpeg decode_budget");
+    return 0;
+}
+
 # ---- 6. Degenerate lengths -------------------------------------------
 fn fuzz_jpeg_degenerate(): i64 {
     var lo = 0;
@@ -1731,69 +1979,134 @@ fn fuzz_jpeg_degenerate(): i64 {
     return 0;
 }
 
+# ---- Heap epochs (1.1.1) ----------------------------------------------
+# cyrius's bump allocator never frees, so every case's decode used to stay on
+# the heap until exit: before this, fuzz_jpeg peaked at ~16 GB RSS and fuzz_gif
+# at ~9 GB, against a 16 GB CI runner. main() now calls _fuzz_epoch(case) after
+# every case and _fuzz_reclaim() after every mode; every FUZZ_EPOCH cases that
+#   1. under --poison, SWEEPS every live block first. alloc_reset() makes the
+#      poison layer forget its blocks, so without this an overwrite made since
+#      the last periodic sweep would never be checked — the gate-2 class;
+#   2. alloc_reset()s the heap back to its first 256 MB chunk (an epoch must
+#      fit in it: a spill maps a new chunk that a reset abandons, still
+#      resident — which is why the epoch is a case count, kept small);
+#   3. drops every heap pointer this harness memoizes, so nothing survives the
+#      reset as a dangling pointer. The caches below rebuild lazily.
+# Call it only BETWEEN cases: nothing a case allocated may be live after it.
+# chitra itself memoizes nothing on the heap (its tables are BSS); the stdlib
+# assert counters are plain globals.
+enum FuzzEpoch {
+    FUZZ_EPOCH = 1024;
+}
+
+fn _fuzz_reclaim(): i64 {
+    #ifdef CYRIUS_POISON
+    var pz = poison_sweep();
+    if (pz > 0) { assert_eq(pz, 0, "poison_sweep() before alloc_reset: changed redzones"); }
+    #endif
+    alloc_reset();
+    _fx_jpeg_dri_cache = 0;
+    _fx_jpeg_rgb_cache = 0;
+    return 0;
+}
+
+fn _fuzz_epoch(n): i64 {
+    if ((n % FUZZ_EPOCH) == 0) { _fuzz_reclaim(); }
+    return 0;
+}
+
 fn main(): i64 {
     var seed = 1;
 
     fuzz_jpeg_selfcheck();
-    println("fuzz_jpeg: harness self-check passed (fixtures valid, entropy reachable)");
+    _fuzz_reclaim();
+    println("fuzz_jpeg: harness self-check passed (6 fixtures valid, entropy + RSTn reachable)");
 
     seed = 1;
     while (seed <= 100000) {
         fuzz_jpeg_random(seed * 2654435761, (seed * 7) % 512);
+        _fuzz_epoch(seed);
         seed = seed + 1;
     }
+    _fuzz_reclaim();
     println("fuzz_jpeg: 100000 random-byte cases survived");
 
     seed = 1;
     while (seed <= 150000) {
         fuzz_jpeg_soiprefix(seed * 40503, (seed * 11) % 510);
+        _fuzz_epoch(seed);
         seed = seed + 1;
     }
+    _fuzz_reclaim();
     println("fuzz_jpeg: 150000 SOI-prefixed marker-walk cases survived");
 
     seed = 1;
     while (seed <= 100000) {
         fuzz_jpeg_mutate(seed * 97, (seed % 4) + 1);
+        _fuzz_epoch(seed);
         seed = seed + 1;
     }
-    println("fuzz_jpeg: 100000 mutated-fixture cases survived");
+    _fuzz_reclaim();
+    println("fuzz_jpeg: 100000 mutated-fixture cases survived (gray + 3 x 6250)");
 
     fuzz_jpeg_truncate();
+    _fuzz_reclaim();
     println("fuzz_jpeg: truncation sweep survived");
 
-    # The priority target — hostile entropy bits behind a valid header.
+    # The priority target — hostile entropy bits behind a valid header,
+    # including the DRI fixture's restart intervals.
     seed = 1;
     while (seed <= 75000) {
         fuzz_jpeg_entropy(seed * 131, (seed % 6) + 1);
+        _fuzz_epoch(seed);
         seed = seed + 1;
     }
-    println("fuzz_jpeg: 75000 entropy-segment mutation cases survived");
+    _fuzz_reclaim();
+    println("fuzz_jpeg: 75000 entropy-segment mutation cases survived (gray / DRI / RGB)");
 
     seed = 1;
     while (seed <= 75000) {
         fuzz_jpeg_entropy_real(seed * 277, (seed % 6) + 1);
+        _fuzz_epoch(seed);
         seed = seed + 1;
     }
+    _fuzz_reclaim();
     println("fuzz_jpeg: 75000 real-fixture entropy mutation cases survived");
 
     fuzz_jpeg_hv_sweep();
+    _fuzz_reclaim();
     println("fuzz_jpeg: 256-case SOF0 sampling-nibble sweep survived");
 
     seed = 1;
     while (seed <= 100000) {
         fuzz_jpeg_ni_entropy(seed * 2246822519, (seed % 6) + 1);
+        _fuzz_epoch(seed);
         seed = seed + 1;
     }
+    _fuzz_reclaim();
     println("fuzz_jpeg: 100000 non-interleaved entropy cases survived");
 
     seed = 1;
     while (seed <= 120000) {
         fuzz_jpeg_multiscan(seed * 40503, (seed % 6) + 1);
+        _fuzz_epoch(seed);
         seed = seed + 1;
     }
+    _fuzz_reclaim();
     println("fuzz_jpeg: 120000 multi-scan structure cases survived");
 
+    # 10. chitra_image_decode_budget, budgets around the exact output size
+    seed = 1;
+    while (seed <= 6000) {
+        fuzz_jpeg_budget(seed * 2654435761);
+        _fuzz_epoch(seed);
+        seed = seed + 1;
+    }
+    _fuzz_reclaim();
+    println("fuzz_jpeg: 6000 decode_budget cases survived (6 fixtures)");
+
     fuzz_jpeg_degenerate();
+    _fuzz_reclaim();
     println("fuzz_jpeg: degenerate-length cases survived");
 
     return assert_summary();

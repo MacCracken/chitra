@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
-# Verify version consistency across VERSION, cyrius.cyml, CHANGELOG.md, README.md.
+# Verify version consistency across VERSION, cyrius.cyml, CHANGELOG.md, README.md,
+# chitra_version() and the packed-version claims in docs/development/state.md.
 # `version = "${file:VERSION}"` in the manifest means VERSION is the single
 # source of truth — the check below enforces that downstream references
-# (CHANGELOG header, README badge) agree.
+# (CHANGELOG header, README line, the packed literal) agree.
+#
+# Every leg FAILS CLOSED: a source this script cannot find or cannot parse is a
+# FAIL, never a silent skip. A skipped leg that is still named in the OK line is
+# the B-14 / gate-11 shape — the gate reports agreement it never checked.
 #
 # Wired into `make test-all` so drift cannot escape CI.
 
@@ -55,35 +60,76 @@ fi
 # only the x.y.z core, so the suffix is stripped BEFORE the arithmetic --
 # feeding "2-rc.1" to $(( )) aborts the whole script under `set -euo pipefail`
 # with a raw bash error instead of a clean FAIL line.
-if [ -f src/png.cyr ]; then
-    if ! printf '%s' "$FILE_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
-        echo "  FAIL: VERSION ($FILE_VERSION) is not MAJOR.MINOR.PATCH[-prerelease]"
+EXPECT_PACKED=""
+if ! printf '%s' "$FILE_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+    echo "  FAIL: VERSION ($FILE_VERSION) is not MAJOR.MINOR.PATCH[-prerelease]"
+    fail=1
+else
+    IFS=. read -r V_MAJ V_MIN V_PAT <<< "${FILE_VERSION%%-*}"
+    EXPECT_PACKED=$(( V_MAJ * 10000 + V_MIN * 100 + V_PAT ))
+fi
+if [ ! -f src/png.cyr ]; then
+    echo "  FAIL: src/png.cyr is missing, so chitra_version() cannot be checked"
+    fail=1
+elif [ -n "$EXPECT_PACKED" ]; then
+    ACTUAL_PACKED=$(sed -n '/^fn chitra_version()/,/^}/p' src/png.cyr \
+        | grep -oE 'return [0-9]+;' | head -1 | grep -oE '[0-9]+' || echo "")
+    if [ -z "$ACTUAL_PACKED" ]; then
+        echo "  FAIL: could not read chitra_version() literal from src/png.cyr"
         fail=1
-    else
-        IFS=. read -r V_MAJ V_MIN V_PAT <<< "${FILE_VERSION%%-*}"
-        EXPECT_PACKED=$(( V_MAJ * 10000 + V_MIN * 100 + V_PAT ))
-        ACTUAL_PACKED=$(sed -n '/^fn chitra_version()/,/^}/p' src/png.cyr \
-            | grep -oE 'return [0-9]+;' | head -1 | grep -oE '[0-9]+' || echo "")
-        if [ -z "$ACTUAL_PACKED" ]; then
-            echo "  FAIL: could not read chitra_version() literal from src/png.cyr"
-            fail=1
-        elif [ "$ACTUAL_PACKED" != "$EXPECT_PACKED" ]; then
-            echo "  FAIL: chitra_version() returns $ACTUAL_PACKED, VERSION $FILE_VERSION packs to $EXPECT_PACKED"
-            fail=1
-        fi
+    elif [ "$ACTUAL_PACKED" != "$EXPECT_PACKED" ]; then
+        echo "  FAIL: chitra_version() returns $ACTUAL_PACKED, VERSION $FILE_VERSION packs to $EXPECT_PACKED"
+        fail=1
     fi
 fi
 
-if [ -f README.md ] && grep -q "^Version:" README.md; then
-    README_VERSION=$(grep '^Version:' README.md | head -1 | awk '{print $2}')
+# gate-11 (1.1.1): this leg used to run only `if grep -q "^Version:"`, so a
+# README whose line had been restyled (say to `**Version:** 9.9.9`) skipped the
+# comparison silently — and the OK line below still listed README.md among the
+# sources that agree. No recognisable line is now a FAIL.
+if [ ! -f README.md ]; then
+    echo "  FAIL: README.md is missing"
+    fail=1
+elif ! grep -q '^Version: ' README.md; then
+    echo "  FAIL: README.md has no '^Version: X.Y.Z' line to check against VERSION"
+    fail=1
+else
+    README_VERSION=$(grep '^Version: ' README.md | head -1 | awk '{print $2}')
     if [ "$README_VERSION" != "$FILE_VERSION" ]; then
         echo "  FAIL: README.md Version ($README_VERSION) != VERSION ($FILE_VERSION)"
         fail=1
     fi
 fi
 
+# cc-9 (1.1.1): docs/development/state.md is the live-state snapshot, and it
+# quotes the packed version as `chitra_version()` → **N** (and the shorter
+# `chitra_version` → N). Those are hand-typed, so they rot exactly the way the
+# literal in src/png.cyr did in 0.3.1: at the 1.1.0 cut two of them still said
+# 10003. Every such claim must equal what VERSION packs to. A quote of an older
+# release has to say so in a form this does not read as a claim — not → N.
+STATE_DOC=docs/development/state.md
+if [ ! -f "$STATE_DOC" ]; then
+    echo "  FAIL: $STATE_DOC is missing"
+    fail=1
+elif [ -n "$EXPECT_PACKED" ]; then
+    # One line per claim (grep -o), each prefixed with its line number (-n).
+    STATE_CLAIMS=$(grep -noE \
+        'chitra_version(\(\))?`?[[:space:]]*(→|->)[[:space:]]*[*`]*[0-9]+' \
+        "$STATE_DOC" || true)
+    while IFS= read -r claim; do
+        [ -n "$claim" ] || continue
+        claim_val=${claim##*[!0-9]}
+        if [ "$claim_val" != "$EXPECT_PACKED" ]; then
+            echo "  FAIL: $STATE_DOC:${claim%%:*} says chitra_version() → $claim_val," \
+                "VERSION $FILE_VERSION packs to $EXPECT_PACKED"
+            fail=1
+        fi
+    done <<< "$STATE_CLAIMS"
+fi
+
 if [ $fail -eq 0 ]; then
-    echo "  OK: version $FILE_VERSION consistent across VERSION, cyrius.cyml, CHANGELOG.md, README.md, chitra_version()"
+    echo "  OK: version $FILE_VERSION consistent across VERSION, cyrius.cyml, CHANGELOG.md," \
+        "README.md, chitra_version(), $STATE_DOC"
 fi
 
 exit $fail

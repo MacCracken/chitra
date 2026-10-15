@@ -16,6 +16,15 @@
 # 0 without setting *err_out hands the caller a stale or zero error, and
 # mabda maps ChitraErr straight onto GpuErr.
 #
+# FIXTURES (1.1.1, gate-3). Neither fixture's stream is long enough to fill the
+# LZW dictionary, so the table-full state — next_code at 4096, the 12-bit width
+# cap, and every code after it adding nothing — never executed under fuzzing.
+# fx_gif_long (generated below) fills it. The self-check decodes all three
+# fixtures, and the bit-flip, LZW-stream, truncation and decode_budget modes
+# rotate across them. The long fixture costs ~95 KB a decode (a full 4096-entry
+# dictionary) on an allocator that never frees, so it takes a SMALL share of
+# each mode rather than an equal one. Run under `cyrius fuzz --poison`.
+#
 # Stack-array pointer note: `var buf[N]` reserves N bytes, but `buf` as an
 # rvalue yields the first 8 bytes, not the address — pass `&buf`.
 
@@ -104,6 +113,152 @@ fn fx_gif_plain(len_out): i64 {
     store8(b + 52, 0);
     store8(b + 53, 59);
     return b;
+}
+
+fn _fx_copy(src, n): i64 {
+    var b = alloc(n);
+    var i = 0;
+    while (i < n) {
+        store8(b + i, load8(src + i));
+        i = i + 1;
+    }
+    return b;
+}
+
+# ---- The long-stream fixture (1.1.1, gate-3) ---------------------------
+# fx_gif_plain / fx_gif_big are small enough that the LZW dictionary never
+# fills, so the TABLE-FULL state — next_code at 4096, the 12-bit width cap, and
+# every code after that adding nothing — was never executed under fuzzing. This
+# GENERATES a 64x65 4-colour GIF whose stream is literal-only (one code per
+# pixel, and no Clear when the table fills: GIF89a lets an encoder skip it, and
+# the decoder then just stops adding entries). 4,090 codes fill the dictionary
+# and the last 69 run in the table-full state. ImageMagick
+# decodes these exact bytes to the intended pixels (checked at 1.1.1).
+var _fx_gif_long_cache = 0;
+var _fx_gif_long_len = 0;
+
+# LSB-first bit packer: st+0 buffer, +8 byte position, +16 accumulator, +24 bit count.
+fn _lzw_emit(st, code, w): i64 {
+    var buf = load64(st);
+    var pos = load64(st + 8);
+    var nacc = load64(st + 24);
+    var acc = load64(st + 16) | (code << nacc);
+    nacc = nacc + w;
+    while (nacc >= 8) {
+        store8(buf + pos, acc & 255);
+        pos = pos + 1;
+        acc = acc >> 8;
+        nacc = nacc - 8;
+    }
+    store64(st + 8, pos);
+    store64(st + 16, acc);
+    store64(st + 24, nacc);
+    return 0;
+}
+
+fn _fx_gif_long_build(): i64 {
+    var w = 64;
+    var h = 65;
+    var npx = w * h;
+    var lzw = alloc(npx * 2 + 16);
+    if (lzw == 0) { return 0; }
+    var st[32];
+    store64(&st, lzw);
+    store64(&st + 8, 0);
+    store64(&st + 16, 0);
+    store64(&st + 24, 0);
+    # The decoder's width schedule, mirrored: an entry is added for every code
+    # after the first, and the width grows when next_code reaches 1 << width.
+    var width = 3;
+    var next = 6;
+    var first = 1;
+    var s = 12345;
+    var i = 0;
+    _lzw_emit(&st, 4, width);                 # Clear
+    while (i < npx) {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF;
+        _lzw_emit(&st, (s >> 16) & 3, width);
+        if (first == 0) {
+            if (next < 4096) {
+                next = next + 1;
+                if (next == (1 << width)) {
+                    if (width < 12) { width = width + 1; }
+                }
+            }
+        }
+        first = 0;
+        i = i + 1;
+    }
+    _lzw_emit(&st, 5, width);                 # End
+    var zl = load64(&st + 8);
+    if (load64(&st + 24) > 0) {
+        store8(lzw + zl, load64(&st + 16) & 255);
+        zl = zl + 1;
+    }
+    var nblk = (zl + 254) / 255;
+    var total = 13 + 12 + 11 + nblk + zl + 2;
+    var g = alloc(total);
+    if (g == 0) { return 0; }
+    store8(g + 0, 0x47);                      # GIF89a
+    store8(g + 1, 0x49);
+    store8(g + 2, 0x46);
+    store8(g + 3, 0x38);
+    store8(g + 4, 0x39);
+    store8(g + 5, 0x61);
+    store8(g + 6, w);                         # logical screen 64 x 65
+    store8(g + 7, 0);
+    store8(g + 8, h);
+    store8(g + 9, 0);
+    store8(g + 10, 0x81);                     # global table, 4 entries
+    store8(g + 11, 0);
+    store8(g + 12, 0);
+    i = 0;
+    while (i < 12) {                          # black, red, green, blue
+        store8(g + 13 + i, 0);
+        i = i + 1;
+    }
+    store8(g + 16, 255);
+    store8(g + 20, 255);
+    store8(g + 24, 255);
+    store8(g + 25, 0x2C);                     # image descriptor, full screen
+    i = 0;
+    while (i < 4) {
+        store8(g + 26 + i, 0);
+        i = i + 1;
+    }
+    store8(g + 30, w);
+    store8(g + 31, 0);
+    store8(g + 32, h);
+    store8(g + 33, 0);
+    store8(g + 34, 0);
+    store8(g + 35, 2);                        # LZW minimum code size
+    var at = 36;
+    var done = 0;
+    var take = 0;
+    while (done < zl) {
+        take = zl - done;
+        if (take > 255) { take = 255; }
+        store8(g + at, take);
+        at = at + 1;
+        i = 0;
+        while (i < take) {
+            store8(g + at + i, load8(lzw + done + i));
+            i = i + 1;
+        }
+        at = at + take;
+        done = done + take;
+    }
+    store8(g + at, 0);                        # block terminator
+    store8(g + at + 1, 0x3B);                 # trailer
+    _fx_gif_long_len = at + 2;
+    return g;
+}
+
+fn fx_gif_long(len_out): i64 {
+    if (_fx_gif_long_cache == 0) { _fx_gif_long_cache = _fx_gif_long_build(); }
+    store64(len_out, _fx_gif_long_len);
+    if (_fx_gif_long_cache == 0) { return 0; }
+    return _fx_copy(_fx_gif_long_cache, _fx_gif_long_len);
 }
 
 fn fx_gif_big(len_out): i64 {
@@ -1244,7 +1399,9 @@ fn _gif_contract(buf, n, label): i64 {
         assert(err != 0, label);
         if (err != 0) {
             assert(chitra_err_code(err) != CHITRA_OK, label);
-            assert(chitra_err_name(chitra_err_code(err)) != 0, label);
+            # Not `!= 0`: chitra_err_name never returns 0, so that could not
+            # fail (gate-13, 1.1.1). An unnamed code prints the fallback.
+            assert(streq(chitra_err_name(chitra_err_code(err)), "unknown error") == 0, label);
         }
     }
     if (img != 0) {
@@ -1307,6 +1464,13 @@ fn _gif_lzw_start(b, lo): i64 {
     return after;
 }
 
+# The fixtures: 0 big (48 wide, the workhorse), 1 plain, 2 long.
+fn _gif_fixture(k, len_out): i64 {
+    if (k == 1) { return fx_gif_plain(len_out); }
+    if (k == 2) { return fx_gif_long(len_out); }
+    return fx_gif_big(len_out);
+}
+
 # ---- 1. Pure random bytes -------------------------------------------
 fn fuzz_gif_random(seed, n): i64 {
     _fuzz_seed(seed);
@@ -1344,11 +1508,15 @@ fn fuzz_gif_header(seed, n): i64 {
 
 # ---- 3. Bit-flipped valid fixture ------------------------------------
 # GIF, like BMP and JPEG, carries no checksum — every mutation reaches the
-# parser.
-fn fuzz_gif_mutate(seed, nmut): i64 {
+# parser. `k` is the case number: one case in 32 takes the long fixture, one in
+# 32 the plain one, the rest the big one.
+fn fuzz_gif_mutate(seed, k, nmut): i64 {
     _fuzz_seed(seed);
     var lo = 0;
-    var b = fx_gif_big(&lo);
+    var f = 0;
+    if ((k % 32) == 30) { f = 1; }
+    if ((k % 32) == 31) { f = 2; }
+    var b = _gif_fixture(f, &lo);
     var m = 0;
     var pos = 0;
     while (m < nmut) {
@@ -1366,11 +1534,15 @@ fn fuzz_gif_mutate(seed, nmut): i64 {
 # squarely in the decompressor: bad codes, codes past next_code, dictionary
 # chains that could cycle, and expansions that would run past the frame. LZW
 # is the one decompressor chitra implements itself — sankoch supplies DEFLATE,
-# not LZW — so this is the case this harness exists for.
-fn fuzz_gif_lzw(seed, nmut): i64 {
+# not LZW — so this is the case this harness exists for. 1.1.1: one case in 16
+# (`k` is the case number) mutates the long fixture, so a flip can land after
+# the dictionary is full — a code past 4095, a stray Clear, an early End.
+fn fuzz_gif_lzw(seed, k, nmut): i64 {
     _fuzz_seed(seed);
     var lo = 0;
-    var b = fx_gif_big(&lo);
+    var f = 0;
+    if ((k % 16) == 15) { f = 2; }
+    var b = _gif_fixture(f, &lo);
     var start = _gif_lzw_start(b, lo);
     if (start < 0) { return 0; }
     var span = lo - start;
@@ -1386,6 +1558,73 @@ fn fuzz_gif_lzw(seed, nmut): i64 {
     return 0;
 }
 
+# ---- 6. decode_budget (1.1.1, cc-11) ----------------------------------
+# chitra_image_decode_budget is frozen, and it reads the GIF logical screen
+# itself (_chitra_declared_rgba_bytes) before the router decodes. No harness
+# called it through 1.1.0. Its one promise is that no image it returns exceeds
+# max_bytes of RGBA8; its failure shape is (0, *err_out set). A budget of
+# exactly the output must decode — a refusal there is the walker disagreeing
+# with the decoder — and one byte under must refuse as CHITRA_ERR_BUDGET.
+fn _budget_one(buf, n, max, code_out, label): i64 {
+    var err = 0;
+    store64(code_out, 0);
+    var img = chitra_image_decode_budget(buf, n, max, &err);
+    if (img == 0) {
+        assert(err != 0, label);
+        if (err != 0) {
+            store64(code_out, chitra_err_code(err));
+            assert(chitra_err_code(err) != CHITRA_OK, label);
+        }
+    }
+    if (img != 0) {
+        assert(err == 0, label);
+        assert(chitra_image_width(img) * chitra_image_height(img) * 4 <= max, label);
+    }
+    return img;
+}
+
+fn _budget_contract(buf, n, label): i64 {
+    var err = 0;
+    var code = 0;
+    var ref = chitra_image_decode(buf, n, &err);
+    if (ref != 0) {
+        var out = chitra_image_width(ref) * chitra_image_height(ref) * 4;
+        assert(_budget_one(buf, n, out - 1, &code, label) == 0, label);
+        assert(code == CHITRA_ERR_BUDGET, label);
+        assert(_budget_one(buf, n, out, &code, label) != 0, label);
+    }
+    if (ref == 0) {
+        # An input that does not decode: an arbitrary budget, 0 to ~16 MB on a
+        # log scale, must still refuse with *err_out set. (At most two decodes a
+        # case — every one is heap the bump allocator never gives back.)
+        var r = (_fuzz_next() << 16) | (_fuzz_next() << 8) | _fuzz_next();
+        _budget_one(buf, n, r >> (_fuzz_next() % 24), &code, label);
+    }
+    return 0;
+}
+
+# Untouched, flipped in the screen descriptor (which is what the walker reads),
+# or flipped anywhere. `k` is the case number: one case in 16 takes the long
+# fixture, three the plain one, the rest the big one.
+fn fuzz_gif_budget(seed, k): i64 {
+    _fuzz_seed(seed);
+    var lo = 0;
+    var f = 0;
+    if ((k % 16) >= 12) { f = 1; }
+    if ((k % 16) == 15) { f = 2; }
+    var b = _gif_fixture(f, &lo);
+    var kind = (k / 16) % 3;
+    var at = 6 + (_fuzz_next() % 7);
+    # Not the HIGH bytes of the screen size: those declare a canvas of up to
+    # 4 G pixels, every one of which this mode would then decode four times.
+    # Mode 3 flips them; here the low bytes move the walker's answer enough.
+    if (at == 7 || at == 9) { at = at - 1; }
+    if (kind == 1) { store8(b + at, _fuzz_next()); }
+    if (kind == 2) { store8(b + ((_fuzz_next() * 256 + _fuzz_next()) % lo), _fuzz_next()); }
+    _budget_contract(b, lo, "gif decode_budget");
+    return 0;
+}
+
 # ---- 5. Truncation + degenerate lengths ------------------------------
 fn fuzz_gif_truncate(): i64 {
     var lo = 0;
@@ -1393,6 +1632,16 @@ fn fuzz_gif_truncate(): i64 {
     var cut = 0;
     while (cut <= lo) {
         _gif_contract(b, cut, "gif truncated prefix");
+        cut = cut + 1;
+    }
+    # 1.1.1: the long fixture too — every 7th prefix, plus the last 64 (a cut
+    # inside the table-full codes, the End code, the terminator, the trailer).
+    b = fx_gif_long(&lo);
+    cut = 0;
+    while (cut <= lo) {
+        if ((cut % 7) == 0 || cut + 64 >= lo) {
+            _gif_contract(b, cut, "gif truncated prefix (long)");
+        }
         cut = cut + 1;
     }
     return 0;
@@ -1427,6 +1676,56 @@ fn fuzz_gif_selfcheck(): i64 {
     var start = _gif_lzw_start(bb, blo);
     assert(start > 0, "selfcheck: LZW stream located");
     assert(blo - start > 256, "selfcheck: LZW span is wide enough to fuzz");
+    # 1.1.1: the long fixture must decode, at 64x65, and its stream must be long
+    # enough to fill the dictionary — 4,160 literal codes of >= 3 bits each — or
+    # the table-full state would silently stop being reached.
+    var llo = 0;
+    var lb = fx_gif_long(&llo);
+    assert(lb != 0, "selfcheck: long fixture builds");
+    var lerr = 0;
+    var limg = chitra_gif_decode(lb, llo, &lerr);
+    assert(limg != 0, "selfcheck: long fixture decodes");
+    if (limg != 0) {
+        assert(chitra_image_width(limg) == 64, "selfcheck: long fixture is 64 wide");
+        assert(chitra_image_height(limg) == 65, "selfcheck: long fixture is 65 tall");
+    }
+    assert(llo - _gif_lzw_start(lb, llo) > 5600, "selfcheck: long stream fills the dictionary");
+    return 0;
+}
+
+# ---- Heap epochs (1.1.1) ----------------------------------------------
+# cyrius's bump allocator never frees, so every case's decode used to stay on
+# the heap until exit: before this, fuzz_jpeg peaked at ~16 GB RSS and fuzz_gif
+# at ~9 GB, against a 16 GB CI runner. main() now calls _fuzz_epoch(case) after
+# every case and _fuzz_reclaim() after every mode; every FUZZ_EPOCH cases that
+#   1. under --poison, SWEEPS every live block first. alloc_reset() makes the
+#      poison layer forget its blocks, so without this an overwrite made since
+#      the last periodic sweep would never be checked — the gate-2 class;
+#   2. alloc_reset()s the heap back to its first 256 MB chunk (an epoch must
+#      fit in it: a spill maps a new chunk that a reset abandons, still
+#      resident — which is why the epoch is a case count, kept small);
+#   3. drops every heap pointer this harness memoizes, so nothing survives the
+#      reset as a dangling pointer. The caches below rebuild lazily.
+# Call it only BETWEEN cases: nothing a case allocated may be live after it.
+# chitra itself memoizes nothing on the heap (its tables are BSS); the stdlib
+# assert counters are plain globals.
+enum FuzzEpoch {
+    FUZZ_EPOCH = 1024;
+}
+
+fn _fuzz_reclaim(): i64 {
+    #ifdef CYRIUS_POISON
+    var pz = poison_sweep();
+    if (pz > 0) { assert_eq(pz, 0, "poison_sweep() before alloc_reset: changed redzones"); }
+    #endif
+    alloc_reset();
+    _fx_gif_long_cache = 0;
+    _fx_gif_long_len = 0;
+    return 0;
+}
+
+fn _fuzz_epoch(n): i64 {
+    if ((n % FUZZ_EPOCH) == 0) { _fuzz_reclaim(); }
     return 0;
 }
 
@@ -1434,40 +1733,60 @@ fn main(): i64 {
     var seed = 1;
 
     fuzz_gif_selfcheck();
-    println("fuzz_gif: harness self-check passed (fixtures valid, LZW reachable)");
+    _fuzz_reclaim();
+    println("fuzz_gif: harness self-check passed (3 fixtures valid, LZW reachable, table fills)");
 
     seed = 1;
     while (seed <= 100000) {
         fuzz_gif_random(seed * 2654435761, (seed * 7) % 512);
+        _fuzz_epoch(seed);
         seed = seed + 1;
     }
+    _fuzz_reclaim();
     println("fuzz_gif: 100000 random-byte cases survived");
 
     seed = 1;
     while (seed <= 150000) {
         fuzz_gif_header(seed * 40503, (seed * 11) % 506);
+        _fuzz_epoch(seed);
         seed = seed + 1;
     }
+    _fuzz_reclaim();
     println("fuzz_gif: 150000 GIF89a-prefixed header/block-walk cases survived");
 
     seed = 1;
     while (seed <= 60000) {
-        fuzz_gif_mutate(seed * 97, (seed % 4) + 1);
+        fuzz_gif_mutate(seed * 97, seed, (seed % 4) + 1);
+        _fuzz_epoch(seed);
         seed = seed + 1;
     }
-    println("fuzz_gif: 60000 mutated-fixture cases survived");
+    _fuzz_reclaim();
+    println("fuzz_gif: 60000 mutated-fixture cases survived (3 fixtures)");
 
     seed = 1;
     while (seed <= 60000) {
-        fuzz_gif_lzw(seed * 313, (seed % 6) + 1);
+        fuzz_gif_lzw(seed * 313, seed, (seed % 6) + 1);
+        _fuzz_epoch(seed);
         seed = seed + 1;
     }
-    println("fuzz_gif: 60000 LZW-stream mutation cases survived");
+    _fuzz_reclaim();
+    println("fuzz_gif: 60000 LZW-stream mutation cases survived (3750 past a full table)");
+
+    seed = 1;
+    while (seed <= 6000) {
+        fuzz_gif_budget(seed * 2654435761, seed);
+        _fuzz_epoch(seed);
+        seed = seed + 1;
+    }
+    _fuzz_reclaim();
+    println("fuzz_gif: 6000 decode_budget cases survived (3 fixtures)");
 
     fuzz_gif_truncate();
-    println("fuzz_gif: truncation sweep survived");
+    _fuzz_reclaim();
+    println("fuzz_gif: truncation sweep survived (plain + long)");
 
     fuzz_gif_degenerate();
+    _fuzz_reclaim();
     println("fuzz_gif: degenerate-length cases survived");
 
     return assert_summary();

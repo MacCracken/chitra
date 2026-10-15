@@ -40,11 +40,23 @@ var GIF_MAX_COLORS = 256;
 # stating rather than hiding in a round number: LZW's legitimate compression of
 # degenerate content is close to the bomb ratio. One full dictionary cycle
 # (codes 258..4095) encodes ~7.4 M identical pixels in ~5.8 KB, so a SOLID
-# 4096x4096 GIF is a real ~13 KB file — about 5100:1. A PNG-tight cap would
-# reject it. 16384:1 admits anything down to 4 KB, keeping ~3x headroom over
-# that floor while still rejecting the observed 797-byte bomb by two orders of
-# magnitude. The honest summary: this bounds the extreme case, not the merely
-# aggressive one, because for LZW those are nearer together than for DEFLATE.
+# 4096x4096 GIF is a real ~11.6 KB file (ImageMagick writes 11,513 LZW bytes)
+# — about 1,457 pixels per LZW byte. A PNG-tight cap would reject it.
+#
+# ⚠ THE UNITS ARE FRAME PIXELS PER GATHERED LZW BYTE, not RGBA bytes
+# (gif-ratio-units, 1.1.1). The check below is `fw * fh > comp_len * 16384`,
+# so a frame is admitted iff it has at most 16,384 pixels — 65,536 RGBA output
+# bytes — per LZW byte. A 4096x4096 frame needs at least 1,024 LZW bytes: 1,024
+# is admitted, 1,023 refused. Through 1.1.0 this comment, the 0.5.3 audit table
+# and the CHANGELOG did the arithmetic in RGBA bytes and called the floor 4 KB
+# with ~3x headroom; it is 1 KB, with ~11x headroom over the solid file above.
+# The cap was kept and the record corrected rather than the cap tightened 4x
+# to fit the old words: that would change which files decode in a patch
+# release, and the uncapped canvas is already the larger accepted risk (see
+# the amplification check below). It still refuses the observed 797-byte bomb
+# — 2 LZW bytes for a 4096x4096 frame — by a factor of 512. The honest
+# summary: this bounds the extreme case, not the merely aggressive one,
+# because for LZW those are nearer together than for DEFLATE.
 var CHITRA_MAX_GIF_RATIO = 16384;
 
 # Block introducers (spec § 15-27).
@@ -109,6 +121,16 @@ fn chitra_gif_check_signature(src, len): i64 {
 # is carried this way, so this one walk is both the skip path and the gather
 # path. `out_cap` bounds the gather; the caller passes the input length, so a
 # chain cannot make chitra hold more than the file itself.
+#
+# ⚠ THE GATHER CAP CANNOT FIRE WHILE THE SPAN CHECK HOLDS, AND IS KEPT ANYWAY
+# (guards-unreachable, 1.1.1). Every byte gathered is a distinct byte of
+# [pos, len) admitted by `p + n > len`, so `written` stays under `len - pos`.
+# But that check bounds the READ; this one is the only bound on the WRITE
+# index into `out` — "bound the index, not a proxy for it". With the span
+# check removed and this one kept, a chain running past the input is still
+# refused without a byte written past `out`; with both removed, --poison
+# fuzzing sees exactly that overwrite. It is the deliberate second bound, the
+# same posture as the LZW chain walk's.
 # ================================================================
 fn _gif_walk_blocks(src, len, pos, out, out_cap, written_out): i64 {
     var written = 0;
@@ -417,10 +439,31 @@ fn chitra_gif_decode(src, len, err_out): i64 {
     # 0.7.0: remember whether the frame was actually filled. Zero-filling the
     # tail is the right DECODE, but returning it with no signal meant a caller
     # could not tell a complete frame from a prefix followed by palette entry 0
-    # at full alpha — which is what a GIF truncated inside its sub-block chain
-    # produces.
+    # at full alpha — which is what a stream whose codes run out, or whose End
+    # code arrives, before the frame is full produces. NOT a file cut inside
+    # its sub-block chain, as this said through 1.1.0 (gif-trunc-doc, 1.1.1):
+    # that one never gets here, `_gif_walk_blocks` runs off the input and the
+    # file is refused CHITRA_ERR_TRUNCATED above.
     var frame_complete = 1;
     if (got < npix) { frame_complete = 0; }
+
+    # ---- every palette index, BEFORE the canvas it would be painted into ----
+    # (gif-canvas-refusal, 1.1.1.) This check used to sit in the paint loops
+    # below, which run after the logical-screen canvas is allocated and zeroed,
+    # so a 35-byte file naming a 4096x4096 screen and one out-of-range index
+    # spent 67,109,120 bytes to be refused. The plane is fully decoded here, and
+    # both paint loops read exactly idx[0, npix) — the interlaced one too, its
+    # passes partition the rows — so checking it here is the same rule, paid
+    # before the allocation it guards. The paint loops no longer re-check:
+    # every index they read has already passed this one.
+    var vq = 0;
+    while (vq < npix) {
+        if (load8(idx + vq) >= pal_n) {
+            store64(err_out, chitra_err(CHITRA_ERR_GIF_PALETTE));
+            return 0;
+        }
+        vq = vq + 1;
+    }
 
     # ---- canvas: logical screen, transparent where this frame paints nothing
     var out_size = screen_w * screen_h * 4;
@@ -448,11 +491,7 @@ fn chitra_gif_decode(src, len, err_out): i64 {
         while (row < fh) {
             col = 0;
             while (col < fw) {
-                pi = load8(idx + row * fw + col);
-                if (pi >= pal_n) {
-                    store64(err_out, chitra_err(CHITRA_ERR_GIF_PALETTE));
-                    return 0;
-                }
+                pi = load8(idx + row * fw + col);    # < pal_n: checked above
                 o = rgba + ((fy + row) * screen_w + (fx + col)) * 4;
                 pe = pal + pi * 3;
                 store8(o + 0, load8(pe + 0));
@@ -474,11 +513,7 @@ fn chitra_gif_decode(src, len, err_out): i64 {
             while (dst_y < fh) {
                 col = 0;
                 while (col < fw) {
-                    pi = load8(idx + src_row * fw + col);
-                    if (pi >= pal_n) {
-                        store64(err_out, chitra_err(CHITRA_ERR_GIF_PALETTE));
-                        return 0;
-                    }
+                    pi = load8(idx + src_row * fw + col);    # < pal_n: checked above
                     o = rgba + ((fy + dst_y) * screen_w + (fx + col)) * 4;
                     pe = pal + pi * 3;
                     store8(o + 0, load8(pe + 0));

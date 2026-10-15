@@ -16,6 +16,13 @@
 # 0 without setting *err_out hands the caller a stale or zero error, and
 # mabda maps ChitraErr straight onto GpuErr.
 #
+# FIXTURES (1.1.1, gate-3). The RLE modes mutated only an RLE8 file, so the
+# RLE4 decode — nibble unpacking in both encoded and absolute runs, and a
+# 2-pixels-per-byte row cap — never executed under fuzzing. fx_bmp_rle4 joins
+# the rotation; the self-check decodes all four fixtures, and the bit-flip,
+# RLE-stream, RLE-delta, truncation and decode_budget modes rotate across them.
+# Run under `cyrius fuzz --poison` (make fuzz / CI).
+#
 # Stack-array pointer note: `var buf[N]` reserves N bytes, but `buf` as an
 # rvalue yields the first 8 bytes, not the address — pass `&buf`.
 
@@ -44,6 +51,57 @@ fn _fuzz_fill(buf, len): i64 {
         i = i + 1;
     }
     return 0;
+}
+
+# Hex-literal fixture support (1.1.1): decode once, copy per call.
+fn _fx_hexval(c): i64 {
+    if (c >= 48 && c <= 57) { return c - 48; }
+    if (c >= 97 && c <= 102) { return c - 87; }
+    return c - 55;
+}
+
+fn _fx_hex(b, off, s): i64 {
+    var i = 0;
+    var n = strlen(s);
+    while (i + 1 < n) {
+        store8(b + off, _fx_hexval(load8(s + i)) * 16 + _fx_hexval(load8(s + i + 1)));
+        off = off + 1;
+        i = i + 2;
+    }
+    return off;
+}
+
+fn _fx_copy(src, n): i64 {
+    var b = alloc(n);
+    var i = 0;
+    while (i < n) {
+        store8(b + i, load8(src + i));
+        i = i + 1;
+    }
+    return b;
+}
+
+# A 13x6 BI_RLE4 file (1.1.1), 4 bpp, 16-entry palette, bottom-up. Its stream
+# mixes encoded runs (alternating nibbles), ODD and even absolute runs (with
+# their word padding), a row whose runs also fill the DWORD padding up to the
+# 16-pixel row cap (CLAUDE.md BMP rule 6: consumed and discarded), EOL and EOB.
+# ImageMagick decodes these bytes to the intended pixels, and so does chitra.
+var _fx_bmp_rle4_cache = 0;
+
+fn fx_bmp_rle4(len_out): i64 {
+    if (_fx_bmp_rle4_cache == 0) {
+        var c = alloc(176);
+        var o = 0;
+        o = _fx_hex(c, o, "424db00000000000000076000000280000000d0000000600000001000400020000003a000000130b");
+        o = _fx_hex(c, o, "0000130b00001000000000000000349b78004ff5ca000a222e001e94cd008db8710086365800850d");
+        o = _fx_hex(c, o, "6d0054638b00be949e00c6ac2c007e5b7f002d8ff20095039900d3639f00dc93d8007752e700000d");
+        o = _fx_hex(c, o, "98121e8fa462d0000000051208330300000000049abc094500000d77000000036e80000a5bda6a31");
+        o = _fx_hex(c, o, "78000000000d73a59e01b29a00000001");
+        if (o != 176) { return 0; }
+        _fx_bmp_rle4_cache = c;
+    }
+    store64(len_out, 176);
+    return _fx_copy(_fx_bmp_rle4_cache, 176);
 }
 
 fn fx_bmp_rle8_real(len_out): i64 {
@@ -1418,7 +1476,9 @@ fn _bmp_contract(buf, n, label): i64 {
         assert(err != 0, label);
         if (err != 0) {
             assert(chitra_err_code(err) != CHITRA_OK, label);
-            assert(chitra_err_name(chitra_err_code(err)) != 0, label);
+            # Not `!= 0`: chitra_err_name never returns 0, so that could not
+            # fail (gate-13, 1.1.1). An unnamed code prints the fallback.
+            assert(streq(chitra_err_name(chitra_err_code(err)), "unknown error") == 0, label);
         }
     }
     if (img != 0) {
@@ -1464,6 +1524,20 @@ fn _bmp_router_contract(buf, n, label): i64 {
     return 0;
 }
 
+# The fixtures, in rotation: 0 24-bit 2x2, 1 RLE8, 2 RLE4, 3 V4 bitfields.
+fn _bmp_fixture(k, len_out): i64 {
+    if (k == 1) { return fx_bmp_rle8_real(len_out); }
+    if (k == 2) { return fx_bmp_rle4(len_out); }
+    if (k == 3) { return fx_bmp32_v4_alpha(len_out); }
+    return fx_bmp24_2x2(len_out);
+}
+
+# The two run-length files: even k RLE8, odd k RLE4.
+fn _bmp_rle_fixture(k, len_out): i64 {
+    if ((k & 1) == 1) { return fx_bmp_rle4(len_out); }
+    return fx_bmp_rle8_real(len_out);
+}
+
 # ---- 1. Pure random bytes -------------------------------------------
 fn fuzz_bmp_random(seed, n): i64 {
     _fuzz_seed(seed);
@@ -1497,11 +1571,12 @@ fn fuzz_bmp_header(seed, n): i64 {
 
 # ---- 3. Bit-flipped valid fixture ------------------------------------
 # BMP has no checksum of any kind, so unlike PNG every mutation reaches the
-# parser — nothing turns a corrupt file away before interpretation.
+# parser — nothing turns a corrupt file away before interpretation. Rotates
+# over all four fixtures (1.1.1; through 1.1.0 the 24-bit 2x2 alone).
 fn fuzz_bmp_mutate(seed, nmut): i64 {
     _fuzz_seed(seed);
     var lo = 0;
-    var b = fx_bmp24_2x2(&lo);
+    var b = _bmp_fixture(seed % 4, &lo);
     var m = 0;
     var pos = 0;
     while (m < nmut) {
@@ -1538,11 +1613,12 @@ fn fuzz_bmp_header_only(seed, nmut): i64 {
 # offsets, which move the write cursor by attacker-chosen (dx, dy) with no
 # relation to what has been written. The loop's termination is structural —
 # every opcode consumes at least two bytes — so what this exercises is whether
-# the per-write and per-jump bounds checks actually hold.
+# the per-write and per-jump bounds checks actually hold. 1.1.1: alternates
+# RLE8 and RLE4 — through 1.1.0 RLE8 alone, so the nibble paths never ran.
 fn fuzz_bmp_rle(seed, nmut): i64 {
     _fuzz_seed(seed);
     var lo = 0;
-    var b = fx_bmp_rle8_real(&lo);
+    var b = _bmp_rle_fixture(seed, &lo);
     # the RLE stream starts at the pixel-data offset (little-endian u32 at +10)
     var start = load8(b + 10) | (load8(b + 11) << 8) | (load8(b + 12) << 16);
     if (start <= 0) { return 0; }
@@ -1565,7 +1641,7 @@ fn fuzz_bmp_rle(seed, nmut): i64 {
 fn fuzz_bmp_rle_delta(seed): i64 {
     _fuzz_seed(seed);
     var lo = 0;
-    var b = fx_bmp_rle8_real(&lo);
+    var b = _bmp_rle_fixture(seed, &lo);
     var start = load8(b + 10) | (load8(b + 11) << 8) | (load8(b + 12) << 16);
     if (start <= 0) { return 0; }
     if (start + 8 >= lo) { return 0; }
@@ -1598,14 +1674,77 @@ fn fuzz_bmp_masks(seed): i64 {
     return 0;
 }
 
+# ---- 8. decode_budget (1.1.1, cc-11) ----------------------------------
+# chitra_image_decode_budget is frozen, and it parses the BMP header a SECOND
+# time (_chitra_declared_rgba_bytes -> _bmp_parse_header) before the router
+# decodes. No harness called it through 1.1.0. Its one promise is that no image
+# it returns exceeds max_bytes of RGBA8; its failure shape is (0, *err_out
+# set). A budget of exactly the output must decode — a refusal there is the
+# walker disagreeing with the decoder — and one byte under must refuse as BUDGET.
+fn _budget_one(buf, n, max, code_out, label): i64 {
+    var err = 0;
+    store64(code_out, 0);
+    var img = chitra_image_decode_budget(buf, n, max, &err);
+    if (img == 0) {
+        assert(err != 0, label);
+        if (err != 0) {
+            store64(code_out, chitra_err_code(err));
+            assert(chitra_err_code(err) != CHITRA_OK, label);
+        }
+    }
+    if (img != 0) {
+        assert(err == 0, label);
+        assert(chitra_image_width(img) * chitra_image_height(img) * 4 <= max, label);
+    }
+    return img;
+}
+
+fn _budget_contract(buf, n, label): i64 {
+    var err = 0;
+    var code = 0;
+    var ref = chitra_image_decode(buf, n, &err);
+    if (ref != 0) {
+        var out = chitra_image_width(ref) * chitra_image_height(ref) * 4;
+        assert(_budget_one(buf, n, out - 1, &code, label) == 0, label);
+        assert(code == CHITRA_ERR_BUDGET, label);
+        assert(_budget_one(buf, n, out, &code, label) != 0, label);
+    }
+    if (ref == 0) {
+        # An input that does not decode: an arbitrary budget, 0 to ~16 MB on a
+        # log scale, must still refuse with *err_out set. (At most two decodes a
+        # case — every one is heap the bump allocator never gives back.)
+        var r = (_fuzz_next() << 16) | (_fuzz_next() << 8) | _fuzz_next();
+        _budget_one(buf, n, r >> (_fuzz_next() % 24), &code, label);
+    }
+    return 0;
+}
+
+# All four fixtures: untouched, flipped in the 54-byte header, or anywhere.
+fn fuzz_bmp_budget(seed): i64 {
+    _fuzz_seed(seed);
+    var lo = 0;
+    var b = _bmp_fixture(seed % 4, &lo);
+    var kind = (seed / 4) % 3;
+    if (kind == 1) { store8(b + 2 + (_fuzz_next() % 52), _fuzz_next()); }
+    if (kind == 2) { store8(b + ((_fuzz_next() * 256 + _fuzz_next()) % lo), _fuzz_next()); }
+    _budget_contract(b, lo, "bmp decode_budget");
+    return 0;
+}
+
 # ---- 5. Truncation sweep + degenerate lengths -------------------------
 fn fuzz_bmp_truncate(): i64 {
+    var k = 0;
     var lo = 0;
-    var b = fx_bmp24_2x2(&lo);
+    var b = 0;
     var cut = 0;
-    while (cut <= lo) {
-        _bmp_contract(b, cut, "bmp truncated prefix");
-        cut = cut + 1;
+    while (k < 4) {
+        b = _bmp_fixture(k, &lo);
+        cut = 0;
+        while (cut <= lo) {
+            _bmp_contract(b, cut, "bmp truncated prefix");
+            cut = cut + 1;
+        }
+        k = k + 1;
     }
     return 0;
 }
@@ -1641,6 +1780,54 @@ fn fuzz_bmp_selfcheck(): i64 {
     var vb = fx_bmp32_v4_alpha(&vlo);
     var verr = 0;
     assert(chitra_bmp_decode(vb, vlo, &verr) != 0, "selfcheck: V4 mask fixture decodes clean");
+    # 1.1.1: the RLE4 fixture must decode AS RLE4 (0x204), 13x6, or the RLE
+    # modes would be fuzzing a rejection path half the time.
+    var flo = 0;
+    var fb = fx_bmp_rle4(&flo);
+    assert(fb != 0, "selfcheck: RLE4 fixture builds");
+    var ferr = 0;
+    var fimg = chitra_bmp_decode(fb, flo, &ferr);
+    assert(fimg != 0, "selfcheck: RLE4 fixture decodes clean");
+    if (fimg != 0) {
+        assert(chitra_image_width(fimg) == 13, "selfcheck: RLE4 fixture is 13 wide");
+        assert(chitra_image_height(fimg) == 6, "selfcheck: RLE4 fixture is 6 tall");
+        assert(chitra_image_source_color_type(fimg) == 0x204, "selfcheck: RLE4 fixture is 4 bpp");
+    }
+    return 0;
+}
+
+# ---- Heap epochs (1.1.1) ----------------------------------------------
+# cyrius's bump allocator never frees, so every case's decode used to stay on
+# the heap until exit: before this, fuzz_jpeg peaked at ~16 GB RSS and fuzz_gif
+# at ~9 GB, against a 16 GB CI runner. main() now calls _fuzz_epoch(case) after
+# every case and _fuzz_reclaim() after every mode; every FUZZ_EPOCH cases that
+#   1. under --poison, SWEEPS every live block first. alloc_reset() makes the
+#      poison layer forget its blocks, so without this an overwrite made since
+#      the last periodic sweep would never be checked — the gate-2 class;
+#   2. alloc_reset()s the heap back to its first 256 MB chunk (an epoch must
+#      fit in it: a spill maps a new chunk that a reset abandons, still
+#      resident — which is why the epoch is a case count, kept small);
+#   3. drops every heap pointer this harness memoizes, so nothing survives the
+#      reset as a dangling pointer. The caches below rebuild lazily.
+# Call it only BETWEEN cases: nothing a case allocated may be live after it.
+# chitra itself memoizes nothing on the heap (its tables are BSS); the stdlib
+# assert counters are plain globals.
+enum FuzzEpoch {
+    FUZZ_EPOCH = 1024;
+}
+
+fn _fuzz_reclaim(): i64 {
+    #ifdef CYRIUS_POISON
+    var pz = poison_sweep();
+    if (pz > 0) { assert_eq(pz, 0, "poison_sweep() before alloc_reset: changed redzones"); }
+    #endif
+    alloc_reset();
+    _fx_bmp_rle4_cache = 0;
+    return 0;
+}
+
+fn _fuzz_epoch(n): i64 {
+    if ((n % FUZZ_EPOCH) == 0) { _fuzz_reclaim(); }
     return 0;
 }
 
@@ -1648,61 +1835,87 @@ fn main(): i64 {
     var seed = 1;
 
     fuzz_bmp_selfcheck();
-    println("fuzz_bmp: harness self-check passed (fixture valid, parser reachable)");
+    _fuzz_reclaim();
+    println("fuzz_bmp: harness self-check passed (4 fixtures valid, parser reachable)");
 
     seed = 1;
     while (seed <= 100000) {
         fuzz_bmp_random(seed * 2654435761, (seed * 7) % 512);
+        _fuzz_epoch(seed);
         seed = seed + 1;
     }
+    _fuzz_reclaim();
     println("fuzz_bmp: 100000 random-byte cases survived");
 
     seed = 1;
     while (seed <= 150000) {
         fuzz_bmp_header(seed * 40503, (seed * 11) % 510);
+        _fuzz_epoch(seed);
         seed = seed + 1;
     }
+    _fuzz_reclaim();
     println("fuzz_bmp: 150000 BM-prefixed header cases survived");
 
     seed = 1;
     while (seed <= 125000) {
         fuzz_bmp_mutate(seed * 97, (seed % 4) + 1);
+        _fuzz_epoch(seed);
         seed = seed + 1;
     }
-    println("fuzz_bmp: 125000 mutated-fixture cases survived");
+    _fuzz_reclaim();
+    println("fuzz_bmp: 125000 mutated-fixture cases survived (4 fixtures)");
 
     seed = 1;
     while (seed <= 125000) {
         fuzz_bmp_header_only(seed * 313, (seed % 5) + 1);
+        _fuzz_epoch(seed);
         seed = seed + 1;
     }
+    _fuzz_reclaim();
     println("fuzz_bmp: 125000 header-only mutation cases survived");
 
     seed = 1;
     while (seed <= 100000) {
         fuzz_bmp_rle(seed * 733, (seed % 5) + 1);
+        _fuzz_epoch(seed);
         seed = seed + 1;
     }
-    println("fuzz_bmp: 100000 RLE-stream mutation cases survived");
+    _fuzz_reclaim();
+    println("fuzz_bmp: 100000 RLE-stream mutation cases survived (RLE8 + RLE4)");
 
     seed = 1;
     while (seed <= 100000) {
         fuzz_bmp_rle_delta(seed * 911);
+        _fuzz_epoch(seed);
         seed = seed + 1;
     }
-    println("fuzz_bmp: 100000 RLE delta-splice cases survived");
+    _fuzz_reclaim();
+    println("fuzz_bmp: 100000 RLE delta-splice cases survived (RLE8 + RLE4)");
 
     seed = 1;
     while (seed <= 100000) {
         fuzz_bmp_masks(seed * 1231);
+        _fuzz_epoch(seed);
         seed = seed + 1;
     }
+    _fuzz_reclaim();
     println("fuzz_bmp: 100000 channel-mask mutation cases survived");
 
+    seed = 1;
+    while (seed <= 30000) {
+        fuzz_bmp_budget(seed * 2654435761);
+        _fuzz_epoch(seed);
+        seed = seed + 1;
+    }
+    _fuzz_reclaim();
+    println("fuzz_bmp: 30000 decode_budget cases survived (4 fixtures)");
+
     fuzz_bmp_truncate();
-    println("fuzz_bmp: truncation sweep survived");
+    _fuzz_reclaim();
+    println("fuzz_bmp: truncation sweep survived (4 fixtures)");
 
     fuzz_bmp_degenerate();
+    _fuzz_reclaim();
     println("fuzz_bmp: degenerate-length cases survived");
 
     return assert_summary();

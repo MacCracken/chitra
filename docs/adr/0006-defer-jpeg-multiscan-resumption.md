@@ -101,7 +101,7 @@ What a correct implementation actually needs, all of it new:
    what the entropy decoder consumed. The reader's position is unreliable in
    several states, at least three of them attacker-reachable: a planted `FF DA`
    inside entropy data latches `BR_MARKER` and freezes `BR_POS` there
-   ([jpeg_huffman.cyr:157](../../src/jpeg_huffman.cyr)).
+   (`_jpeg_br_load_byte`, [jpeg_huffman.cyr:297](../../src/jpeg_huffman.cyr)).
 2. **Tables redefined between scans.** Real `cjpeg -scans` output declares DHT
    segments *between* scans, and its third scan carries none of its own,
    reusing the second scan's tables. So a collect-the-offsets-then-decode

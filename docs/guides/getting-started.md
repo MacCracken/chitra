@@ -29,11 +29,11 @@ isn't on your PATH yet, see the agnosticos bootstrap.
 ```bash
 cyrius deps        # resolve stdlib + sankoch (zlib profile) into lib/
 make build         # link-check: builds build/chitra_smoke from programs/smoke.cyr
-make test          # 3086 assertions across tests/tcyr/
-make fuzz          # ~2.6 M adversarial decode cases across fuzz/*.fcyr
+make test          # 3949 assertions across tests/tcyr/ (at 1.1.1)
+make fuzz          # ~2.6 M adversarial decode cases across fuzz/*.fcyr, under --poison
 make bench         # 17 decode benchmarks (tests/bcyr/chitra.bcyr)
 make dist          # = cyrius distlib → dist/chitra.cyr
-make test-all      # version-check + dist + test + fuzz — the pre-release gate
+make test-all      # version-check + dist + test + fuzz + bench-build — the pre-release gate
 ```
 
 A few notes on what each step proves:
@@ -47,20 +47,26 @@ A few notes on what each step proves:
   domain modules) parses and links clean; it writes a one-line banner
   and exits 0.
 - **`make test`** runs the thirteen suites under `tests/tcyr/` — each is a
-  standalone `main()`: `alloc_reset.tcyr` (15), `bmp.tcyr` (1080),
-  `budget.tcyr` (23), `error.tcyr` (20), `gif.tcyr` (649), `interlace.tcyr` (35),
-  `jpeg.tcyr` (295), `jpeg_multiscan.tcyr` (75),
-  `jpeg_noninterleaved.tcyr` (238), `png.tcyr` (410), `stream_end.tcyr` (27),
-  `subbyte.tcyr` (143), `surface.tcyr` (76) — 3,086 assertions in total.
+  standalone `main()`: `alloc_reset.tcyr` (22), `bmp.tcyr` (1265),
+  `budget.tcyr` (23), `error.tcyr` (20), `gif.tcyr` (772), `interlace.tcyr` (35),
+  `jpeg.tcyr` (462), `jpeg_multiscan.tcyr` (127),
+  `jpeg_noninterleaved.tcyr` (238), `png.tcyr` (600), `stream_end.tcyr` (57),
+  `subbyte.tcyr` (151), `surface.tcyr` (177) — 3,949 assertions in total at
+  1.1.1.
 - **`make fuzz`** drives all four public decode entries over random,
   signature-prefixed, bit-flipped, truncated and entropy-mutated input —
-  ~2.6 M cases, 10,732,113 assertions. It asserts **both** that the decoder survives and that
+  11,185,700 assertions under `--poison`. It asserts **both** that the decoder survives and that
   it honours the documented contract (failure returns 0 *and* sets
-  `*err_out`). Part of `make test-all`.
+  `*err_out`). Every harness runs under `--poison` — allocator redzones that
+  exit 86 on an overwrite, because a small overflow into the next bump
+  allocation does not crash — and CI's fuzz step is exactly `make fuzz`. Part
+  of `make test-all`.
 - **`make bench`** measures decode latency. It generates its own fixtures
   at 256×256 — the test fixtures above are 2×2..16×16 and would measure
   fixed overhead, not throughput — and decode-verifies each before timing
-  it. Deliberately **not** in `test-all`: the numbers are host-dependent.
+  it. Deliberately **not** run by `test-all`: the numbers are host-dependent.
+  (`test-all` and CI do compile it — `make bench-build` — so the harness
+  cannot silently stop building.)
   Record a series with `make bench-record` →
   [`bench-history.csv`](../../bench-history.csv).
 - **`make dist`** concatenates the flat source modules into the single
@@ -89,6 +95,16 @@ program already links a sankoch bundle — a stdlib `"sankoch"` leaf or your own
 `[deps.sankoch]` — yours wins and chitra's calls resolve against it: sankoch
 allows **one bundle per program**, so never add a second. Then run
 `cyrius deps`.
+
+⚠ **If your sankoch wins, it must be at least 2.8.6.** chitra's own manifest
+pins 2.8.7, but closest-wins means a bundle you link replaces it, and nothing
+checks its version. Below 2.8.6, inflate accepts stream classes zlib refuses
+(incomplete Huffman codes, `hdist` 31/32), so chitra decodes PNGs that libpng
+and ImageMagick reject, and it also misses 2.8.5–2.8.6's CRC and inflate
+speed-ups. A stdlib `"sankoch"` leaf is 2.8.7 from **cyrius 6.7.11**; 6.7.6–6.7.10
+ship 2.8.3, 6.7.5 ships 2.8.2 and 6.6.5–6.6.18 ship 2.8.0. On an older
+toolchain, declare `[deps.sankoch]` at 2.8.6 or later instead of the stdlib
+leaf.
 
 ## The decode call
 
@@ -128,8 +144,11 @@ directly:
   (`width * height * 4` bytes)
 - `chitra_image_channels(img)` — always `4`
 - `chitra_image_seen_iend(img)` — `1` if the stream ended the way its
-  format says it should, `0` if it ended cleanly but without the closing
-  marker (tolerated). The name is PNG's (did an IEND chunk close it?);
+  format says it should, `0` if chitra decoded it anyway: a PNG with no
+  IEND; a JPEG whose scan ran out (zero-padded MCUs), had a restart marker
+  out of sequence or entropy bytes no MCU used (1.1.1), or lacked a real EOI;
+  a GIF whose LZW stream stopped before the frame was full. Never an error on
+  its own — the caller decides what a partial decode is worth. The name is PNG's (did an IEND chunk close it?);
   0.7.0 generalised the meaning to all four formats, and v1.0 keeps the
   name because renaming a frozen accessor charges consumers for a
   cosmetic gain ([ADR 0010](../adr/0010-the-v1-surface.md))
@@ -223,16 +242,16 @@ the pixels. A *malformed* IEND (e.g. non-zero length) is a hard error.
 | `CHITRA_ERR_SIGNATURE` | 1 | Bytes match none of the four signatures — the 8-byte PNG magic, the JPEG SOI marker, BMP's `BM`, or `GIF87a`/`GIF89a` |
 | `CHITRA_ERR_TRUNCATED` | 2 | Stream ends mid-chunk / mid-field |
 | `CHITRA_ERR_BAD_CHUNK` | 3 | Chunk framing is malformed |
-| `CHITRA_ERR_UNSUPPORTED` | 4 | A construct chitra does not handle |
-| `CHITRA_ERR_INFLATE` | 5 | sankoch IDAT inflate failed / wrong byte count |
-| `CHITRA_ERR_OOM` | 6 | Allocation failed |
+| `CHITRA_ERR_UNSUPPORTED` | 4 | A valid construct chitra declines — PNG: an unrecognised critical chunk, a compression/filter method other than 0, an unknown colour type; JPEG: an Adobe APP14 transform above 1 on a 3-component frame with no JFIF APP0 (the only frame where it decides the colour space, 1.1.1) |
+| `CHITRA_ERR_INFLATE` | 5 | sankoch IDAT inflate failed / wrong byte count — a stream fault. An allocation failure inside sankoch is `CHITRA_ERR_OOM` (1.1.1), not this |
+| `CHITRA_ERR_OOM` | 6 | Allocation failed — chitra's own, or sankoch's inside `crc32_init_table` (1.0.3) / `zlib_decompress` (1.1.1). The file may be fine; retrying with more memory is meaningful |
 | `CHITRA_ERR_CRC` | 7 | Per-chunk CRC32 mismatch (corruption / tampering) |
 | `CHITRA_ERR_INTERLACE` | 8 | Illegal interlace method (Adam7 itself is supported) |
 | `CHITRA_ERR_BIT_DEPTH` | 9 | Bit depth illegal for the color type (e.g. ct3 + depth16) |
 | `CHITRA_ERR_DIMENSIONS` | 10 | Declared dimensions exceed policy / are invalid — also the amplification caps on all four formats, where the decoded size is implausible against the compressed bytes consumed |
 | `CHITRA_ERR_FILTER` | 11 | Filter byte ∉ {0,1,2,3,4} (spec § 9) |
 | `CHITRA_ERR_NO_IDAT` | 12 | Structurally valid PNG with zero pixel data |
-| `CHITRA_ERR_JPEG_MARKER` | 13 | Malformed/misplaced marker or bad 16-bit segment length |
+| `CHITRA_ERR_JPEG_MARKER` | 13 | Malformed/misplaced marker (incl. an SOS before any SOF, 1.1.1) or bad 16-bit segment length |
 | `CHITRA_ERR_JPEG_SOF` | 14 | Invalid SOF0 frame header (precision / components / sampling / dims) |
 | `CHITRA_ERR_JPEG_DQT` | 15 | Malformed DQT quantization table |
 | `CHITRA_ERR_JPEG_DHT` | 16 | Malformed DHT / Huffman-table build failure |
@@ -241,11 +260,11 @@ the pixels. A *malformed* IEND (e.g. non-zero length) is a hard error.
 | `CHITRA_ERR_JPEG_PROGRESSIVE` | 19 | Progressive JPEG (SOF2) — not decoded, rejected |
 | `CHITRA_ERR_JPEG_ARITHMETIC` | 20 | Arithmetic-coded JPEG — not decoded, rejected |
 | `CHITRA_ERR_JPEG_PRECISION` | 21 | Sample precision other than 8-bit |
-| `CHITRA_ERR_JPEG_MODE` | 22 | Hierarchical / lossless / differential mode |
+| `CHITRA_ERR_JPEG_MODE` | 22 | Hierarchical / lossless / differential mode, extended-sequential SOF1, and the JPG / DHP / EXP / JPGn markers (`0xC8`, `0xDE`, `0xDF`, `0xF0`–`0xFD`). Since 1.1.1 a SOF1 file reports this even when its 16-bit DQT precedes the SOF, as cjpeg writes it |
 | `CHITRA_ERR_JPEG_COMPONENTS` | 23 | Unsupported component count (e.g. 4-component CMYK / YCCK) |
 | `CHITRA_ERR_BMP_HEADER` | 24 | Malformed BMP file/DIB header — size outside the {12,40,52,56,64,108,124} allow-list, `planes != 1`, or a bad offset |
 | `CHITRA_ERR_BMP_DEPTH` | 25 | BMP bpp outside {1,4,8,16,24,32} |
-| `CHITRA_ERR_BMP_COMPRESSION` | 26 | BMP compression chitra refuses — only the embedded `BI_JPEG` / `BI_PNG` streams, which are permanently out of scope |
+| `CHITRA_ERR_BMP_COMPRESSION` | 26 | BMP compression chitra refuses — the embedded `BI_JPEG` / `BI_PNG` streams, which are permanently out of scope, and (1.1.1) any compression ≥ 3 on an OS/2 2.x 64-byte header, where 3 and 4 mean Huffman 1D and RLE24 |
 | `CHITRA_ERR_BMP_PALETTE` | 27 | BMP palette missing, short, or an index outside it |
 | `CHITRA_ERR_GIF_HEADER` | 28 | Bad GIF signature/version, screen descriptor, or image descriptor (incl. a frame rect outside the canvas) |
 | `CHITRA_ERR_GIF_LZW` | 29 | Corrupt LZW stream: bad code, oversized expansion, bad chain, or an out-of-range minimum code size |
@@ -323,7 +342,7 @@ Table 11.1 (e.g. color type 3 at bit depth 16).
 ## Where to go from here
 
 - **Architecture & non-obvious constraints**: [`docs/architecture/README.md`](../architecture/README.md)
-- **Roadmap (JPEG and beyond)**: [`docs/development/roadmap.md`](../development/roadmap.md)
+- **Roadmap (what ships next)**: [`docs/development/roadmap.md`](../development/roadmap.md)
 - **Per-release / in-flight state**: [`docs/development/state.md`](../development/state.md)
 - **Security model + threat analysis**: [`SECURITY.md`](../../SECURITY.md), [ADR 0002](../adr/0002-security-model.md), and the four audit reports in [`../audit/`](../audit/) — [2026-06-26](../audit/2026-06-26-audit.md) (PNG), [2026-06-27](../audit/2026-06-27-audit.md) (JPEG), [2026-08-23](../audit/2026-08-23-audit.md) (PNG + JPEG sweep), [2026-08-24](../audit/2026-08-24-audit.md) (BMP + GIF), [PNG audit](../audit/2026-06-26-audit.md), [JPEG audit](../audit/2026-06-27-audit.md)
 - **Why chitra forked kii's decoder**: [ADR 0001](../adr/0001-fork-kii-png-decoder.md)
