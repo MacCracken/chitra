@@ -9,6 +9,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 _Nothing yet._
 
+## [1.1.4] - 2026-10-15 — CI builds chitra the way most consumers link it
+
+⛔ **No decode code changed.** The 53-file reference corpus decodes
+byte-identically to 1.1.3, across the compiler change. Nothing frozen moved.
+
+### Changed — cyrius pin `6.7.9` → `6.7.12`, chosen for its stdlib
+
+`lib/` re-resolved from clean: the same 26-file closure, sankoch still the 2.8.7
+`zlib` profile, 12 stdlib hashes in `cyrius.lock` updated. Nothing in 6.7.10–6.7.12
+reaches chitra's code — all 14 suites pass unchanged, `dist/` is byte-identical,
+and the CI build of `build/chitra_smoke` is unchanged at 36,616 B (352,008 B
+without DCE, +4 KB of stdlib).
+⭐ **The reason for the bump**: 6.7.12's stdlib `sankoch.cyr` is **2.8.7**, at the
+2.8.6 floor the consumer docs promise. 6.7.9's was 2.8.3, below it. That is what
+makes the next item possible without hardcoding a toolchain in CI.
+
+### Added — `make consumer-shape`: every suite, linked the way kii / mabda / aethersafha link it
+
+Three of chitra's five consumers link the stdlib `"sankoch"` leaf — the full
+bundle from their toolchain — instead of chitra's `[deps.sankoch]` `zlib`
+profile, and closest-wins makes theirs the one that runs. That shape was tested
+nowhere (audit 2026-10-15, C-26). `scripts/consumer-shape.sh` builds a temporary
+copy of the tree in exactly that shape — `"sankoch"` in `[deps].stdlib`, no
+`[deps.sankoch]`, `src/lib.cyr` including `lib/sankoch.cyr` — on chitra's **own**
+pin, and runs every suite. The verdict is behavioural: png.tcyr's png-3 cells feed
+streams only sankoch ≥ 2.8.6 refuses. It never touches the working tree, fails
+closed if any rewrite does not apply, and fails if no assertion ran.
+
+- On 6.7.12: **14 suites, 3,978 assertions**, all pass with stdlib sankoch 2.8.7.
+- ⚠ **Proven to fire**: on a copy pinned back to 6.7.9 it reports "stdlib sankoch
+  2.8.3" and fails at exactly the png-3 floor cells.
+- Runs in CI after the test step, and in `make test-all`.
+
+### Added — fuzzing reaches the last three paths it never did
+
+1.1.1's C-8 gave every harness a fixture per structurally distinct path, and
+named three still out of reach. Each is now driven by its own mode, self-checked,
+and proven reached by an exit-on-entry probe (the current harness fails with it,
+the 1.1.3 harness passed — and still fails when the probe exits only after 500
+hits, so the mutation mode reaches it, not just the self-check):
+
+- **PNG's unknown-critical-chunk abort** (`fuzz_png` mode 9, 44,000 cases):
+  rewrites a chunk's type, or inserts a new chunk, with the CRC repaired — random
+  flips can never get past the CRC. Critical and ancillary types alternate, so
+  § 5.4's "unknown ancillary is skipped" is exercised too: 18,503 refused as
+  `UNSUPPORTED`, 18,602 decoded.
+- **`CHITRA_ERR_INFLATE_LIMIT`** (`fuzz_png` mode 10, 19,200 cases): IHDR
+  geometry written against real zlib payloads across every spec-legal colour
+  type and depth, interlaced and not, aimed at the limit window and both of its
+  edges: 5,285 `INFLATE_LIMIT`, 12,265 `DIMENSIONS` (bombs, pixel caps), 1,650
+  size mismatches.
+- **BMP's exact RLE amplification cap** (`fuzz_bmp` mode 9, 24,000 cases):
+  RLE8/RLE4 streams that end early behind trailing padding, sized to land on each
+  side of both the pre-gate (file length) and the exact cap (bytes consumed):
+  every targeted case matched its predicted outcome.
+
+`make fuzz` (poisoned): **11,649,080 assertions**, 0 failures (11,185,700 at
+1.1.3), 57 s, every harness's peak RSS ≤ 207 MB.
+
+### Process — the benchmark history resumed
+
+`bench-history.csv` gained 17 rows for 1.1.3, stamped `f28d32f` — the first since
+1.0.0. CLAUDE.md's closeout already called for one per release; the roadmap item
+that tracked the gap is gone.
+
+### Numbers
+
+**3,978 assertions across 14 suites**, **11,649,080 fuzz assertions** under
+`--poison`, and the consumer-shape leg's 3,978 again — 0 failures throughout.
+
 ## [1.1.3] - 2026-10-15 — a consumer's functions can no longer replace chitra's
 
 The function half of 1.1.2's namespace repair, and the item 1.1.2 left first on

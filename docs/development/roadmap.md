@@ -1,6 +1,6 @@
 # chitra — Roadmap
 
-> **Last Updated**: 2026-10-15 (1.1.3)
+> **Last Updated**: 2026-10-15 (1.1.4)
 >
 > **Forward only.** What ships next, in what order, against what gates. What
 > already shipped is in [`../../CHANGELOG.md`](../../CHANGELOG.md), one entry
@@ -33,18 +33,10 @@ Patch-sized, independent, any order. The 1.1.1 P(-1) sweep
 ([audit](../audit/2026-10-15-audit.md)) closed the lock gate, the lint
 deferrals and the anchor checker that used to be listed here; 1.1.2 and 1.1.3
 closed the bundle namespace (every global and function chitra-prefixed, and
-gated).
+gated); 1.1.4 added the stdlib-`sankoch` consumer-shape CI leg (on a 6.7.12 pin),
+reached the last three unfuzzed paths, and resumed the per-release benchmark row
+(a CLAUDE.md closeout step, so no longer a roadmap item).
 
-- **A CI consumer-shape leg for the sankoch floor.** chitra's own build links
-  sankoch 2.8.7, but a consumer's bundle wins, and below 2.8.6 PNG inflate
-  accepts streams zlib refuses (audit C-26). A job that builds `png.tcyr` in the
-  stdlib-`sankoch` shape on the oldest toolchain the guide recommends would catch
-  a floor that regresses. It would fail on 6.7.9's stdlib today, by design.
-- **Three fuzz paths still unreached**: PNG's unknown-critical-chunk abort and
-  `CHITRA_ERR_INFLATE_LIMIT`, and BMP's post-decode RLE amplification cap. Same
-  method as 1.1.1's C-8: a fixture per path, proven by an exit-on-entry probe.
-- **A `bench-history.csv` row per release.** The last row is 1.0.0's. Record
-  1.1.1 from its commit (the script stamps `HEAD`), then keep one per tag.
 - **Downstream consumers green on 1.1.x.** All five — mabda, kii, jalwa,
   aethersafha, crab — pin `1.0.3`. Re-pinning needs no manifest change: crab
   picks up the `zlib` profile transitively, kii / mabda / aethersafha keep the
@@ -52,9 +44,11 @@ gated).
   things to check while re-pinning: kii's error mapping (a second IHDR now
   arrives as `PNG_ERR_HEADER`, a sankoch OOM as `PNG_ERR_IDAT_TOO_LARGE`); the
   sankoch floor for the three stdlib-leaf consumers (cyrius ≥ 6.7.11, or their own
-  `[deps.sankoch]` ≥ 2.8.6); and mabda's `gpu_texture_load_png` build, the one
-  that matters most and is unverified from here.
-- **Rename the 45 internal `chitra_*` functions to `_chitra_*`** — optional.
+  `[deps.sankoch]` ≥ 2.8.6) — ⚠ **all three are below it today**: mabda pins
+  cyrius 6.7.5 (stdlib sankoch 2.8.2), kii 6.7.9 (2.8.3), aethersafha 6.6.11
+  (2.8.0); and mabda's `gpu_texture_load_png` build, the one that matters most
+  and is unverified from here.
+- **Rename the 46 internal `chitra_*` functions to `_chitra_*`** — optional.
   Non-breaking by construction (none is frozen), but it touches every test call
   site and the surface manifest, so it is its own patch or nothing.
 

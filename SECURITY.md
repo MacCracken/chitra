@@ -52,7 +52,10 @@ pins the 2.8.7 `zlib` profile, but a consumer's own sankoch bundle wins
 (closest-wins), and below **2.8.6** inflate accepts stream classes zlib refuses
 (incomplete Huffman codes, `hdist` 31/32). chitra's guarantee that its PNG path
 refuses what zlib refuses therefore holds only when the linked sankoch is ≥ 2.8.6
-— see the getting-started guide for the toolchain mapping.
+— see the getting-started guide for the toolchain mapping. Since 1.1.4 CI also
+runs every suite in that stdlib-`sankoch` consumer shape on chitra's own pin
+(`make consumer-shape`), and fails if that toolchain's stdlib sankoch is below
+the floor.
 For JPEG, the Huffman/entropy decode **is** chitra's own code — its bounds are
 the subject of the 2026-06-27 audit.
 

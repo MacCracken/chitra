@@ -17,8 +17,9 @@
 #                         chitra_version() agree
 #   make check-surface  — dist exports vs docs/development/public-surface.md
 #   make count-assertions — NUL-safe assertion total across suites
-#   make test-all       — version-check + dist regen + CPU tests + fuzz +
-#                         bench-build
+#   make consumer-shape — every suite in the stdlib-"sankoch" consumer shape
+#   make test-all       — version-check + dist regen + CPU tests +
+#                         consumer-shape + fuzz + bench-build
 #   make clean          — scrub build/
 
 CYRIUS ?= cyrius
@@ -155,8 +156,17 @@ version-check:
 count-assertions:
 	@./scripts/count-test-assertions.sh
 
+.PHONY: consumer-shape
+# Every suite again, linked the way kii / mabda / aethersafha link chitra: the
+# stdlib "sankoch" leaf (the FULL bundle from chitra's own pinned toolchain) in
+# place of chitra's [deps.sankoch] zlib profile. Built in a temp copy; the tree is
+# never touched. Fails if the pinned toolchain's stdlib sankoch is below the 2.8.6
+# floor the consumer docs promise (png.tcyr's png-3 cells), 1.1.4.
+consumer-shape: check-lib-wiring
+	@./scripts/consumer-shape.sh
+
 .PHONY: test-all
-test-all: version-check dist test fuzz bench-build
+test-all: version-check dist test consumer-shape fuzz bench-build
 
 .PHONY: clean
 clean:

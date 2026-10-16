@@ -1731,6 +1731,170 @@ fn fuzz_bmp_budget(seed): i64 {
     return 0;
 }
 
+# ---- 9. RLE amplification boundary (1.1.4) -----------------------------
+# Two gates bound an RLE file's output (w * h * 4) against its input:
+#   pre-gate  out > (len - data_off) * CHITRA_MAX_BMP_RLE_RATIO — the bytes
+#             AVAILABLE. Cheap, and it refuses before the index plane exists.
+#   exact     out > consumed * CHITRA_MAX_BMP_RLE_RATIO — the bytes the stream
+#             actually CONSUMED, which only the decode can know.
+# The exact gate is the one that sees through padding, and through 1.1.3 no
+# harness reached it: every RLE fixture's stream ran to the end of the file, so
+# consumed and available agreed and the pre-gate always decided first. This
+# generates files whose stream ENDS EARLY — a few in-row runs, some zero-length
+# deltas, end-of-bitmap — followed by trailing padding, and sizes the padding
+# and the stream to land on either side of each gate.
+
+# BI_RLE8 (is4 = 0) or BI_RLE4 (is4 = 1), w x h bottom-up, 16-colour palette.
+# Stream: `ops` 2-byte ops — a random encoded run sized to fit the rest of the
+# row, or an end-of-line once the row is full — then `zd` zero deltas
+# (00 02 00 00: 4 bytes consumed, cursor unmoved), end-of-bitmap (00 01), then
+# `pad` bytes the decoder must never read. Consumed = 2 * ops + 4 * zd + 2.
+fn _bmp_rle_amp_build(w, h, is4, ops, zd, pad, len_out): i64 {
+    var slen = 2 * ops + 4 * zd + 2;
+    var off = 14 + 40 + 64;
+    var n = off + slen + pad;
+    var b = alloc(n);
+    if (b == 0) { return 0; }
+    var i = 0;
+    while (i < n) {
+        store8(b + i, 0);
+        i = i + 1;
+    }
+    store8(b + 0, 66);
+    store8(b + 1, 77);
+    _bmp_put32(b + 2, n);
+    _bmp_put32(b + 10, off);
+    _bmp_put32(b + 14, 40);
+    _bmp_put32(b + 18, w);
+    _bmp_put32(b + 22, h);
+    store8(b + 26, 1);
+    store8(b + 28, 8 - 4 * is4);
+    store8(b + 30, 1 + is4);
+    _bmp_put32(b + 34, slen + pad);
+    _bmp_put32(b + 46, 16);
+    _fuzz_fill(b + 54, 64);
+    var p = off;
+    var x = 0;
+    var c = 0;
+    i = 0;
+    while (i < ops) {
+        if (x >= w) {
+            x = 0;                                  # 00 00: end of line (the zeros are there)
+        } else {
+            c = 1 + (_fuzz_next() % (w - x));
+            if (c > 255) { c = 255; }
+            store8(b + p, c);
+            if (is4 == 1) {
+                store8(b + p + 1, _fuzz_next());
+            } else {
+                store8(b + p + 1, _fuzz_next() & 15);
+            }
+            x = x + c;
+        }
+        p = p + 2;
+        i = i + 1;
+    }
+    i = 0;
+    while (i < zd) {
+        store8(b + p + 1, 2);
+        p = p + 4;
+        i = i + 1;
+    }
+    store8(b + p + 1, 1);
+    _fuzz_fill(b + p + 2, pad);
+    store64(len_out, n);
+    return b;
+}
+
+fn _bmp_put32(p, v): i64 {
+    store8(p + 0, v & 255);
+    store8(p + 1, (v >> 8) & 255);
+    store8(p + 2, (v >> 16) & 255);
+    store8(p + 3, (v >> 24) & 255);
+    return 0;
+}
+
+# `k` is the case number: RLE8 / RLE4 alternate, and the kind picks the edge.
+# T = ceil(out / RATIO) is the fewest bytes either gate accepts.
+#   0  exact gate REFUSES, pre-gate passes: short stream, padding up to T + 0..3
+#   1  pre-gate REFUSES: stream + padding stop 1-2 bytes short of T
+#   2  the exact edge itself: zero deltas bring `consumed` to just under T
+#      (refused) or to T..T+3 (accepted, and the image decodes)
+#   3  anywhere: random deltas and padding, and 1-3 flipped stream bytes
+fn fuzz_bmp_rle_amp(seed, k): i64 {
+    _fuzz_seed(seed);
+    var is4 = k & 1;
+    var kind = (k / 2) % 4;
+    var w = 1 + (_fuzz_next() * 256 + _fuzz_next()) % 192;
+    var h = 1 + (_fuzz_next() * 256 + _fuzz_next()) % 192;
+    var t = (w * h * 4 + CHITRA_MAX_BMP_RLE_RATIO - 1) / CHITRA_MAX_BMP_RLE_RATIO;
+    var ops = _fuzz_next() % 4;
+    var zd = 0;
+    var pad = 0;
+    var base = 2 * ops + 2;
+    if (kind == 0) { pad = t - base + (_fuzz_next() % 4); }
+    if (kind == 1) { pad = t - 1 - (_fuzz_next() & 1) - base; }
+    if (kind == 2) {
+        if ((_fuzz_next() & 1) == 0) {
+            if (t - 1 > base) { zd = (t - 1 - base) / 4; }              # consumed <= T - 1
+        } else {
+            if (t > base) { zd = (t - base + 3) / 4; }                  # consumed >= T
+        }
+        pad = _fuzz_next() % 9;
+        if (base + 4 * zd + pad < t) { pad = t - base - 4 * zd; }        # keep the pre-gate open
+    }
+    if (kind == 3) {
+        zd = _fuzz_next() % (t / 4 + 2);
+        pad = _fuzz_next() % (2 * t + 2);
+    }
+    if (pad < 0) { pad = 0; }
+    var n = 0;
+    var b = _bmp_rle_amp_build(w, h, is4, ops, zd, pad, &n);
+    if (b == 0) { return 0; }
+    if (kind == 3) {
+        var m = 1 + (_fuzz_next() % 3);
+        while (m > 0) {
+            store8(b + 118 + (_fuzz_next() % (n - 118)), _fuzz_next());
+            m = m - 1;
+        }
+    }
+    _bmp_contract(b, n, "bmp RLE amplification boundary");
+    _bmp_router_contract(b, n, "bmp RLE amplification boundary (router)");
+    return 0;
+}
+
+# Self-check: each gate must be reached, from the side the mode says.
+fn _bmp_selfcheck_114(): i64 {
+    var out = 256 * 256 * 4;                                  # T = 64
+    var n = 0;
+    var err = 0;
+    # end-of-bitmap at once (consumed 2) + 62 padding: available 64 passes the
+    # pre-gate exactly; consumed 2 does not pass the exact one.
+    assert(64 * CHITRA_MAX_BMP_RLE_RATIO >= out, "selfcheck: 64 available bytes pass the pre-gate");
+    assert(2 * CHITRA_MAX_BMP_RLE_RATIO < out, "selfcheck: 2 consumed bytes fail the exact gate");
+    var b = _bmp_rle_amp_build(256, 256, 0, 0, 0, 62, &n);
+    assert(chitra_bmp_decode(b, n, &err) == 0, "selfcheck: early-ending padded RLE8 is refused");
+    if (err != 0) {
+        assert(chitra_err_code(err) == CHITRA_ERR_DIMENSIONS, "selfcheck: ... as DIMENSIONS");
+    }
+    b = _bmp_rle_amp_build(256, 256, 1, 0, 0, 62, &n);
+    err = 0;
+    assert(chitra_bmp_decode(b, n, &err) == 0, "selfcheck: early-ending padded RLE4 is refused");
+    # one byte less padding: the pre-gate refuses first
+    b = _bmp_rle_amp_build(256, 256, 0, 0, 0, 61, &n);
+    err = 0;
+    assert(chitra_bmp_decode(b, n, &err) == 0, "selfcheck: 63 available bytes fail the pre-gate");
+    # 16 zero deltas: consumed 66 >= 64, so the same image decodes
+    b = _bmp_rle_amp_build(256, 256, 0, 0, 16, 0, &n);
+    err = 0;
+    var img = chitra_bmp_decode(b, n, &err);
+    assert(img != 0, "selfcheck: consumed >= T decodes");
+    if (img != 0) {
+        assert(chitra_image_width(img) == 256, "selfcheck: ... at 256 wide");
+    }
+    return 0;
+}
+
 # ---- 5. Truncation sweep + degenerate lengths -------------------------
 fn fuzz_bmp_truncate(): i64 {
     var k = 0;
@@ -1793,6 +1957,7 @@ fn fuzz_bmp_selfcheck(): i64 {
         assert(chitra_image_height(fimg) == 6, "selfcheck: RLE4 fixture is 6 tall");
         assert(chitra_image_source_color_type(fimg) == 0x204, "selfcheck: RLE4 fixture is 4 bpp");
     }
+    _bmp_selfcheck_114();
     return 0;
 }
 
@@ -1836,7 +2001,7 @@ fn main(): i64 {
 
     fuzz_bmp_selfcheck();
     _fuzz_reclaim();
-    println("fuzz_bmp: harness self-check passed (4 fixtures valid, parser reachable)");
+    println("fuzz_bmp: harness self-check passed (4 fixtures, both RLE amplification gates)");
 
     seed = 1;
     while (seed <= 100000) {
@@ -1909,6 +2074,17 @@ fn main(): i64 {
     }
     _fuzz_reclaim();
     println("fuzz_bmp: 30000 decode_budget cases survived (4 fixtures)");
+
+    # 9. early-ending RLE streams + trailing padding, sized against BOTH
+    #    amplification gates — the pre-gate and the exact consumed-bytes cap
+    seed = 1;
+    while (seed <= 24000) {
+        fuzz_bmp_rle_amp(seed * 2246822519, seed);
+        _fuzz_epoch(seed);
+        seed = seed + 1;
+    }
+    _fuzz_reclaim();
+    println("fuzz_bmp: 24000 RLE amplification-boundary cases survived (RLE8 + RLE4)");
 
     fuzz_bmp_truncate();
     _fuzz_reclaim();

@@ -1,11 +1,20 @@
 # chitra — Current State
 
-> **Last refresh**: 2026-10-15 (1.1.3) | **Refresh cadence**: every release.
+> **Last refresh**: 2026-10-15 (1.1.4) | **Refresh cadence**: every release.
 > [`CLAUDE.md`](../../CLAUDE.md) is preferences / process / architecture
 > (durable); this file is **state** (volatile) — it is the home for the
 > version, sizes, and counts `CLAUDE.md` must not inline.
 
 ## Version
+
+**1.1.4** — cut 2026-10-15. ⭐ **CI now builds chitra the way most of its consumers link it.** The
+pin moves `6.7.9` → **`6.7.12`** for its stdlib, whose `sankoch.cyr` is 2.8.7 — at the 2.8.6 floor
+the consumer docs promise (6.7.9's was 2.8.3). That lets `make consumer-shape` (CI + `test-all`)
+rebuild the tree with the stdlib `"sankoch"` leaf in place of chitra's `zlib` profile — the shape
+kii, mabda and aethersafha use — on chitra's own pin, and run every suite; on a 6.7.9 pin it fails at
+exactly the png-3 floor cells. Fuzzing now also reaches the last three paths it never did (PNG's
+unknown-critical-chunk abort, `CHITRA_ERR_INFLATE_LIMIT`, BMP's exact RLE cap), each probe-proven.
+⛔ No decode code changed; the corpus is byte-identical to 1.1.3 across the compiler change.
 
 **1.1.3** — cut 2026-10-15. ⭐ **The bundle's function namespace, closed the same way 1.1.2 closed its
 globals.** 84 internal helpers (`_jpeg_*`, `_bmp_*`, `_cur_*`, `_gif_*`, `_chunk_*`, `_adam7_*`,
@@ -151,23 +160,29 @@ Adam7; **JPEG** JFIF baseline including the full T.81 § A.2 scan model;
 **BMP** with an empty deferral list; **GIF** first frame ([ADR 0005](../adr/0005-gif-first-frame-only.md)).
 Four security audits, every format line-by-line reviewed.
 
-`chitra_version()` → **10103**. **3,978 test assertions** across **14 suites**,
-**11,185,700 fuzz assertions** under `--poison`, 17 benchmarks — 0 failures throughout.
+`chitra_version()` → **10104**. **3,978 test assertions** across **14 suites**,
+**11,649,080 fuzz assertions** under `--poison`, 17 benchmarks — 0 failures throughout.
 
 Released tags: 0.1.0, 0.2.0, 0.2.1, 0.3.0, 0.3.1, 0.3.2, 0.3.3, 0.4.0, 0.5.0,
 0.5.1, 0.5.2, 0.5.3, 0.6.0, 0.6.1, 0.7.0, 0.7.1, 0.7.2, 0.7.3, 0.8.0, 0.9.0,
-1.0.0, 1.0.1, 1.0.2, 1.0.3, 1.0.4, 1.1.0, 1.1.1, 1.1.2 (1.1.3 is cut but not yet tagged)
+1.0.0, 1.0.1, 1.0.2, 1.0.3, 1.0.4, 1.1.0, 1.1.1, 1.1.2, 1.1.3 (1.1.4 is cut but not yet tagged)
 (SemVer; **the public surface is frozen as of 1.0.0** — see
 [`public-surface.md`](public-surface.md) for what that covers and
 [ADR 0010](../adr/0010-the-v1-surface.md) for the calls made to get there).
 
 ## Toolchain
 
-- **Cyrius pin**: `6.7.9` (in [`cyrius.cyml`](../../cyrius.cyml)
+- **Cyrius pin**: `6.7.12` (in [`cyrius.cyml`](../../cyrius.cyml)
   `[package].cyrius`). This pin is the **only** source of truth — CI and the
   release workflow both read it; no toolchain version is hardcoded in YAML.
-  Bumped from `6.5.35` at 1.0.2, from `6.6.2` at 1.0.4 and from `6.6.20` at
-  1.1.0.
+  Bumped from `6.5.35` at 1.0.2, from `6.6.2` at 1.0.4, from `6.6.20` at 1.1.0
+  and from `6.7.9` at 1.1.4. ⭐ **The 1.1.4 bump was chosen for its stdlib, not
+  its compiler**: 6.7.12's stdlib `sankoch.cyr` is 2.8.7, at the 2.8.6 floor the
+  consumer docs promise, so CI can build chitra the way kii / mabda /
+  aethersafha link it (the stdlib `"sankoch"` leaf) on chitra's own pin
+  (`make consumer-shape`). 6.7.9's was 2.8.3, and that leg fails on it — proven.
+  Nothing 6.7.10–6.7.12 changed reaches chitra's code: 14 suites green
+  unchanged, the 26-file closure the same, `dist/` byte-identical.
 - **sankoch is not from the pin any more (1.1.0).** It is `[deps.sankoch]`,
   tag **`2.8.7`**, `modules = ["dist/sankoch-zlib.cyr"]` — the zlib profile,
   cloned from sankoch's repo and commit-pinned in `cyrius.lock`. ⇒ A sankoch
@@ -306,7 +321,7 @@ Shared:
 - The full frozen list — 29 names of the 75 the bundle exports — is
   [`public-surface.md`](public-surface.md), checked against `dist/chitra.cyr`
   by `scripts/check-surface.sh` on every `make lint`.
-- `chitra_version()` → **`10103`** (`major*10000 + minor*100 + patch`).
+- `chitra_version()` → **`10104`** (`major*10000 + minor*100 + patch`).
 - Error API: `chitra_err_new` / `chitra_err` / `chitra_err_code` /
   `chitra_err_detail` / `chitra_err_name` / `chitra_err_print_name` + enum
   `ChitraErrCode`.
@@ -666,7 +681,7 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
     wrong returns the right *set* of pixels in the wrong places, and only
     position-sensitive expectations catch that.
   - `error.tcyr` — **20** (error codes, `chitra_err_*` accessors, name
-    round-trips, `chitra_version` → 10103).
+    round-trips, `chitra_version` → 10104).
   - `interlace.tcyr` — **35** (Adam7 cross-checked against the trusted
     non-interlaced decode for 7 color/depth/odd-dimension cases).
   - `jpeg.tcyr` — **462** (marker scan + non-baseline rejection, SOF0
@@ -736,8 +751,13 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
   the ImageMagick-encoded fixtures live inside `jpeg.tcyr` / `png.tcyr`, so
   a green `make test` *is* the reference cross-check.
 - `make fuzz` (every `fuzz/*.fcyr` under **`--poison`**, exactly what CI runs —
-  1.1.1, C-7) → **11,185,700 assertions, 0 failures**: PNG 3,017,096, JPEG
-  3,447,819, BMP 3,305,017, GIF 1,415,768, ~57 s. ⭐ Each harness runs in **heap
+  1.1.1, C-7) → **11,649,080 assertions, 0 failures**: PNG 3,344,316, JPEG
+  3,447,819, BMP 3,441,177, GIF 1,415,768, ~57 s. 1.1.4 added the last three
+  paths no harness reached — PNG's unknown-critical-chunk abort (`fuzz_png`
+  mode 9, a CRC-repaired chunk-type rewrite), `CHITRA_ERR_INFLATE_LIMIT`
+  (`fuzz_png` mode 10, IHDR geometry against real zlib payloads) and BMP's
+  exact RLE amplification cap (`fuzz_bmp` mode 9) — each proven reached by an
+  exit-on-entry probe. ⭐ Each harness runs in **heap
   epochs** — every 1,024 cases it sweeps the poison redzones, `alloc_reset()`s
   and drops its memoized fixtures — so peak RSS is JPEG **54 MB** (was 16.3 GB,
   against a 16 GB CI runner), GIF 207 MB (8.7 GB), PNG 6.5 MB, BMP 4.4 MB. Since
@@ -830,13 +850,13 @@ path in the library (no chroma planes, no upsample, no color convert).
 
 ## Quality gates
 
-All green at 1.1.0 on cyrius 6.7.9:
+All green at 1.1.4 on cyrius 6.7.12:
 
 | gate | command | result |
 |---|---|---|
 | link check | `make build` | OK, 347,912 bytes (36,616 with `CYRIUS_DCE=1`), no warnings |
 | tests | `make test` | 3,978/3,978, 0 failures, 14 suites |
-| fuzz | `make fuzz` (`--poison`) | 11,185,700/11,185,700, 0 failures, peak RSS ≤ 207 MB |
+| fuzz | `make fuzz` (`--poison`) | 11,649,080/11,649,080, 0 failures, ~57 s, peak RSS ≤ 207 MB |
 | bench | `make bench` / `make bench-build` | 17 benchmarks, fixtures self-verified, ~2 s; CI compiles the harness (`bench-build`, 1.1.1) but does not run it |
 | lint | `make lint` | 0 warnings and 0 untracked deferrals (`--strict-deferrals` on since 1.1.1); lint's own exit status is gated |
 | fmt | `make fmt-check` | clean |
@@ -845,6 +865,7 @@ All green at 1.1.0 on cyrius 6.7.9:
 | dist | `make dist` + `cyrius check --with-deps dist/chitra.cyr` | compiles clean; sidecar 1 leaf (`string`) |
 | lock | CI: `cyrius deps --locked`, then `git diff --exit-code cyrius.lock` | fails on a missing, stale, re-pointed or rewritten lock (1.1.1, C-28); `cyrius deps --verify` 26/26 locally |
 | oracle | out-of-tree, 53-file corpus | 52/52 decodable files byte-identical to 1.1.0 (and so to 1.0.3@6.6.2); `jpg_q5.jpg` now refuses as `JPEG_MODE`. Exact vs `djpeg -nosmooth` / ImageMagick except BMP 565/555 bit replication (ffmpeg exact) |
+| consumer shape | `make consumer-shape` (1.1.4) | every suite (14, 3,978 assertions) rebuilt with the stdlib `"sankoch"` leaf — the full 2.8.7 bundle of chitra's 6.7.12 pin — in place of the zlib profile; the shape kii / mabda / aethersafha link. Fails on a 6.7.9 pin (stdlib sankoch 2.8.3), at exactly the png-3 floor cells |
 | downstream | scratch kii + three consumer shapes against this tree | kii builds; its 5 suites (599 assertions) and 1 M-iteration decode + `alloc_reset()` fuzz pass. No-sankoch, stdlib-`sankoch` and own-`[deps.sankoch]` consumers each link exactly one sankoch bundle and decode correctly |
 | anchors | `./scripts/check-anchors.sh --suspect` | **96** anchors, 0 suspicious. Since 1.1.1 (C-36) it also flags a citation that lands on a comment-only line (COMMENT) or away from the backticked identifier it names (IDENT), and **exits 1** when anything is flagged; CHANGELOG.md is excluded alongside `docs/audit/`. ⚠ It still cannot know what an uncited line was meant to say — a citation to a real code line naming no identifier is only checked for landing on code |
 | surface | `./scripts/check-surface.sh` | 75 exports, 29 frozen; 37 `ChitraErrCode` members, each named and value-pinned (1.1.1, C-9); 146 top-level globals (1.1.2, cc-13) and 171 functions (1.1.3), every one chitra-prefixed. Run by CI since 1.0.3 (B-9) |

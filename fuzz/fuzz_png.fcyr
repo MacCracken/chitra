@@ -248,6 +248,7 @@ fn fuzz_png_selfcheck(): i64 {
         }
         k = k + 1;
     }
+    _png_selfcheck_114();
     return 0;
 }
 
@@ -794,6 +795,392 @@ fn fuzz_png_budget(seed): i64 {
     return 0;
 }
 
+# ---- 9. Chunk-type rewrite / insert (1.1.4) ----------------------------
+# § 5.4: bit 5 of a chunk type's first byte is the ANCILLARY bit. An unknown
+# critical chunk (bit clear) changes how the image is to be read, so chitra
+# must abort with CHITRA_ERR_UNSUPPORTED; an unknown ancillary one is skipped.
+# Through 1.1.3 no harness reached the abort at all: a random flip in a type
+# byte fails the chunk CRC first, and nothing repaired it. This mode rewrites a
+# chunk's TYPE (or inserts a whole new chunk) and repairs the CRC, alternating
+# critical and ancillary — the ancillary half is the control that keeps the
+# "unknown ancillary is skipped" side of § 5.4 exercised too.
+
+# The start offset (the length field) of each well-formed chunk, up to `max`.
+# Returns how many there are.
+fn _png_chunk_offsets(b, n, offs, max): i64 {
+    var pos = 8;
+    var cnt = 0;
+    var clen = 0;
+    var going = 1;
+    while (going == 1) {
+        if (pos + 12 > n) { going = 0; }
+        if (going == 1) {
+            clen = load8(b + pos) * 16777216 + load8(b + pos + 1) * 65536
+            + load8(b + pos + 2) * 256 + load8(b + pos + 3);
+            if (pos + 12 + clen > n) { going = 0; }
+        }
+        if (going == 1) {
+            if (cnt < max) { store64(offs + cnt * 8, pos); }
+            cnt = cnt + 1;
+            pos = pos + 12 + clen;
+        }
+    }
+    if (cnt > max) { cnt = max; }
+    return cnt;
+}
+
+fn _png_be32(p): i64 {
+    return load8(p) * 16777216 + load8(p + 1) * 65536 + load8(p + 2) * 256 + load8(p + 3);
+}
+
+# Four type bytes at dst. Half the time a fresh random name; otherwise the
+# chunk's own type `orig` with case bits flipped — "iDAT", "IDaT", "IENd": the
+# spoof that names a known chunk without being it. One case in eight takes a
+# non-letter byte as well. Then byte 0's bit 5 is FORCED: critical = 1 clears
+# it (§ 5.4), critical = 0 sets it.
+fn _h_rand_type(dst, orig, critical): i64 {
+    var t[8];
+    var i = 0;
+    var spoof = _fuzz_next() & 1;
+    while (i < 4) {
+        if (spoof == 1) {
+            store8(&t + i, load8(orig + i));
+            if ((_fuzz_next() & 3) == 0) { store8(&t + i, load8(&t + i) ^ 0x20); }
+        } else {
+            store8(&t + i, 65 + (_fuzz_next() % 26) + (_fuzz_next() & 0x20));
+        }
+        i = i + 1;
+    }
+    if ((_fuzz_next() & 7) == 0) { store8(&t + 1 + (_fuzz_next() % 3), _fuzz_next()); }
+    if (critical == 1) {
+        store8(&t, load8(&t) & 0xDF);
+    } else {
+        store8(&t, load8(&t) | 0x20);
+    }
+    i = 0;
+    while (i < 4) {
+        store8(dst + i, load8(&t + i));
+        i = i + 1;
+    }
+    return 0;
+}
+
+# A copy of b with a new chunk (type t0..t3, dlen random data bytes, CRC
+# repaired) inserted at offset `at`, which must be a chunk boundary.
+fn _png_insert_chunk(b, n, at, t0, t1, t2, t3, dlen, len_out): i64 {
+    var nb = alloc(n + 12 + dlen);
+    if (nb == 0) { return 0; }
+    var i = 0;
+    while (i < at) {
+        store8(nb + i, load8(b + i));
+        i = i + 1;
+    }
+    _put_be32(nb + at, dlen);
+    store8(nb + at + 4, t0);
+    store8(nb + at + 5, t1);
+    store8(nb + at + 6, t2);
+    store8(nb + at + 7, t3);
+    _fuzz_fill(nb + at + 8, dlen);
+    _repair_crc(nb, at + 4, dlen);
+    i = at;
+    while (i < n) {
+        store8(nb + i + 12 + dlen, load8(b + i));
+        i = i + 1;
+    }
+    store64(len_out, n + 12 + dlen);
+    return nb;
+}
+
+# `k` is the case number. It picks the fixture (all eleven), critical or
+# ancillary (alternating), and rewrite or insert. The chunk picked is never
+# IHDR — a non-IHDR first chunk is a different refusal (BAD_CHUNK), mode 3's.
+fn fuzz_png_chunktype(seed, k): i64 {
+    _fuzz_seed(seed);
+    var lo = 0;
+    var b = _png_fixture(k % PNG_FIXTURES, &lo);
+    var offs[128];
+    var cnt = _png_chunk_offsets(b, lo, &offs, 16);
+    if (cnt < 2) { return 0; }
+    var critical = (k / PNG_FIXTURES) & 1;
+    var at = load64(&offs + (1 + (_fuzz_next() % (cnt - 1))) * 8);
+    if (((k / (PNG_FIXTURES * 2)) & 1) == 0) {
+        _h_rand_type(b + at + 4, b + at + 4, critical);
+        _repair_crc(b, at + 4, _png_be32(b + at));
+        _png_contract(b, lo, "png chunk-type rewrite");
+        _router_contract(b, lo, "png chunk-type rewrite (router)");
+        return 0;
+    }
+    var t[8];
+    _h_rand_type(&t, b + at + 4, critical);
+    var nl = 0;
+    var nb = _png_insert_chunk(b, lo, at, load8(&t), load8(&t + 1), load8(&t + 2), load8(&t + 3),
+      _fuzz_next() % 17, &nl);
+    if (nb == 0) { return 0; }
+    _png_contract(nb, nl, "png chunk insert");
+    _router_contract(nb, nl, "png chunk insert (router)");
+    return 0;
+}
+
+# ---- 10. IHDR geometry across the size gates (1.1.4) -------------------
+# After the chunk walk, chitra decides three things from IHDR alone, in order:
+#   bomb    inflated / IDAT bytes > CHITRA_MAX_INFLATE_RATIO -> DIMENSIONS
+#   limit   inflated > sankoch's DECOMPRESS_MAX_OUTPUT (16 MiB)
+#           -> CHITRA_ERR_INFLATE_LIMIT (a VALID file this build cannot emit)
+#   else    allocate, inflate, and compare: a lying IHDR is a size MISMATCH.
+# Through 1.1.3 no harness reached `limit`: it needs > 16 MiB of declared
+# output AND an IDAT big enough (>= 15.3 KB) not to be a bomb first, and every
+# fixture was a few hundred bytes. This mode writes IHDR geometry against two
+# real zlib payloads — a 16.4 KB one (16 KiB of random bytes, incompressible)
+# and a ~40-byte one (16 KiB of zeros) — and aims h at the boundaries between
+# the three outcomes, so all three occur, from either side. The refusals are
+# made from the header, so the big geometries cost nothing; the mismatch side
+# is the only one that allocates, and only rarely at a large size.
+
+var _png_geo_big = 0;
+var _png_geo_big_len = 0;
+var _png_geo_small = 0;
+var _png_geo_small_len = 0;
+
+# zlib(16 KiB) — random bytes when big == 1, zeros otherwise. Built once per
+# heap epoch with the PRNG state saved, so it never perturbs a case's stream.
+fn _png_geo_payload(big, len_out): i64 {
+    var raw = 0;
+    var z = 0;
+    var zl = 0;
+    var saved = _fuzz_state;
+    if (big == 1) {
+        if (_png_geo_big == 0) {
+            raw = alloc(16384);
+            _fuzz_seed(424242);
+            _fuzz_fill(raw, 16384);
+            z = alloc(16384 * 2 + 128);
+            zl = zlib_compress(raw, 16384, z, 16384 * 2 + 128);
+            if (zl > 0) {
+                _png_geo_big = z;
+                _png_geo_big_len = zl;
+            }
+        }
+        _fuzz_state = saved;
+        store64(len_out, _png_geo_big_len);
+        return _png_geo_big;
+    }
+    if (_png_geo_small == 0) {
+        raw = alloc(16384);
+        z = alloc(16384 * 2 + 128);
+        zl = zlib_compress(raw, 16384, z, 16384 * 2 + 128);
+        if (zl > 0) {
+            _png_geo_small = z;
+            _png_geo_small_len = zl;
+        }
+    }
+    _fuzz_state = saved;
+    store64(len_out, _png_geo_small_len);
+    return _png_geo_small;
+}
+
+# The inflated size an IHDR implies: one filter byte per scanline, summed over
+# the seven Adam7 passes when interlaced. Computed from the § 8.2 table here,
+# independently of the decoder's own helper.
+fn _h_inflated(w, h, ct, depth, ilace): i64 {
+    if (ilace == 0) { return h * (1 + _h_row_bytes(w, ct, depth)); }
+    var total = 0;
+    var p = 0;
+    var pw = 0;
+    var ph = 0;
+    while (p < 7) {
+        pw = _h_a7_count(w, _h_a7(p, 0), _h_a7(p, 2));
+        ph = _h_a7_count(h, _h_a7(p, 1), _h_a7(p, 3));
+        if (pw > 0 && ph > 0) { total = total + ph * (1 + _h_row_bytes(pw, ct, depth)); }
+        p = p + 1;
+    }
+    return total;
+}
+
+# Smallest h in 1..65535 whose inflated size exceeds `target`, or 65536 if
+# none does (inflated size never decreases as h grows).
+fn _h_first_h_above(w, ct, depth, ilace, target): i64 {
+    var lo = 1;
+    var hi = 65536;
+    var mid = 0;
+    while (lo < hi) {
+        mid = (lo + hi) / 2;
+        if (_h_inflated(w, mid, ct, depth, ilace) > target) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    return lo;
+}
+
+# Signature + IHDR(w, h, depth, ct, ilace) + [PLTE, 256 entries, for ct 3] +
+# IDAT(payload) + IEND, every CRC correct.
+fn _png_geo_build(w, h, depth, ct, ilace, big, len_out): i64 {
+    store64(len_out, 0);
+    var pl = 0;
+    var payload = _png_geo_payload(big, &pl);
+    if (payload == 0) { return 0; }
+    var plte = 0;
+    if (ct == 3) { plte = 768; }
+    var total = 8 + 25 + 12 + pl + 12;
+    if (plte > 0) { total = total + 12 + plte; }
+    var b = alloc(total);
+    if (b == 0) { return 0; }
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    var ihdr[16];
+    _put_be32(&ihdr, w);
+    _put_be32(&ihdr + 4, h);
+    store8(&ihdr + 8, depth);
+    store8(&ihdr + 9, ct);
+    store8(&ihdr + 10, 0);
+    store8(&ihdr + 11, 0);
+    store8(&ihdr + 12, ilace);
+    var at = _h_chunk(b, 8, 73, 72, 68, 82, &ihdr, 13);
+    if (plte > 0) {
+        var pal = alloc(plte);
+        if (pal == 0) { return 0; }
+        at = _h_chunk(b, at, 80, 76, 84, 69, pal, plte);
+    }
+    at = _h_chunk(b, at, 73, 68, 65, 84, payload, pl);
+    at = _h_chunk(b, at, 73, 69, 78, 68, payload, 0);
+    store64(len_out, at);
+    return b;
+}
+
+# Every spec-legal (colour type, depth) cell, § 11.2.2 Table 11.1.
+fn _h_cell(c, f): i64 {
+    var ct = 0;
+    var d = 8;
+    if (c == 0) { d = 1; }
+    if (c == 1) { d = 2; }
+    if (c == 2) { d = 4; }
+    if (c == 4) { d = 16; }
+    if (c == 5) { ct = 2; }
+    if (c == 6) { ct = 2; d = 16; }
+    if (c == 7) { ct = 3; d = 1; }
+    if (c == 8) { ct = 3; d = 2; }
+    if (c == 9) { ct = 3; d = 4; }
+    if (c == 10) { ct = 3; }
+    if (c == 11) { ct = 4; }
+    if (c == 12) { ct = 4; d = 16; }
+    if (c == 13) { ct = 6; }
+    if (c == 14) { ct = 6; d = 16; }
+    if (f == 0) { return ct; }
+    return d;
+}
+
+# `k` is the case number: it picks the cell (15), interlace, and which boundary
+# to aim at. LIMIT is the window 16 MiB < inflated <= 1100 * IDAT bytes.
+fn fuzz_png_geometry(seed, k): i64 {
+    _fuzz_seed(seed);
+    var ct = _h_cell(k % 15, 0);
+    var depth = _h_cell(k % 15, 1);
+    var ilace = (k / 15) & 1;
+    var kind = (k / 30) % 8;
+    var big = 1;
+    if (kind >= 4) { big = 0; }
+    if (kind == 7) { big = 1; }
+    var pl = 0;
+    _png_geo_payload(big, &pl);
+    # Kinds 0-3 and 7 aim at the 16 MiB line, so w >= 2048: a row of >= 256
+    # bytes guarantees some h <= 65535 crosses it, and the window between it and
+    # the bomb line (~1.28 MB of inflated size) is wider than any row, so those
+    # kinds never fall into the allocating MISMATCH side by accident.
+    var w = 1 + (_fuzz_next() * 256 + _fuzz_next()) % 8192;
+    if (big == 1) { w = 2048 + (_fuzz_next() * 256 + _fuzz_next()) % 6144; }
+    var h = 1;
+    var lim = DECOMPRESS_MAX_OUTPUT;
+    var bomb = (CHITRA_MAX_INFLATE_RATIO + 1) * pl - 1;        # inflated / pl > ratio above this
+    var h_lim = _h_first_h_above(w, ct, depth, ilace, lim);     # first LIMIT h
+    var h_bomb = _h_first_h_above(w, ct, depth, ilace, bomb);   # first BOMB h
+    if (kind <= 2) {
+        # inside the LIMIT window (when it is not empty for this w)
+        h = h_lim;
+        if (h_bomb > h_lim) { h = h_lim + (_fuzz_next() * 256 + _fuzz_next()) % (h_bomb - h_lim); }
+    }
+    if (kind == 3) { h = h_bomb - (_fuzz_next() & 1); }        # LIMIT | BOMB edge
+    if (kind == 4) { h = h_bomb - 1 + (_fuzz_next() % 3); }    # small payload: MISMATCH | BOMB edge
+    if (kind == 5) { h = 1 + (_fuzz_next() % 64); }            # small, under-declared: MISMATCH
+    if (kind == 6) {                                            # anywhere — incl. the pixel caps
+        w = 1 + (_fuzz_next() * 256 + _fuzz_next());
+        h = 1 + (_fuzz_next() * 256 + _fuzz_next());
+    }
+    if (kind == 7) {
+        # The 16 MiB edge from BELOW is the one geometry here that allocates
+        # (up to 16 MiB, then inflates 16 KiB into it): one case in 960, so a
+        # heap epoch never holds more than two of them.
+        h = h_lim;
+        if ((k % 960) == 210) { h = h_lim - 1; }
+    }
+    if (h < 1) { h = 1; }
+    if (h > 65535) { h = 65535; }
+    var n = 0;
+    var b = _png_geo_build(w, h, depth, ct, ilace, big, &n);
+    if (b == 0) { return 0; }
+    _png_contract(b, n, "png IHDR geometry");
+    _router_contract(b, n, "png IHDR geometry (router)");
+    return 0;
+}
+
+# The self-check for modes 9 and 10: each path must be REACHED, with the code
+# that names it, or the mode would be fuzzing something else.
+fn _png_selfcheck_114(): i64 {
+    var lo = 0;
+    var b = fx_rgba8_2x2(&lo);
+    var nl = 0;
+    var err = 0;
+    # 9: an unknown CRITICAL chunk after IHDR aborts; the same name with the
+    # ancillary bit set is skipped and the file decodes.
+    var nb = _png_insert_chunk(b, lo, 33, 90, 90, 90, 90, 4, &nl);
+    assert(chitra_png_decode(nb, nl, &err) == 0, "selfcheck: unknown critical chunk aborts");
+    if (err != 0) {
+        assert(chitra_err_code(err) == CHITRA_ERR_UNSUPPORTED, "selfcheck: ... as UNSUPPORTED");
+    }
+    nb = _png_insert_chunk(b, lo, 33, 122, 90, 90, 90, 4, &nl);
+    err = 0;
+    assert(chitra_png_decode(nb, nl, &err) != 0, "selfcheck: unknown ancillary chunk is skipped");
+    # 10: 4096 x 4096 gray8 declares 16,781,312 inflated bytes — 4,096 over
+    # 16 MiB. Against the 16 KB payload that is ~1023:1, under the ratio cap:
+    # INFLATE_LIMIT. Against the ~40-byte payload it is a bomb: DIMENSIONS.
+    var pl = 0;
+    _png_geo_payload(1, &pl);
+    assert(_h_inflated(4096, 4096, 0, 8, 0) > DECOMPRESS_MAX_OUTPUT, "selfcheck: geometry is over 16 MiB");
+    assert(_h_inflated(4096, 4096, 0, 8, 0) / pl <= CHITRA_MAX_INFLATE_RATIO, "selfcheck: ...not a bomb");
+    var n = 0;
+    var g = _png_geo_build(4096, 4096, 8, 0, 0, 1, &n);
+    err = 0;
+    assert(chitra_png_decode(g, n, &err) == 0, "selfcheck: over-16-MiB PNG is refused");
+    if (err != 0) {
+        assert(chitra_err_code(err) == CHITRA_ERR_INFLATE_LIMIT, "selfcheck: ... as INFLATE_LIMIT");
+    }
+    g = _png_geo_build(4096, 4096, 8, 0, 0, 0, &n);
+    err = 0;
+    assert(chitra_png_decode(g, n, &err) == 0, "selfcheck: the same geometry on a tiny IDAT");
+    if (err != 0) {
+        assert(chitra_err_code(err) == CHITRA_ERR_DIMENSIONS, "selfcheck: ... is a bomb (DIMENSIONS)");
+    }
+    # ...and an IHDR that under-declares the stream reaches the inflate and
+    # fails the size comparison (16 KiB inflate vs 129 x 128 = 16,512 declared).
+    g = _png_geo_build(127, 129, 8, 0, 0, 1, &n);
+    err = 0;
+    assert(chitra_png_decode(g, n, &err) == 0, "selfcheck: a lying IHDR is refused");
+    if (err != 0) {
+        assert(chitra_err_code(err) == CHITRA_ERR_INFLATE, "selfcheck: ... at the inflate (size mismatch)");
+    }
+    # The zeros payload at a matching geometry (128 rows of 1 + 127) decodes.
+    g = _png_geo_build(127, 128, 8, 0, 0, 0, &n);
+    err = 0;
+    assert(chitra_png_decode(g, n, &err) != 0, "selfcheck: a truthful IHDR on the zeros payload decodes");
+    return 0;
+}
+
 # ---- 5. Degenerate lengths -------------------------------------------
 # A caller handing over a zero or negative length must be rejected, not
 # trusted into a read.
@@ -846,6 +1233,10 @@ fn _fuzz_reclaim(): i64 {
         store64(&_png_fx_len + k * 8, 0);
         k = k + 1;
     }
+    _png_geo_big = 0;
+    _png_geo_big_len = 0;
+    _png_geo_small = 0;
+    _png_geo_small_len = 0;
     return 0;
 }
 
@@ -864,7 +1255,7 @@ fn main(): i64 {
 
     fuzz_png_selfcheck();
     _fuzz_reclaim();
-    println("fuzz_png: harness self-check passed (11 fixtures decode, IDAT reachable, CRC repair correct)");
+    println("fuzz_png: harness self-check passed (11 fixtures, CRC repair, § 5.4 abort, INFLATE_LIMIT)");
 
     # 1. random bytes across a spread of lengths
     seed = 1;
@@ -932,6 +1323,27 @@ fn main(): i64 {
     }
     _fuzz_reclaim();
     println("fuzz_png: 30000 decode_budget cases survived");
+
+    # 9. chunk TYPES rewritten / inserted behind a repaired CRC, critical and
+    #    ancillary alternating — the § 5.4 abort and its skip-it control
+    seed = 1;
+    while (seed <= 44000) {
+        fuzz_png_chunktype(seed * 2246822519, seed);
+        _fuzz_epoch(seed);
+        seed = seed + 1;
+    }
+    _fuzz_reclaim();
+    println("fuzz_png: 44000 chunk-type rewrite/insert cases survived (critical + ancillary)");
+
+    # 10. IHDR geometry aimed at the bomb / INFLATE_LIMIT / mismatch boundaries
+    seed = 1;
+    while (seed <= 19200) {
+        fuzz_png_geometry(seed * 40503, seed);
+        _fuzz_epoch(seed);
+        seed = seed + 1;
+    }
+    _fuzz_reclaim();
+    println("fuzz_png: 19200 IHDR-geometry cases survived (bomb / limit / mismatch)");
 
     # 5. degenerate lengths
     fuzz_png_degenerate();

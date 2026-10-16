@@ -178,6 +178,16 @@ jobs:
           # so new domain files are picked up automatically.
           for f in tests/tcyr/*.tcyr; do cyrius test "$f" || exit 1; done
 
+      - name: Consumer shape (stdlib sankoch leaf)
+        # 1.1.4: three of chitra's five consumers link the stdlib "sankoch" leaf —
+        # the FULL bundle from their toolchain — not chitra's [deps.sankoch] zlib
+        # profile, and closest-wins makes theirs the one that runs. This rebuilds
+        # a temp copy in that shape on chitra's OWN pin and runs every suite. It
+        # fails if the pinned toolchain's stdlib sankoch is below the 2.8.6 floor
+        # the consumer docs promise: png.tcyr's png-3 cells feed streams only
+        # >= 2.8.6 refuses. Proven: on a 6.7.9 pin (stdlib sankoch 2.8.3) it fails.
+        run: make consumer-shape
+
       - name: Fuzz (adversarial input harnesses)
         # CLAUDE.md names `make test-all` (version-check + dist + test + fuzz)
         # as the pre-release gate, but through 0.7.2 no workflow ran `make

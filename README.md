@@ -1,6 +1,6 @@
 # chitra
 
-Version: 1.1.3
+Version: 1.1.4
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder, a sibling AGNOS package in the mould of `sakshi` /

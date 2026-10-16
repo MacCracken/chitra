@@ -59,7 +59,8 @@ make bench-build                                     # compile the bench harness
 make dist                                            # regenerate dist/chitra.cyr via `cyrius distlib`
 make lint fmt-check vet                              # quality gates (lint also runs scripts/check-surface.sh)
 make version-check                                   # VERSION / cyrius.cyml / CHANGELOG / README / chitra_version() / state.md's chitra_version claims agree
-make test-all                                        # version-check + dist regen + tests + fuzz + bench-build (the pre-release gate)
+make consumer-shape                                  # every suite with the stdlib "sankoch" leaf in place of chitra's zlib profile — how kii / mabda / aethersafha link it (CI + test-all)
+make test-all                                        # version-check + dist regen + tests + consumer-shape + fuzz + bench-build (the pre-release gate)
 make bench-record                                    # bench + append to bench-history.csv
 make count-assertions                                # NUL-safe assertion total across suites
 ```
@@ -243,7 +244,7 @@ File findings in `docs/audit/YYYY-MM-DD-audit.md`. Severity: CRITICAL / HIGH / M
 ## CI / Release
 
 - **Toolchain pin**: `cyrius = "X.Y.Z"` in `cyrius.cyml [package]`. CI and release both read it; no hardcoded version strings in YAML.
-- **Workflows**: `.github/workflows/ci.yml` (locked deps + lint + fmt + vet + dist-sync + `check-surface.sh` + build + `make bench-build` + test + `make fuzz` + version-check) and `.github/workflows/release.yml` (version gate → CI gate → dist + artifacts).
+- **Workflows**: `.github/workflows/ci.yml` (locked deps + lint + fmt + vet + dist-sync + `check-surface.sh` + build + `make bench-build` + test + `make consumer-shape` + `make fuzz` + version-check) and `.github/workflows/release.yml` (version gate → CI gate → dist + artifacts).
 - **Lock gate (1.1.1)**: CI requires `cyrius.lock` to be committed, runs `cyrius deps --locked` (resolves the tags against the COMMITTED lock and writes nothing), then resolves `lib/` and fails if that rewrote `cyrius.lock` — commit the lock the tags resolve to. A plain `cyrius deps` rewrites the lock to whatever it resolves, so before this a stale hash, a re-pointed sankoch tag or a deleted lock all went green.
 - **Tag filter**: release triggers on semver-only tags. Non-numeric tags do not ship.
 - **Version-verify gate**: release asserts `VERSION == cyrius.cyml version == git tag` before building.
