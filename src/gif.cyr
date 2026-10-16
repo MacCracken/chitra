@@ -89,7 +89,7 @@ var _CHITRA_GIF_EXT_PLAINTEXT   = 0x01;
 # This project diverges from ImageMagick where the spec is prohibitive and the
 # consequence is a wrong image (PNG § 5.6 in 0.7.1); that is not this case.
 
-fn _gif_u16_le(p): i64 {
+fn _chitra_gif_u16_le(p): i64 {
     return load8(p) | (load8(p + 1) << 8);
 }
 
@@ -132,7 +132,7 @@ fn chitra_gif_check_signature(src, len): i64 {
 # fuzzing sees exactly that overwrite. It is the deliberate second bound, the
 # same posture as the LZW chain walk's.
 # ================================================================
-fn _gif_walk_blocks(src, len, pos, out, out_cap, written_out): i64 {
+fn _chitra_gif_walk_blocks(src, len, pos, out, out_cap, written_out): i64 {
     var written = 0;
     var p = pos;
     var n = 0;
@@ -172,14 +172,14 @@ fn _gif_walk_blocks(src, len, pos, out, out_cap, written_out): i64 {
 
 # GIF interlace: four passes over ROWS only (unlike PNG's Adam7, which
 # subsamples both axes). Pass starts 0/4/2/1 with steps 8/8/4/2.
-fn _gif_pass_start(p): i64 {
+fn _chitra_gif_pass_start(p): i64 {
     if (p == 0) { return 0; }
     if (p == 1) { return 4; }
     if (p == 2) { return 2; }
     return 1;
 }
 
-fn _gif_pass_step(p): i64 {
+fn _chitra_gif_pass_step(p): i64 {
     if (p == 0) { return 8; }
     if (p == 1) { return 8; }
     if (p == 2) { return 4; }
@@ -204,8 +204,8 @@ fn chitra_gif_decode(src, len, err_out): i64 {
         return 0;
     }
 
-    var screen_w = _gif_u16_le(src + 6);
-    var screen_h = _gif_u16_le(src + 8);
+    var screen_w = _chitra_gif_u16_le(src + 6);
+    var screen_h = _chitra_gif_u16_le(src + 8);
     var packed = load8(src + 10);
 
     if (screen_w <= 0 || screen_h <= 0) {
@@ -293,7 +293,7 @@ fn chitra_gif_decode(src, len, err_out): i64 {
                             }
                         }
                         if (walking == 1) {
-                            next = _gif_walk_blocks(src, len, pos + 2, 0, 0, 0);
+                            next = _chitra_gif_walk_blocks(src, len, pos + 2, 0, 0, 0);
                             if (next < 0) { rcode = CHITRA_ERR_TRUNCATED; walking = 0; }
                             if (walking == 1) { pos = next; }
                         }
@@ -319,10 +319,10 @@ fn chitra_gif_decode(src, len, err_out): i64 {
         store64(err_out, chitra_err(CHITRA_ERR_TRUNCATED));
         return 0;
     }
-    var fx = _gif_u16_le(src + pos + 1);
-    var fy = _gif_u16_le(src + pos + 3);
-    var fw = _gif_u16_le(src + pos + 5);
-    var fh = _gif_u16_le(src + pos + 7);
+    var fx = _chitra_gif_u16_le(src + pos + 1);
+    var fy = _chitra_gif_u16_le(src + pos + 3);
+    var fw = _chitra_gif_u16_le(src + pos + 5);
+    var fh = _chitra_gif_u16_le(src + pos + 7);
     var ipacked = load8(src + pos + 9);
     pos = pos + 10;
 
@@ -385,7 +385,7 @@ fn chitra_gif_decode(src, len, err_out): i64 {
     var comp = alloc(len);
     if (comp == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
     var comp_len = 0;
-    next = _gif_walk_blocks(src, len, pos, comp, len, &comp_len);
+    next = _chitra_gif_walk_blocks(src, len, pos, comp, len, &comp_len);
     if (next < 0) {
         store64(err_out, chitra_err(CHITRA_ERR_TRUNCATED));
         return 0;
@@ -428,7 +428,7 @@ fn chitra_gif_decode(src, len, err_out): i64 {
     var npix = fw * fh;
     var idx = alloc(npix);
     if (idx == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
-    var got = _gif_lzw_decode(comp, comp_len, min_code_size, idx, npix, err_out);
+    var got = _chitra_gif_lzw_decode(comp, comp_len, min_code_size, idx, npix, err_out);
     if (got < 0) { return 0; }
     # A stream that ends early is well-formed (see gif_lzw.cyr); the tail stays
     # at whatever the allocator gave us, so zero it rather than emit whatever
@@ -442,7 +442,7 @@ fn chitra_gif_decode(src, len, err_out): i64 {
     # at full alpha — which is what a stream whose codes run out, or whose End
     # code arrives, before the frame is full produces. NOT a file cut inside
     # its sub-block chain, as this said through 1.1.0 (gif-trunc-doc, 1.1.1):
-    # that one never gets here, `_gif_walk_blocks` runs off the input and the
+    # that one never gets here, `_chitra_gif_walk_blocks` runs off the input and the
     # file is refused CHITRA_ERR_TRUNCATED above.
     var frame_complete = 1;
     if (got < npix) { frame_complete = 0; }
@@ -509,7 +509,7 @@ fn chitra_gif_decode(src, len, err_out): i64 {
         src_row = 0;
         pass = 0;
         while (pass < 4) {
-            dst_y = _gif_pass_start(pass);
+            dst_y = _chitra_gif_pass_start(pass);
             while (dst_y < fh) {
                 col = 0;
                 while (col < fw) {
@@ -523,7 +523,7 @@ fn chitra_gif_decode(src, len, err_out): i64 {
                     col = col + 1;
                 }
                 src_row = src_row + 1;
-                dst_y = dst_y + _gif_pass_step(pass);
+                dst_y = dst_y + _chitra_gif_pass_step(pass);
             }
             pass = pass + 1;
         }

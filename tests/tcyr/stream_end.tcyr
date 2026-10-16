@@ -2108,16 +2108,16 @@ fn test_jpeg_truncated_with_real_eoi_reports_not_closed() {
 # `seen_iend` has to say so.
 #
 # ⛔ THE FIXTURE HAS NO DRI, so an RSTn in its entropy data is a marker the
-# decoder never asked for. `_jpeg_entropy_span` deliberately walks PAST RSTn
+# decoder never asked for. `_chitra_jpeg_entropy_span` deliberately walks PAST RSTn
 # (they are legal mid-scan when DRI is in force), so the injected bytes stay
-# INSIDE the reader's span; `_jpeg_br_load_byte` latches the marker and every
+# INSIDE the reader's span; `_chitra_jpeg_br_load_byte` latches the marker and every
 # subsequent bit is invented. Through 1.0.2 that latch did not set _CHITRA_BR_EOD, so
 # an image whose bottom is fabricated reported a cleanly closed stream —
 # `seen_iend` is the consumer's ONLY channel here, because chitra deliberately
 # does not raise an error for a partial JPEG.
 #
 # ⚠ MUTATION-CHECKED. Against the pre-repair `if (cnt == 0) { return 0; }` in
-# `_jpeg_br_bit`, seen_iend comes back **1** and both assertions below fail.
+# `_chitra_jpeg_br_bit`, seen_iend comes back **1** and both assertions below fail.
 # ⚠ The companion direction is `test_jpeg_restart_markers_still_report_closed`
 # below: setting _CHITRA_BR_EOD at the LATCH instead of at the fabrication would make
 # every legitimate restart-interval JPEG report 0, and that test would catch it.
@@ -2175,7 +2175,7 @@ fn test_jpeg_unexpected_rstn_reports_not_closed() {
 
 fn test_jpeg_restart_markers_still_report_closed() {
     # ⛔ THE GUARD ON THE GUARD. A well-formed restart-interval JPEG latches
-    # RSTn markers too — `_jpeg_br_restart` then consumes each one and clears
+    # RSTn markers too — `_chitra_jpeg_br_restart` then consumes each one and clears
     # _CHITRA_BR_MARKER, and nothing is ever fabricated. If B-5's flag were set at the
     # latch rather than at the fabrication, every such file would wrongly
     # report an unclosed stream. The complete no-DRI fixture covers the same
@@ -2197,7 +2197,7 @@ fn test_jpeg_restart_markers_still_report_closed() {
 # jpeg-5 / jpeg-6 (1.1.1) — restart intervals and `seen_iend`.
 #
 # jpeg-5: a restart-interval JPEG cut inside its entropy data reached the next
-# restart boundary with the span exhausted, `_jpeg_br_restart` returned -1, and
+# restart boundary with the span exhausted, `_chitra_jpeg_br_restart` returned -1, and
 # the file was refused as CHITRA_ERR_JPEG_ENTROPY ("corrupt entropy stream") —
 # while the SAME cut without DRI decodes with seen_iend = 0 under the 0.7.0
 # policy, and djpeg decodes both ("Premature end of JPEG file"). On this fixture

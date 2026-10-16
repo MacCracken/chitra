@@ -1,6 +1,6 @@
 # chitra — Roadmap
 
-> **Last Updated**: 2026-10-15 (1.1.2)
+> **Last Updated**: 2026-10-15 (1.1.3)
 >
 > **Forward only.** What ships next, in what order, against what gates. What
 > already shipped is in [`../../CHANGELOG.md`](../../CHANGELOG.md), one entry
@@ -31,17 +31,10 @@ the ones below name only what is specific to them.
 
 Patch-sized, independent, any order. The 1.1.1 P(-1) sweep
 ([audit](../audit/2026-10-15-audit.md)) closed the lock gate, the lint
-deferrals and the anchor checker that used to be listed here.
+deferrals and the anchor checker that used to be listed here; 1.1.2 and 1.1.3
+closed the bundle namespace (every global and function chitra-prefixed, and
+gated).
 
-- **Prefix the 84 unprefixed internal functions.** 1.1.2 closed cc-13 for
-  globals; functions have the same exposure. `_jpeg_*`, `_bmp_*`, `_cur_*`,
-  `_gif_*`, `_chunk_*`, `_adam7_*` and `_png_*` helpers are all in the bundle with
-  no chitra prefix, and a consumer function of the same name **replaces**
-  chitra's — measured at 1.1.2, a consumer `_jpeg_descale` made a JPEG decode to
-  different pixels with only a "duplicate fn … last definition wins" warning.
-  Rename them `_chitra_*`, extend `check-surface.sh`'s prefix gate to `^fn`, and
-  extend `tests/tcyr/namespace.tcyr` with consumer functions of the old names.
-  None is frozen. One patch, nothing else in it.
 - **A CI consumer-shape leg for the sankoch floor.** chitra's own build links
   sankoch 2.8.7, but a consumer's bundle wins, and below 2.8.6 PNG inflate
   accepts streams zlib refuses (audit C-26). A job that builds `png.tcyr` in the

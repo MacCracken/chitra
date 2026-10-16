@@ -24,7 +24,7 @@
 # parse succeeds and hostile bits reach the bit-reader / DECODE directly.
 #
 # FIXTURES (1.1.1, gate-3). Mode 5 said it drove "restart resync" and none of
-# its fixtures carried a DRI, so _jpeg_br_restart never ran under fuzzing; no
+# its fixtures carried a DRI, so _chitra_jpeg_br_restart never ran under fuzzing; no
 # fixture was RGB either, so the APP14-transform-0 output path never ran. Two
 # real cjpeg files now join the rotation — fx_jpeg_dri (`cjpeg -restart 1B`,
 # 32x32 4:2:0, three RSTn) and fx_jpeg_rgb (`cjpeg -rgb`, Adobe transform 0, no
@@ -93,7 +93,7 @@ fn _fx_copy(src, n): i64 {
 # `cjpeg -restart 1B -optimize -quality 75` of a 32x32 plasma: JFIF, 4:2:0, a
 # restart interval of ONE MCU (DRI at 303), so the four MCUs are separated by
 # RST0..RST2 (at 377, 431, 479). The only fixture here that reaches
-# _jpeg_br_restart.
+# _chitra_jpeg_br_restart.
 var _fx_jpeg_dri_cache = 0;
 
 fn fx_jpeg_dri(len_out): i64 {
@@ -1879,7 +1879,7 @@ fn fx_jpeg_multiscan(len_out): i64 {
 # ---- 9. Multi-scan structure mutation (0.8.0) -------------------------
 # Mutates the bytes AROUND the scans — the SOS headers, the inter-scan DHT/DRI
 # segments, the component selectors — rather than the entropy data, because the
-# new code is the WALK, not the decoder. Drives _jpeg_resume_to_next_scan, the
+# new code is the WALK, not the decoder. Drives _chitra_jpeg_resume_to_next_scan, the
 # coverage bitmask, per-scan table re-resolution, and the per-scan geometry.
 fn fuzz_jpeg_multiscan(seed, nmut): i64 {
     var lo = 0;
@@ -1903,7 +1903,7 @@ fn fuzz_jpeg_multiscan(seed, nmut): i64 {
 
 # ---- 10. decode_budget (1.1.1, cc-11) ---------------------------------
 # chitra_image_decode_budget is frozen, and for JPEG it reads the attacker's
-# bytes with a SECOND segment walker (_jpeg_declared_dims) before the real one
+# bytes with a SECOND segment walker (_chitra_jpeg_declared_dims) before the real one
 # runs. No harness called it through 1.1.0. If the two walkers ever disagree on
 # which SOF0 counts, the budget is either void (the walker returns 0 and the
 # decode proceeds unbudgeted) or wrong. Its one promise is that no image it

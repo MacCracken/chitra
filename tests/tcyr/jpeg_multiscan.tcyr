@@ -9477,7 +9477,7 @@ fn _ms_scan_end(src, lo, sos): i64 {
     var ls = (load8(src + sos + 2) << 8) | load8(src + sos + 3);
     var start = sos + 2 + ls;
     var mk = 0;
-    return start + _jpeg_entropy_span(src, lo, start, &mk);
+    return start + _chitra_jpeg_entropy_span(src, lo, start, &mk);
 }
 
 # fx_ms_seq_420 with its JFIF APP0 removed: no JFIF, no Adobe marker, component
@@ -9596,7 +9596,7 @@ fn _ms_same_as(b, lo, ref, ctype, name): i64 {
 #   APP14 transform 2 between scans -> refused CHITRA_ERR_UNSUPPORTED.
 #
 # ⚠ MUTATION-CHECKED: restoring the act 8 / act 9 parses in
-# _jpeg_resume_to_next_scan fails all three cells.
+# _chitra_jpeg_resume_to_next_scan fails all three cells.
 # ================================================================
 fn test_ms_app14_between_scans_does_not_redecide_colour() {
     var lo = 0;
@@ -9654,7 +9654,7 @@ fn test_ms_jfif_between_scans_does_not_redecide_colour() {
 # file". Refusing them is unchanged and deliberate (the missing components would
 # be invented); only the reason was wrong. An EOI that arrives with a component
 # still missing keeps JPEG_SOS — test_ms_component_never_decoded_rejected.
-# ⚠ MUTATION-CHECKED: restoring the clean stop on `_cur_can_read(&cur, 2) == 0`
+# ⚠ MUTATION-CHECKED: restoring the clean stop on `_chitra_cur_can_read(&cur, 2) == 0`
 # makes the first three cells read 17; restoring `m = 0` alone on a fill run
 # that reaches the end makes the fourth read 13.
 # ================================================================

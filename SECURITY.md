@@ -253,8 +253,8 @@ conformance, resource and defence-in-depth rather than exploit fixes:
   What replaced the gate as the bound is the **per-component coverage
   bitmask** — a component may be decoded exactly once, so a file gets at most
   `Nf` scans and every scan must name something new (refused in
-  `_jpeg_parse_sos`, [`src/jpeg.cyr:180`](src/jpeg.cyr), set at `:186`; the
-  driver `_jpeg_decode_scans` at `:963` reads the mask at `:1055`). That is what makes the scan walk
+  `_chitra_jpeg_parse_sos`, [`src/jpeg.cyr:180`](src/jpeg.cyr), set at `:186`; the
+  driver `_chitra_jpeg_decode_scans` at `:963` reads the mask at `:1055`). That is what makes the scan walk
   terminate; no scan counter and no resume tripwire were added, because neither
   could fire before coverage does. **Within** one scan the components must
   follow frame order (T.81 § B.2.3, refused at `:170` since 1.1.1 — libjpeg
@@ -278,7 +278,7 @@ conformance, resource and defence-in-depth rather than exploit fixes:
   APP1 bought a 16,658-byte three-scan file back the full **50,354,832 bytes**
   1.0.3 had retired, and 12,300 bytes before the frame or after EOI did the same
   for a single scan. The sum is byte-structural, so an allocation-free pre-pass
-  (`_jpeg_structural_espan`) now computes it from the scan headers and the
+  (`_chitra_jpeg_structural_espan`) now computes it from the scan headers and the
   segment lengths alone and GATE 2 refuses **before any plane exists**
   ([`src/jpeg.cyr:1010-1016`](src/jpeg.cyr)); the post-decode GATE 2 stays as
   the exact backstop. Padding no longer buys the planes back: each of those
@@ -332,7 +332,7 @@ conformance, resource and defence-in-depth rather than exploit fixes:
   libjpeg writes, since `cjpeg -sample 4x4,1x1,1x1 -scans` is legal, sums to
   18, and every scan in it is non-interleaved. That position is still ahead of
   every allocation, because planes are allocated per scan by
-  `_jpeg_decode_one_scan` after the scan header parses. Its reachability was proven in **both** directions before release: with
+  `_chitra_jpeg_decode_one_scan` after the scan header parses. Its reachability was proven in **both** directions before release: with
   the condition removed a legal one-component file rejects again, and with the
   cap itself removed a three-component file declaring ΣHj·Vj = 24 decodes to
   garbage. A conditioned cap that quietly became dead code is exactly the 0.5.3

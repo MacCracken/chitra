@@ -154,7 +154,7 @@ send a decode change:
 > transparent; every in-rect pixel matches).
 > For JPEG the primary oracle is **`djpeg -nosmooth`**. chitra matches it
 > exactly on most files and can differ by at most **1 LSB per IDCT output** on
-> any file, because `_jpeg_descale` rounds half away from zero where libjpeg's
+> any file, because `_chitra_jpeg_descale` rounds half away from zero where libjpeg's
 > arithmetic-shift DESCALE rounds half up — inside IEEE 1180 tolerance, not a
 > decode bug. ImageMagick is a valid second oracle only for grayscale and
 > 4:4:4, because it upsamples chroma with a fancy (triangle) filter where

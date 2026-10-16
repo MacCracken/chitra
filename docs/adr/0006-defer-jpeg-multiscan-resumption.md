@@ -95,13 +95,13 @@ same code. A naive relaxation is strictly worse than the rejection it replaces.
 What a correct implementation actually needs, all of it new:
 
 1. **A resumable marker walk.** `chitra_jpeg_scan_markers` stops at the first
-   SOS. Resumption would derive its restart offset from `_jpeg_br_pos`, which
+   SOS. Resumption would derive its restart offset from `_chitra_jpeg_br_pos`, which
    is a position inside *decoded content* rather than a bounds-checked header
    field — the first time in chitra's history a parser cursor is steered by
    what the entropy decoder consumed. The reader's position is unreliable in
    several states, at least three of them attacker-reachable: a planted `FF DA`
    inside entropy data latches `_CHITRA_BR_MARKER` and freezes `_CHITRA_BR_POS` there
-   (`_jpeg_br_load_byte`, [jpeg_huffman.cyr:297](../../src/jpeg_huffman.cyr)).
+   (`_chitra_jpeg_br_load_byte`, [jpeg_huffman.cyr:297](../../src/jpeg_huffman.cyr)).
 2. **Tables redefined between scans.** Real `cjpeg -scans` output declares DHT
    segments *between* scans, and its third scan carries none of its own,
    reusing the second scan's tables. So a collect-the-offsets-then-decode
@@ -163,12 +163,12 @@ from the frame, but DRI is a table-specification marker legal in the misc
 segment before **any** scan (§ B.2.4.4), so it can change per scan. The ADR
 covers DHT between scans and stops there.
 
-**4. EOI is rejected.** `_jpeg_marker_action` returns `CHITRA_ERR_JPEG_MARKER`
+**4. EOI is rejected.** `_chitra_jpeg_marker_action` returns `CHITRA_ERR_JPEG_MARKER`
 for `0xD9` unconditionally, because through 0.7.3 reaching EOI during the
 header walk meant "no scan present". A resumed walk that reuses
 `chitra_jpeg_scan_markers` would therefore reject the file's own end marker.
 
-**5. The scan component list has nowhere to live.** `_jpeg_parse_sos` builds
+**5. The scan component list has nowhere to live.** `_chitra_jpeg_parse_sos` builds
 its selector list locally and discards it; the frame has no scan-component
 field; and the MCU loop iterates over **frame** components, though for a
 partially-interleaved scan the MCU is composed in **scan** order. The ADR
@@ -176,7 +176,7 @@ declines to grow `CHITRA_JPEG_FRAME_SIZE` on the grounds that only a coverage
 bitmask and a resume position are needed — that is 2 of the 3 free slots,
 leaving one for what is really a four-entry ordered list. **Grow the record.**
 
-**6. Td/Ta are frame-persistent.** `_jpeg_parse_sos` writes them into the frame
+**6. Td/Ta are frame-persistent.** `_chitra_jpeg_parse_sos` writes them into the frame
 and nothing clears them, so a component not present in scan 2 retains scan 1's
 selectors. Harmless *with* coverage tracking; a silent wrong-table decode
 without it.
@@ -199,7 +199,7 @@ Both were asserted confidently during design and both were tested.
   four-entry buffer. One slot from out of bounds, which is why 0.6.0 keeps
   `ns > ncomp` as a **direct** bound on that index (see below) — but not a live
   overflow, and it must not be sold as one.
-- **"`_jpeg_br_restart` needs its RSTn sequence counter reset per scan."**
+- **"`_chitra_jpeg_br_restart` needs its RSTn sequence counter reset per scan."**
   There is no such counter — it accepts any of `D0..D7`. Writing that
   invariant into a doc would have a future hardening pass believe a reset
   already exists for an index it is only then starting to validate.

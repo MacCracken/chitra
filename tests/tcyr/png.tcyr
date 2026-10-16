@@ -21,19 +21,19 @@ fn test_cursor_bounds() {
     store8(&buf + 3, 0x56);
     store8(&buf + 4, 0x78);
     var cur[24];
-    _cur_init(&cur, &buf, 5);
-    assert_eq(_cur_remaining(&cur), 5, "remaining=5 at start");
-    assert_eq(_cur_can_read(&cur, 5), 1, "can read 5");
-    assert_eq(_cur_can_read(&cur, 6), 0, "cannot read 6 (OOB)");
-    assert_eq(_cur_can_read(&cur, 0 - 1), 0, "negative n rejected");
-    assert_eq(_cur_u8(&cur), 0xAB, "u8 read 0");
-    assert_eq(_cur_pos(&cur), 1, "pos advanced to 1");
+    _chitra_cur_init(&cur, &buf, 5);
+    assert_eq(_chitra_cur_remaining(&cur), 5, "remaining=5 at start");
+    assert_eq(_chitra_cur_can_read(&cur, 5), 1, "can read 5");
+    assert_eq(_chitra_cur_can_read(&cur, 6), 0, "cannot read 6 (OOB)");
+    assert_eq(_chitra_cur_can_read(&cur, 0 - 1), 0, "negative n rejected");
+    assert_eq(_chitra_cur_u8(&cur), 0xAB, "u8 read 0");
+    assert_eq(_chitra_cur_pos(&cur), 1, "pos advanced to 1");
     # big-endian u32 over bytes 1..4 = 0x12345678.
-    assert_eq(_cur_u32_be(&cur), 305419896, "u32_be = 0x12345678");
-    assert_eq(_cur_pos(&cur), 5, "pos advanced to 5");
-    assert_eq(_cur_remaining(&cur), 0, "remaining=0 at end");
+    assert_eq(_chitra_cur_u32_be(&cur), 305419896, "u32_be = 0x12345678");
+    assert_eq(_chitra_cur_pos(&cur), 5, "pos advanced to 5");
+    assert_eq(_chitra_cur_remaining(&cur), 0, "remaining=0 at end");
     # Reading past end returns 0 defensively, never an OOB load.
-    assert_eq(_cur_u8(&cur), 0, "u8 past end = 0 (no OOB)");
+    assert_eq(_chitra_cur_u8(&cur), 0, "u8 past end = 0 (no OOB)");
     return 0;
 }
 

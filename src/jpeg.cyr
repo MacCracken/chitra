@@ -21,7 +21,7 @@
 #   R = Y                         + 1.40200*(Cr-128)
 #   G = Y - 0.34414*(Cb-128)      - 0.71414*(Cr-128)
 #   B = Y + 1.77200*(Cb-128)
-# Descale uses the IDCT's signed round-to-nearest _jpeg_descale (Cyrius `>>` is
+# Descale uses the IDCT's signed round-to-nearest _chitra_jpeg_descale (Cyrius `>>` is
 # logical). Source: libjpeg jdcolor.c; ITU-R BT.601. See docs/sources.md.
 # ================================================================
 var _CHITRA_JCC_CR_R = 91881;    # FIX(1.40200)
@@ -29,22 +29,22 @@ var _CHITRA_JCC_CB_B = 116130;   # FIX(1.77200)
 var _CHITRA_JCC_CB_G = 22554;    # FIX(0.34414)
 var _CHITRA_JCC_CR_G = 46802;    # FIX(0.71414)
 
-fn _jpeg_clamp8(v): i64 {
+fn _chitra_jpeg_clamp8(v): i64 {
     if (v < 0) { return 0; }
     if (v > 255) { return 255; }
     return v;
 }
 
 # Convert one YCbCr triple to RGB, writing 3 bytes (R, G, B) at dst.
-fn _jpeg_ycc_to_rgb(y, cb, cr, dst): i64 {
+fn _chitra_jpeg_ycc_to_rgb(y, cb, cr, dst): i64 {
     var crr = cr - 128;
     var cbb = cb - 128;
-    var r = y + _jpeg_descale(_CHITRA_JCC_CR_R * crr, 16);
-    var g = y - _jpeg_descale(_CHITRA_JCC_CB_G * cbb + _CHITRA_JCC_CR_G * crr, 16);
-    var b = y + _jpeg_descale(_CHITRA_JCC_CB_B * cbb, 16);
-    store8(dst + 0, _jpeg_clamp8(r));
-    store8(dst + 1, _jpeg_clamp8(g));
-    store8(dst + 2, _jpeg_clamp8(b));
+    var r = y + _chitra_jpeg_descale(_CHITRA_JCC_CR_R * crr, 16);
+    var g = y - _chitra_jpeg_descale(_CHITRA_JCC_CB_G * cbb + _CHITRA_JCC_CR_G * crr, 16);
+    var b = y + _chitra_jpeg_descale(_CHITRA_JCC_CB_B * cbb, 16);
+    store8(dst + 0, _chitra_jpeg_clamp8(r));
+    store8(dst + 1, _chitra_jpeg_clamp8(g));
+    store8(dst + 2, _chitra_jpeg_clamp8(b));
     return 0;
 }
 
@@ -55,17 +55,17 @@ fn _jpeg_ycc_to_rgb(y, cb, cr, dst): i64 {
 # (Ss=0, Se=63, Ah=Al=0). Returns the byte offset where the entropy-coded data
 # begins, or 0 with *err_out set.
 # ================================================================
-fn _jpeg_parse_sos(frame, src, len, sos_off, err_out): i64 {
+fn _chitra_jpeg_parse_sos(frame, src, len, sos_off, err_out): i64 {
     store64(err_out, 0);
     var cur[24];
-    _cur_init(&cur, src, len);
+    _chitra_cur_init(&cur, src, len);
     # The caller names the offset. With multi-scan there is no single "the" SOS
     # position on the frame to read, and passing it removes the need for a
     # resume-position field entirely.
-    _cur_skip(&cur, sos_off);
-    if (_cur_can_read(&cur, 3) == 0) { store64(err_out, chitra_err(CHITRA_ERR_TRUNCATED)); return 0; }
-    var ls = _cur_u16_be(&cur);
-    var ns = _cur_u8(&cur);
+    _chitra_cur_skip(&cur, sos_off);
+    if (_chitra_cur_can_read(&cur, 3) == 0) { store64(err_out, chitra_err(CHITRA_ERR_TRUNCATED)); return 0; }
+    var ls = _chitra_cur_u16_be(&cur);
+    var ns = _chitra_cur_u8(&cur);
     var ncomp = chitra_jpeg_frame_num_components(frame);
     # T.81 § B.2.3 bounds Ns as 1 <= Ns <= 4 and requires each Csj to name a
     # DISTINCT component of the frame, so Ns > Nf is malformed by pigeonhole.
@@ -96,7 +96,7 @@ fn _jpeg_parse_sos(frame, src, len, sos_off, err_out): i64 {
     # once, so a file gets at most Nf scans and every one must name something
     # new. See ADR 0006 (amended) and the driver below.
     if (ls != 6 + 2 * ns) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_SOS)); return 0; }
-    if (_cur_can_read(&cur, 2 * ns + 3) == 0) { store64(err_out, chitra_err(CHITRA_ERR_TRUNCATED)); return 0; }
+    if (_chitra_cur_can_read(&cur, 2 * ns + 3) == 0) { store64(err_out, chitra_err(CHITRA_ERR_TRUNCATED)); return 0; }
 
     # Clear the scan list before filling it. A frame outlives its scans, and
     # entries past this scan's `ns` would otherwise be whatever the PREVIOUS
@@ -123,8 +123,8 @@ fn _jpeg_parse_sos(frame, src, len, sos_off, err_out): i64 {
     while (done == 0) {
         if (i >= ns) { done = 1; }
         if (done == 0) {
-            cs = _cur_u8(&cur);
-            tdta = _cur_u8(&cur);
+            cs = _chitra_cur_u8(&cur);
+            tdta = _chitra_cur_u8(&cur);
             td = (tdta >> 4) & 15;
             ta = tdta & 15;
             # Bound the WRITE INDEX directly rather than through the two-hop
@@ -136,7 +136,7 @@ fn _jpeg_parse_sos(frame, src, len, sos_off, err_out): i64 {
             if (done == 0) {
                 # Equivalent (gate-4, 1.1.1): Ta >= 4 selects presence bit
                 # 4 + Ta >= 8, which no DHT can set, so the table-presence test
-                # in _jpeg_decode_one_scan refuses with the same code. Td is NOT
+                # in _chitra_jpeg_decode_one_scan refuses with the same code. Td is NOT
                 # covered that way — Td 4..7 would select an AC table — and has
                 # its own cell.
                 if (ta >= CHITRA_MAX_HUFF_TABLES) { rc = CHITRA_ERR_JPEG_SOS; done = 1; }
@@ -194,14 +194,14 @@ fn _jpeg_parse_sos(frame, src, len, sos_off, err_out): i64 {
     }
     if (rc != 0) { store64(err_out, chitra_err(rc)); return 0; }
 
-    var ss = _cur_u8(&cur);
-    var se = _cur_u8(&cur);
-    var ahal = _cur_u8(&cur);
+    var ss = _chitra_cur_u8(&cur);
+    var se = _chitra_cur_u8(&cur);
+    var ahal = _chitra_cur_u8(&cur);
     # T.81 § B.2.3: "If Ns > 1, ... sum(Hj * Vj) <= 10" over THIS SCAN's
     # components. A one-component scan has no interleaved MCU to bound, which is
     # exactly why a frame whose factors sum to 18 is legal when every scan is
     # non-interleaved. This precedes every allocation: planes are allocated by
-    # _jpeg_decode_one_scan, which runs after this returns.
+    # _chitra_jpeg_decode_one_scan, which runs after this returns.
     if (ns > 1) {
         var blocks = 0;
         var bi = 0;
@@ -219,11 +219,11 @@ fn _jpeg_parse_sos(frame, src, len, sos_off, err_out): i64 {
     if (ss != 0) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_SOS)); return 0; }
     if (se != 63) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_SOS)); return 0; }
     if (ahal != 0) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_SOS)); return 0; }
-    return _cur_pos(&cur);
+    return _chitra_cur_pos(&cur);
 }
 
 # ================================================================
-# _jpeg_entropy_span — how many bytes of ENTROPY-CODED DATA the scan actually
+# _chitra_jpeg_entropy_span — how many bytes of ENTROPY-CODED DATA the scan actually
 # carries, starting at `start`.
 #
 # This exists to be the denominator of the amplification cap below, and the
@@ -248,7 +248,7 @@ fn _jpeg_parse_sos(frame, src, len, sos_off, err_out): i64 {
 # bytes (runs of 0xFF) are collapsed, exactly as the reader collapses them.
 # Reads only — nothing is decoded, and every access is bounded by `len`.
 # ================================================================
-fn _jpeg_entropy_span(src, len, start, marker_out): i64 {
+fn _chitra_jpeg_entropy_span(src, len, start, marker_out): i64 {
     store64(marker_out, 0);
     var i = start;
     var j = 0;
@@ -302,7 +302,7 @@ fn _jpeg_entropy_span(src, len, start, marker_out): i64 {
 }
 
 # ================================================================
-# _jpeg_structural_espan — the entropy bytes the decode CAN read, summed over
+# _chitra_jpeg_structural_espan — the entropy bytes the decode CAN read, summed over
 # every scan, computed before a single plane exists (jpeg-7 / cc-1 / gate-8,
 # 1.1.1). Returns the sum; *scans_out receives how many scan headers it read.
 #
@@ -310,7 +310,7 @@ fn _jpeg_entropy_span(src, len, start, marker_out): i64 {
 # entropy spans — ran after every scan had been DECODED, i.e. after every plane
 # had been allocated, on the stated premise that the sum "can only" be known
 # then. It cannot be wrong about the sum, but the premise was false: every input
-# to it is byte-structural. `_jpeg_entropy_span` never consults the bit reader,
+# to it is byte-structural. `_chitra_jpeg_entropy_span` never consults the bit reader,
 # and the walk between scans only skips segments by their length fields. So
 # GATE 0 — the weaker bound on `len` B-3 put in front — was all that stood
 # before the planes, and `len` counts padding: 4,200 bytes of APP1 bought the
@@ -335,13 +335,13 @@ fn _jpeg_entropy_span(src, len, start, marker_out): i64 {
 #     reports its own, more specific, error.
 # It parses nothing into the frame and allocates nothing.
 # ================================================================
-fn _jpeg_structural_espan(frame, src, len, scans_out): i64 {
+fn _chitra_jpeg_structural_espan(frame, src, len, scans_out): i64 {
     store64(scans_out, 0);
     var ncomp = chitra_jpeg_frame_num_components(frame);
     var full = (1 << ncomp) - 1;
     var cur[24];
-    _cur_init(&cur, src, len);
-    _cur_skip(&cur, chitra_jpeg_frame_sos_offset(frame));
+    _chitra_cur_init(&cur, src, len);
+    _chitra_cur_skip(&cur, chitra_jpeg_frame_sos_offset(frame));
     var total = 0;
     var scans = 0;
     var mask = 0;
@@ -362,10 +362,10 @@ fn _jpeg_structural_espan(frame, src, len, scans_out): i64 {
     var seglen = 0;
     while (done == 0) {
         # ---- one scan header; the cursor is at its Ls field ----
-        if (_cur_can_read(&cur, 3) == 0) { done = 1; }
+        if (_chitra_cur_can_read(&cur, 3) == 0) { done = 1; }
         if (done == 0) {
-            ls = _cur_u16_be(&cur);
-            ns = _cur_u8(&cur);
+            ls = _chitra_cur_u16_be(&cur);
+            ns = _chitra_cur_u8(&cur);
             if (ns < 1) { done = 1; }
             if (ns > ncomp) { done = 1; }
         }
@@ -373,14 +373,14 @@ fn _jpeg_structural_espan(frame, src, len, scans_out): i64 {
             if (ls != 6 + 2 * ns) { done = 1; }
         }
         if (done == 0) {
-            if (_cur_can_read(&cur, 2 * ns + 3) == 0) { done = 1; }
+            if (_chitra_cur_can_read(&cur, 2 * ns + 3) == 0) { done = 1; }
         }
         i = 0;
         if (done == 1) { i = ns; }                  # ns is unvalidated here
         while (i < ns) {
             if (done == 0) {
-                cs = _cur_u8(&cur);
-                _cur_skip(&cur, 1);                 # Td/Ta: not needed to place scans
+                cs = _chitra_cur_u8(&cur);
+                _chitra_cur_skip(&cur, 1);                 # Td/Ta: not needed to place scans
                 fi = 0 - 1;
                 j = 0;
                 while (j < ncomp) {
@@ -398,48 +398,48 @@ fn _jpeg_structural_espan(frame, src, len, scans_out): i64 {
             i = i + 1;
         }
         if (done == 0) {
-            _cur_skip(&cur, 3);                     # Ss, Se, Ah/Al
-            start = _cur_pos(&cur);
-            span = _jpeg_entropy_span(src, len, start, &mk);
+            _chitra_cur_skip(&cur, 3);                     # Ss, Se, Ah/Al
+            start = _chitra_cur_pos(&cur);
+            span = _chitra_jpeg_entropy_span(src, len, start, &mk);
             total = total + span;
             scans = scans + 1;
-            _cur_skip(&cur, span);
+            _chitra_cur_skip(&cur, span);
             if (mask == full) { done = 1; }
         }
         # ---- the walk to the next SOS, by length only ----
         walking = 0;
         if (done == 0) { walking = 1; }
         while (walking == 1) {
-            if (_cur_can_read(&cur, 2) == 0) { walking = 0; done = 1; }
+            if (_chitra_cur_can_read(&cur, 2) == 0) { walking = 0; done = 1; }
             if (walking == 1) {
-                b = _cur_u8(&cur);
+                b = _chitra_cur_u8(&cur);
                 if (b != 0xFF) { walking = 0; done = 1; }
             }
             if (walking == 1) {
-                m = _cur_u8(&cur);
+                m = _chitra_cur_u8(&cur);
                 while (m == 0xFF) {
-                    if (_cur_can_read(&cur, 1) == 0) { m = 0xD9; }
-                    if (m == 0xFF) { m = _cur_u8(&cur); }
+                    if (_chitra_cur_can_read(&cur, 1) == 0) { m = 0xD9; }
+                    if (m == 0xFF) { m = _chitra_cur_u8(&cur); }
                 }
                 if (m == 0xD9) { walking = 0; done = 1; }
             }
             if (walking == 1) {
-                act = _jpeg_marker_action(m);
+                act = _chitra_jpeg_marker_action(m);
                 if (act >= 13) { walking = 0; done = 1; }
                 if (act == 1) { walking = 0; done = 1; }
                 if (act == 2) { walking = 0; }      # next scan header follows
             }
             if (walking == 1) {
                 if (act != 3) {                     # 3 = standalone: no length
-                    if (_cur_can_read(&cur, 2) == 0) { walking = 0; done = 1; }
+                    if (_chitra_cur_can_read(&cur, 2) == 0) { walking = 0; done = 1; }
                     if (walking == 1) {
-                        seglen = _cur_u16_be(&cur);
+                        seglen = _chitra_cur_u16_be(&cur);
                         if (seglen < 2) { walking = 0; done = 1; }
                     }
                     if (walking == 1) {
-                        if (_cur_can_read(&cur, seglen - 2) == 0) { walking = 0; done = 1; }
+                        if (_chitra_cur_can_read(&cur, seglen - 2) == 0) { walking = 0; done = 1; }
                     }
-                    if (walking == 1) { _cur_skip(&cur, seglen - 2); }
+                    if (walking == 1) { _chitra_cur_skip(&cur, seglen - 2); }
                 }
             }
         }
@@ -457,7 +457,7 @@ fn _jpeg_structural_espan(frame, src, len, scans_out): i64 {
 # intervals reset the DC predictors and byte-align the entropy stream.
 # Returns the ChitraImage ptr, or 0 with *err_out set.
 # ================================================================
-fn _jpeg_decode_one_scan(frame, src, len, entropy_start, espan, planes, comppw,
+fn _chitra_jpeg_decode_one_scan(frame, src, len, entropy_start, espan, planes, comppw,
   zz, out, unclean_out, err_out): i64 {
     var ncomp = chitra_jpeg_frame_num_components(frame);
     var w = chitra_jpeg_frame_width(frame);
@@ -550,7 +550,7 @@ fn _jpeg_decode_one_scan(frame, src, len, entropy_start, espan, planes, comppw,
     var done = 0;
     # Iterate THE SCAN, in scan order. T.81 § A.2.3 composes an interleaved MCU
     # from the components in the order the SCAN HEADER lists them. Within one
-    # scan that is frame order — § B.2.3 requires it, and _jpeg_parse_sos has
+    # scan that is frame order — § B.2.3 requires it, and _chitra_jpeg_parse_sos has
     # enforced it since 1.1.1 (jpeg-12). Through 1.1.0 this comment said a scan
     # "may name them {Cb, Y, Cr}, and libjpeg writes such scans"; libjpeg
     # neither writes nor reads one. What differs from frame order is the SET: a
@@ -648,7 +648,7 @@ fn _jpeg_decode_one_scan(frame, src, len, entropy_start, espan, planes, comppw,
     # Bound the reader to THIS SCAN's entropy span, not to the rest of the file.
     #
     # 0.7.0 gave it `len - entropy_start` and gated `seen_iend` on _CHITRA_BR_EOD, which
-    # is set when the reader runs out of bytes. But `_jpeg_br_load_byte` returns
+    # is set when the reader runs out of bytes. But `_chitra_jpeg_br_load_byte` returns
     # early on a real marker WITHOUT setting _CHITRA_BR_EOD — so a file truncated inside
     # its entropy data with a genuine FF D9 appended stopped at that marker,
     # left _CHITRA_BR_EOD clear, and reported a cleanly closed stream. Measured on a
@@ -657,13 +657,13 @@ fn _jpeg_decode_one_scan(frame, src, len, entropy_start, espan, planes, comppw,
     # segment". The signal 0.7.0 added was defeated by the one shape it most
     # needed to catch.
     #
-    # Handing it `espan` — the span _jpeg_entropy_span already computed, which
+    # Handing it `espan` — the span _chitra_jpeg_entropy_span already computed, which
     # ends at the first marker that is neither stuffing nor RSTn — makes running
     # out of scan data indistinguishable from what it is: end of data. It is
     # also the correct bound on its own terms. An entropy reader has no business
     # reading past the end of its own scan, and that matters far more once
     # multi-scan lands, where the bytes after a scan are the NEXT SCAN'S HEADER.
-    _jpeg_br_init(&reader, src + entropy_start, espan);
+    _chitra_jpeg_br_init(&reader, src + entropy_start, espan);
 
     var mcu_count = s_cols * s_rows;
     var mi = 0;
@@ -693,7 +693,7 @@ fn _jpeg_decode_one_scan(frame, src, len, entropy_start, espan, planes, comppw,
             if (ri > 0) {
                 if (mi > 0) {
                     if ((mi % ri) == 0) {
-                        rrc = _jpeg_br_restart(&reader);
+                        rrc = _chitra_jpeg_br_restart(&reader);
                         if (rrc != 0) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY)); done = 1; }
                         if (done == 0) {
                             k = 0;
@@ -720,7 +720,7 @@ fn _jpeg_decode_one_scan(frame, src, len, entropy_start, espan, planes, comppw,
                     bx = 0;
                     while (bx < ch2) {
                         pr = load64(&preds + comp * 8);
-                        pr = _jpeg_decode_block(&reader, dctab, actab, pr, zz, &berr);
+                        pr = _chitra_jpeg_decode_block(&reader, dctab, actab, pr, zz, &berr);
                         store64(&preds + comp * 8, pr);
                         if (load64(&berr) != 0) {
                             store64(err_out, load64(&berr));
@@ -731,7 +731,7 @@ fn _jpeg_decode_one_scan(frame, src, len, entropy_start, espan, planes, comppw,
                             mi = mcu_count;
                         }
                         if (done == 0) {
-                            _jpeg_idct_block(zz, quant, out);
+                            _chitra_jpeg_idct_block(zz, quant, out);
                             px = (mcu_x * ch2 + bx) * 8;
                             py = (mcu_y * cv2 + by) * 8;
                             r = 0;
@@ -764,17 +764,17 @@ fn _jpeg_decode_one_scan(frame, src, len, entropy_start, espan, planes, comppw,
     #     marker that ends the scan; libjpeg's "extraneous bytes").
     # None of these is an error — chitra returns the image, as libjpeg does —
     # but each means `seen_iend` must not claim a clean close.
-    var unclean = _jpeg_br_eod(&reader);
-    if (_jpeg_br_damaged(&reader) == 1) { unclean = 1; }
+    var unclean = _chitra_jpeg_br_eod(&reader);
+    if (_chitra_jpeg_br_damaged(&reader) == 1) { unclean = 1; }
     if (load64(err_out) == 0) {
-        if (_jpeg_br_tail_clean(&reader) == 0) { unclean = 1; }
+        if (_chitra_jpeg_br_tail_clean(&reader) == 0) { unclean = 1; }
     }
     store64(unclean_out, unclean);
     if (load64(err_out) != 0) { return 0; }
     return 1;
 }
 
-fn _jpeg_build_image(frame, planes, comppw, closed, err_out): i64 {
+fn _chitra_jpeg_build_image(frame, planes, comppw, closed, err_out): i64 {
     var ncomp = chitra_jpeg_frame_num_components(frame);
     var w = chitra_jpeg_frame_width(frame);
     var h = chitra_jpeg_frame_height(frame);
@@ -887,7 +887,7 @@ fn _jpeg_build_image(frame, planes, comppw, closed, err_out): i64 {
                     store8(rgba + o + 1, cb);
                     store8(rgba + o + 2, cr);
                 }
-                if (is_rgb == 0) { _jpeg_ycc_to_rgb(yy, cb, cr, rgba + o); }
+                if (is_rgb == 0) { _chitra_jpeg_ycc_to_rgb(yy, cb, cr, rgba + o); }
                 store8(rgba + o + 3, 255);
                 x = x + 1;
             }
@@ -940,7 +940,7 @@ fn _jpeg_build_image(frame, planes, comppw, closed, err_out): i64 {
 }
 
 # ================================================================
-# _jpeg_decode_scans — the multi-scan driver (0.8.0).
+# _chitra_jpeg_decode_scans — the multi-scan driver (0.8.0).
 #
 # Owns everything that outlives a scan: the component planes and their strides,
 # the IDCT scratch, the running entropy total, and the decision about whether
@@ -948,7 +948,7 @@ fn _jpeg_build_image(frame, planes, comppw, closed, err_out): i64 {
 # entropy span, decodes it, and stops the moment every frame component is
 # covered.
 #
-# TERMINATION IS THE COVERAGE BITMASK, not a scan counter. _jpeg_parse_sos
+# TERMINATION IS THE COVERAGE BITMASK, not a scan counter. _chitra_jpeg_parse_sos
 # refuses a component that is already covered and requires Ns >= 1, so every
 # successful iteration sets at least one new bit and at most Nf (<= 3) can
 # succeed. That bounds the index itself rather than a proxy for it, which is why
@@ -960,7 +960,7 @@ fn _jpeg_build_image(frame, planes, comppw, closed, err_out): i64 {
 # means no byte after a single scan's entropy data is newly parsed, and no file
 # that decoded before this release can newly reject on trailing junk.
 # ================================================================
-fn _jpeg_decode_scans(frame, src, len, err_out): i64 {
+fn _chitra_jpeg_decode_scans(frame, src, len, err_out): i64 {
     store64(err_out, 0);
     var ncomp = chitra_jpeg_frame_num_components(frame);
     var w = chitra_jpeg_frame_width(frame);
@@ -997,17 +997,17 @@ fn _jpeg_decode_scans(frame, src, len, err_out): i64 {
     # ⛔⛔ GATE 2, AHEAD OF THE PLANES (jpeg-7 / cc-1 / gate-8, 1.1.1).
     # B-3's premise — that the summed span "can only" be known once every scan
     # has been decoded — was false: it is byte-structural, and
-    # _jpeg_structural_espan computes it without decoding or allocating
+    # _chitra_jpeg_structural_espan computes it without decoding or allocating
     # anything. Until this existed GATE 0 was the only bound in front of the
     # planes, and padding defeats GATE 0 by construction: a 16,658-byte
     # three-scan file with 4,200 bytes of APP1 still spent B-3's exact
     # 50,354,832 bytes before GATE 2 refused it, and a single-scan file padded
     # with 12,300 bytes — before the frame or after EOI — did the same. Same
     # test, same denominator, same code as GATE 2; it now simply runs first.
-    # See _jpeg_structural_espan for why its sum is exact whenever the decode
+    # See _chitra_jpeg_structural_espan for why its sum is exact whenever the decode
     # can succeed, and when it does not gate at all.
     var pscans = 0;
-    var ptotal = _jpeg_structural_espan(frame, src, len, &pscans);
+    var ptotal = _chitra_jpeg_structural_espan(frame, src, len, &pscans);
     if (pscans > 0) {
         if (w * h * 4 > ptotal * CHITRA_MAX_JPEG_RATIO) {
             store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
@@ -1041,20 +1041,20 @@ fn _jpeg_decode_scans(frame, src, len, err_out): i64 {
     var full = (1 << ncomp) - 1;
     var done = 0;
     while (done == 0) {
-        entropy_start = _jpeg_parse_sos(frame, src, len, sos_off, err_out);
+        entropy_start = _chitra_jpeg_parse_sos(frame, src, len, sos_off, err_out);
         if (load64(err_out) != 0) { return 0; }
-        espan = _jpeg_entropy_span(src, len, entropy_start, &endmark);
+        espan = _chitra_jpeg_entropy_span(src, len, entropy_start, &endmark);
         total_espan = total_espan + espan;
         last_marker = endmark;
         unclean = 0;
-        if (_jpeg_decode_one_scan(frame, src, len, entropy_start, espan,
+        if (_chitra_jpeg_decode_one_scan(frame, src, len, entropy_start, espan,
             &planes, &comppw, zz, out, &unclean, err_out) == 0) {
             return 0;
         }
         if (unclean == 1) { any_unclean = 1; }
         if (chitra_jpeg_frame_covered(frame) == full) { done = 1; }
         if (done == 0) {
-            sos_off = _jpeg_resume_to_next_scan(frame, src, len, entropy_start + espan, err_out);
+            sos_off = _chitra_jpeg_resume_to_next_scan(frame, src, len, entropy_start + espan, err_out);
             if (load64(err_out) != 0) { return 0; }
             if (sos_off == 0) {
                 # ⚠ An EQUIVALENT mutant (gate-6, 1.1.1): without this test the
@@ -1075,7 +1075,7 @@ fn _jpeg_decode_scans(frame, src, len, err_out): i64 {
     # the scans ACTUALLY decoded. Nothing here is a pre-pass an attacker could
     # pad: every byte counted is a byte some scan's entropy decoder read.
     # ⚠ BACKSTOP SINCE 1.1.1 — the same test already ran ahead of the planes on
-    # _jpeg_structural_espan's sum, which equals `total_espan` for every file
+    # _chitra_jpeg_structural_espan's sum, which equals `total_espan` for every file
     # that gets this far (both walks place each scan at the same offset and
     # measure it with the same function). So this cannot fire while the two
     # walks agree, and no test can pin it on its own — deleting it alone is an
@@ -1092,7 +1092,7 @@ fn _jpeg_decode_scans(frame, src, len, err_out): i64 {
     var closed = 1;
     if (any_unclean == 1) { closed = 0; }
     if (last_marker != 0xD9) { closed = 0; }
-    return _jpeg_build_image(frame, &planes, &comppw, closed, err_out);
+    return _chitra_jpeg_build_image(frame, &planes, &comppw, closed, err_out);
 }
 
 # ================================================================
@@ -1105,7 +1105,7 @@ fn chitra_jpeg_decode(src, len, err_out): i64 {
     store64(err_out, 0);
     var frame = chitra_jpeg_scan_markers(src, len, err_out);
     if (frame == 0) { return 0; }
-    return _jpeg_decode_scans(frame, src, len, err_out);
+    return _chitra_jpeg_decode_scans(frame, src, len, err_out);
 }
 
 # ================================================================
@@ -1126,7 +1126,7 @@ fn chitra_jpeg_decode_rgba8(src, len, w_out, h_out): i64 {
 }
 
 # ================================================================
-# _jpeg_declared_dims — the dimensions SOF0 declares, without decoding or
+# _chitra_jpeg_declared_dims — the dimensions SOF0 declares, without decoding or
 # allocating anything.
 #
 # This walks segments structurally, exactly as chitra_jpeg_scan_markers does —
@@ -1143,38 +1143,38 @@ fn chitra_jpeg_decode_rgba8(src, len, w_out, h_out): i64 {
 # make cheap. Reading the geometry alone costs nothing.
 # Returns 1 with *w_out / *h_out set, or 0.
 # ================================================================
-fn _jpeg_declared_dims(src, len, w_out, h_out): i64 {
+fn _chitra_jpeg_declared_dims(src, len, w_out, h_out): i64 {
     store64(w_out, 0);
     store64(h_out, 0);
     var cur[24];
-    _cur_init(&cur, src, len);
-    _cur_skip(&cur, 2);                     # SOI, already checked by the caller
+    _chitra_cur_init(&cur, src, len);
+    _chitra_cur_skip(&cur, 2);                     # SOI, already checked by the caller
     var done = 0;
     var found = 0;
     var b = 0;
     var m = 0;
     var seglen = 0;
     while (done == 0) {
-        if (_cur_can_read(&cur, 2) == 0) { done = 1; }
+        if (_chitra_cur_can_read(&cur, 2) == 0) { done = 1; }
         if (done == 0) {
-            b = _cur_u8(&cur);
+            b = _chitra_cur_u8(&cur);
             if (b != 0xFF) { done = 1; }
         }
         if (done == 0) {
             # Collapse a run of fill bytes (T.81 § B.1.1.2).
-            m = _cur_u8(&cur);
+            m = _chitra_cur_u8(&cur);
             while (m == 0xFF) {
-                if (_cur_can_read(&cur, 1) == 0) { m = 0; }
-                if (m == 0xFF) { m = _cur_u8(&cur); }
+                if (_chitra_cur_can_read(&cur, 1) == 0) { m = 0; }
+                if (m == 0xFF) { m = _chitra_cur_u8(&cur); }
             }
             if (m == 0xC0) {
                 # SOF0: length(2) precision(1) height(2) width(2)
-                if (_cur_can_read(&cur, 7) == 0) { done = 1; }
+                if (_chitra_cur_can_read(&cur, 7) == 0) { done = 1; }
                 if (done == 0) {
-                    seglen = _cur_u16_be(&cur);
-                    _cur_skip(&cur, 1);
-                    store64(h_out, _cur_u16_be(&cur));
-                    store64(w_out, _cur_u16_be(&cur));
+                    seglen = _chitra_cur_u16_be(&cur);
+                    _chitra_cur_skip(&cur, 1);
+                    store64(h_out, _chitra_cur_u16_be(&cur));
+                    store64(w_out, _chitra_cur_u16_be(&cur));
                     found = 1;
                     done = 1;
                 }
@@ -1189,15 +1189,15 @@ fn _jpeg_declared_dims(src, len, w_out, h_out): i64 {
                 if (m >= 0xD0) {
                     if (m <= 0xD7) { continue; }
                 }
-                if (_cur_can_read(&cur, 2) == 0) { done = 1; }
+                if (_chitra_cur_can_read(&cur, 2) == 0) { done = 1; }
                 if (done == 0) {
-                    seglen = _cur_u16_be(&cur);
+                    seglen = _chitra_cur_u16_be(&cur);
                     if (seglen < 2) { done = 1; }
                 }
                 if (done == 0) {
-                    if (_cur_can_read(&cur, seglen - 2) == 0) { done = 1; }
+                    if (_chitra_cur_can_read(&cur, seglen - 2) == 0) { done = 1; }
                 }
-                if (done == 0) { _cur_skip(&cur, seglen - 2); }
+                if (done == 0) { _chitra_cur_skip(&cur, seglen - 2); }
             }
         }
     }
@@ -1222,18 +1222,18 @@ fn _chitra_declared_rgba_bytes(src, len): i64 {
     if (chitra_png_check_signature(src, len) == 1) {
         # IHDR is the first chunk: 8-byte signature, 4-byte length, 4-byte type,
         # then width and height as big-endian u32 (PNG § 11.2.2).
-        _cur_init(&cur, src, len);
-        _cur_skip(&cur, 16);
-        if (_cur_can_read(&cur, 8) == 0) { return 0; }
-        w = _cur_u32_be(&cur);
-        h = _cur_u32_be(&cur);
+        _chitra_cur_init(&cur, src, len);
+        _chitra_cur_skip(&cur, 16);
+        if (_chitra_cur_can_read(&cur, 8) == 0) { return 0; }
+        w = _chitra_cur_u32_be(&cur);
+        h = _chitra_cur_u32_be(&cur);
     }
     if (chitra_jpeg_check_signature(src, len) == 1) {
-        if (_jpeg_declared_dims(src, len, &w, &h) == 0) { return 0; }
+        if (_chitra_jpeg_declared_dims(src, len, &w, &h) == 0) { return 0; }
     }
     if (chitra_bmp_check_signature(src, len) == 1) {
         var berr = 0;
-        var hdr = _bmp_parse_header(src, len, &berr);
+        var hdr = _chitra_bmp_parse_header(src, len, &berr);
         if (hdr == 0) { return 0; }
         w = chitra_bmp_hdr_width(hdr);
         h = chitra_bmp_hdr_height(hdr);
@@ -1243,8 +1243,8 @@ fn _chitra_declared_rgba_bytes(src, len): i64 {
         # The Logical Screen Descriptor follows the 6-byte signature, and the
         # canvas — not the first frame's rect — is what chitra returns.
         if (len < 10) { return 0; }
-        w = _gif_u16_le(src + 6);
-        h = _gif_u16_le(src + 8);
+        w = _chitra_gif_u16_le(src + 6);
+        h = _chitra_gif_u16_le(src + 8);
     }
     if (w <= 0 || h <= 0) { return 0; }
     if (w > CHITRA_MAX_DIM || h > CHITRA_MAX_DIM) { return 0; }
@@ -1262,7 +1262,7 @@ fn _chitra_declared_rgba_bytes(src, len): i64 {
 #   A refusal returns 0 with *err_out = CHITRA_ERR_BUDGET, having allocated
 #   16 bytes — the ChitraErr itself — for PNG, JPEG and GIF, and 128 for BMP.
 #   MEASURED, not estimated. BMP is the outlier because its dimension read goes
-#   through _bmp_parse_header, the real parser, rather than through a private
+#   through _chitra_bmp_parse_header, the real parser, rather than through a private
 #   copy of the header layout; 128 bytes is the right price for having no
 #   second opinion about what a BMP header says.
 #

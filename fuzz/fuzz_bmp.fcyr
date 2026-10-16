@@ -1676,7 +1676,7 @@ fn fuzz_bmp_masks(seed): i64 {
 
 # ---- 8. decode_budget (1.1.1, cc-11) ----------------------------------
 # chitra_image_decode_budget is frozen, and it parses the BMP header a SECOND
-# time (_chitra_declared_rgba_bytes -> _bmp_parse_header) before the router
+# time (_chitra_declared_rgba_bytes -> _chitra_bmp_parse_header) before the router
 # decodes. No harness called it through 1.1.0. Its one promise is that no image
 # it returns exceeds max_bytes of RGBA8; its failure shape is (0, *err_out
 # set). A budget of exactly the output must decode — a refusal there is the

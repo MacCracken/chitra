@@ -20,7 +20,7 @@
 # This pass handles every spec-legal depth. At depth 8 each sample is one byte
 # and the scanline is dense channels-per-pixel with no bit unpacking; 1/2/4 are
 # unpacked MSB-first and scaled 255/85/17; 16 is rescaled to 8 per PNG § 13.13
-# in _png_scale16 (0.7.1 — it was a high-byte truncation through 0.7.0).
+# in _chitra_png_scale16 (0.7.1 — it was a high-byte truncation through 0.7.0).
 
 # ================================================================
 # Color-type sample-byte sizes (bit depth 8 => 1 byte per channel).
@@ -47,7 +47,7 @@
 #   - tRNS wrong length for the color type      -> CHITRA_ERR_BAD_CHUNK
 #       (gray:2 bytes, RGB:6 bytes, palette:<=entry_count bytes)
 # ================================================================
-# _png_scale16 — one 16-bit sample, reduced to 8 bits.
+# _chitra_png_scale16 — one 16-bit sample, reduced to 8 bits.
 #
 # It is a RESCALE, not a truncation: PNG § 13.13 gives the conversion between
 # sample depths as
@@ -64,7 +64,7 @@
 # "unchanged rendered output", which was a claim about a reference nobody had
 # checked it against.
 # ================================================================
-fn _png_scale16(v): i64 {
+fn _chitra_png_scale16(v): i64 {
     return (v * 255 + 32767) / 65535;
 }
 
@@ -239,7 +239,7 @@ fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
             var gfull = g;
             if (bps == 2) {
                 gfull = g * 256 + load8(so + 1);
-                g = _png_scale16(gfull);
+                g = _chitra_png_scale16(gfull);
             }
             var a = 255;
             if (gfull == key_g) { a = 0; }
@@ -290,9 +290,9 @@ fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
                 rf = r * 256 + load8(s + 1);
                 gf = g * 256 + load8(s + 3);
                 bf = b * 256 + load8(s + 5);
-                r = _png_scale16(rf);
-                g = _png_scale16(gf);
-                b = _png_scale16(bf);
+                r = _chitra_png_scale16(rf);
+                g = _chitra_png_scale16(gf);
+                b = _chitra_png_scale16(bf);
             }
             var a = 255;
             if (rf == key_r && gf == key_g2 && bf == key_b) { a = 0; }
@@ -357,8 +357,8 @@ fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
             var g = load8(s + 0);
             var a = load8(s + 1 * bps);
             if (bps == 2) {
-                g = _png_scale16(g * 256 + load8(s + 1));
-                a = _png_scale16(a * 256 + load8(s + 3));
+                g = _chitra_png_scale16(g * 256 + load8(s + 1));
+                a = _chitra_png_scale16(a * 256 + load8(s + 3));
             }
             var o = out + i * 4;
             store8(o + 0, g);
@@ -388,10 +388,10 @@ fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
                 store8(o + 3, load8(s + 3));
             }
             if (bps == 2) {
-                store8(o + 0, _png_scale16(load8(s + 0) * 256 + load8(s + 1)));
-                store8(o + 1, _png_scale16(load8(s + 2) * 256 + load8(s + 3)));
-                store8(o + 2, _png_scale16(load8(s + 4) * 256 + load8(s + 5)));
-                store8(o + 3, _png_scale16(load8(s + 6) * 256 + load8(s + 7)));
+                store8(o + 0, _chitra_png_scale16(load8(s + 0) * 256 + load8(s + 1)));
+                store8(o + 1, _chitra_png_scale16(load8(s + 2) * 256 + load8(s + 3)));
+                store8(o + 2, _chitra_png_scale16(load8(s + 4) * 256 + load8(s + 5)));
+                store8(o + 3, _chitra_png_scale16(load8(s + 6) * 256 + load8(s + 7)));
             }
             i = i + 1;
         }

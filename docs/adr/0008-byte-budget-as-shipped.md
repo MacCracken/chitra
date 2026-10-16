@@ -76,7 +76,7 @@ parser that can disagree with the decoder, and it is asserted by a test
 
 Two changes, both of which stand on their own merits:
 
-1. **Lazy table allocation** (`_jpeg_alloc_quant` / `_jpeg_alloc_huff`). The
+1. **Lazy table allocation** (`_chitra_jpeg_alloc_quant` / `_chitra_jpeg_alloc_huff`). The
    stores are allocated when a DQT or DHT first defines something, guarded by
    `== 0` so it happens at most once per frame. A table-less refusal costs 400
    bytes instead of 22,160, for *every* caller — not only budgeted ones.
@@ -92,14 +92,14 @@ Two changes, both of which stand on their own merits:
    costs nothing, and the guard still makes it at most once per frame.
 
    The `== 0` guard is not tidiness, it is the whole thing. A single DHT
-   segment may carry up to **3,854 table definitions** (`_jpeg_huff_build`
+   segment may carry up to **3,854 table definitions** (`_chitra_jpeg_huff_build`
    accepts an all-zero BITS table, so each one counts), and allocating a
    2,464-byte record per *definition* rather than one block per *frame* would
    trade a flat 22 KB refusal cost for one that **scales with file size** —
    9,496,704 bytes from a 64 KB file. Measured: with the guard, that file costs
    20,112 bytes.
 
-2. **A structural dimension read** (`_jpeg_declared_dims`). Reading SOF0's
+2. **A structural dimension read** (`_chitra_jpeg_declared_dims`). Reading SOF0's
    geometry does not need the marker parser's allocations, so the budget check
    walks segments by length and reads two fields. It parses nothing, validates
    nothing, stores nothing, and allocates nothing. Without it a *well-formed*

@@ -47,8 +47,8 @@ table records (19,712 B), none of which come back, and none of it memoized: ever
 call paid it again. A consumer fed hostile input paid for the files it *refused*,
 at roughly 1,473:1 against a minimal one.
 
-**Since 0.6.1** the table stores are allocated lazily — `_jpeg_alloc_quant` and
-`_jpeg_alloc_huff` fire only when a DQT or DHT first defines something, each
+**Since 0.6.1** the table stores are allocated lazily — `_chitra_jpeg_alloc_quant` and
+`_chitra_jpeg_alloc_huff` fire only when a DQT or DHT first defines something, each
 guarded `== 0`, and **per frame rather than per definition** (a single DHT may
 carry thousands of definitions, so per-definition allocation would trade a flat
 cost for one that scales with file size). A refused JPEG now costs the frame

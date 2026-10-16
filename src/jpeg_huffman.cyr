@@ -3,12 +3,12 @@
 # construction from a DHT's BITS (code-length counts) + HUFFVAL (symbols). This
 # module is frame-independent table machinery, so it is included BEFORE
 # jpeg_markers.cyr (whose DHT parser drives the build into frame-owned storage).
-# The entropy bit-reader, the DECODE procedure and _jpeg_decode_block all live
+# The entropy bit-reader, the DECODE procedure and _chitra_jpeg_decode_block all live
 # in this module.
 #
 # Construction follows ITU-T T.81 Annex C (HUFFSIZE/HUFFCODE generation) folded
 # into the Annex F figure F.15 decoder-table derivation (MINCODE/MAXCODE/VALPTR).
-# The DECODE procedure (Annex F.2.2.3), implemented here as _jpeg_decode:
+# The DECODE procedure (Annex F.2.2.3), implemented here as _chitra_jpeg_decode:
 #   code = nextbit(); L = 1
 #   while code > maxcode[L]: L += 1; code = (code << 1) | nextbit()
 #   value = huffval[ valptr[L] + code - mincode[L] ]
@@ -30,11 +30,11 @@ var _CHITRA_HT_COUNT   = 408;    # 51*8
 var _CHITRA_HT_HUFFVAL = 416;    # 52*8
 var _CHITRA_HT_SIZE    = 2464;   # (52 + 256) * 8
 
-fn _jpeg_huff_mincode(t, L): i64 { return load64(t + _CHITRA_HT_MINCODE + L * 8); }
-fn _jpeg_huff_maxcode(t, L): i64 { return load64(t + _CHITRA_HT_MAXCODE + L * 8); }
-fn _jpeg_huff_valptr(t, L): i64  { return load64(t + _CHITRA_HT_VALPTR + L * 8); }
-fn _jpeg_huff_count(t): i64      { return load64(t + _CHITRA_HT_COUNT); }
-fn _jpeg_huff_val(t, i): i64     { return load64(t + _CHITRA_HT_HUFFVAL + i * 8); }
+fn _chitra_jpeg_huff_mincode(t, L): i64 { return load64(t + _CHITRA_HT_MINCODE + L * 8); }
+fn _chitra_jpeg_huff_maxcode(t, L): i64 { return load64(t + _CHITRA_HT_MAXCODE + L * 8); }
+fn _chitra_jpeg_huff_valptr(t, L): i64  { return load64(t + _CHITRA_HT_VALPTR + L * 8); }
+fn _chitra_jpeg_huff_count(t): i64      { return load64(t + _CHITRA_HT_COUNT); }
+fn _chitra_jpeg_huff_val(t, i): i64     { return load64(t + _CHITRA_HT_HUFFVAL + i * 8); }
 
 # ================================================================
 # Build the MINCODE/MAXCODE/VALPTR decode arrays from BITS. `table` already has
@@ -47,7 +47,7 @@ fn _jpeg_huff_val(t, i): i64     { return load64(t + _CHITRA_HT_HUFFVAL + i * 8)
 # malformed table from producing out-of-range code values. Returns 0 on success
 # or CHITRA_ERR_JPEG_DHT.
 # ================================================================
-fn _jpeg_huff_build(table, bits): i64 {
+fn _chitra_jpeg_huff_build(table, bits): i64 {
     var z = 0;
     while (z <= 16) {
         store64(table + _CHITRA_HT_MINCODE + z * 8, 0);
@@ -113,7 +113,7 @@ var _CHITRA_BR_MARKER = 40;
 var _CHITRA_BR_EOD    = 48;
 # ⛔ jpeg-6 (1.1.1) — T.81 § B.2.1 numbers restart markers modulo 8, and a scan
 # whose markers do not follow that sequence has lost or repeated an interval.
-# _jpeg_br_restart used to accept ANY D0..D7, so a duplicated interval decoded
+# _chitra_jpeg_br_restart used to accept ANY D0..D7, so a duplicated interval decoded
 # shifted by one interval, or every marker rewritten to D0, still reported
 # seen_iend = 1 — djpeg says "found marker 0xd2 instead of RST3" for the same
 # bytes. That is NOT fabrication, so it must not touch _CHITRA_BR_EOD (CLAUDE.md JPEG
@@ -122,7 +122,7 @@ var _CHITRA_BR_RSTNEXT = 56;
 var _CHITRA_BR_DAMAGED = 64;
 var _CHITRA_BR_SIZE   = 72;
 
-fn _jpeg_br_init(reader, base, len): i64 {
+fn _chitra_jpeg_br_init(reader, base, len): i64 {
     store64(reader + _CHITRA_BR_BASE, base);
     store64(reader + _CHITRA_BR_POS, 0);
     store64(reader + _CHITRA_BR_END, len);
@@ -135,12 +135,12 @@ fn _jpeg_br_init(reader, base, len): i64 {
     return 0;
 }
 
-fn _jpeg_br_marker(reader): i64 { return load64(reader + _CHITRA_BR_MARKER); }
+fn _chitra_jpeg_br_marker(reader): i64 { return load64(reader + _CHITRA_BR_MARKER); }
 # 1 once the reader has had to fabricate bits because the input ran out.
-fn _jpeg_br_eod(reader): i64    { return load64(reader + _CHITRA_BR_EOD); }
-fn _jpeg_br_pos(reader): i64    { return load64(reader + _CHITRA_BR_POS); }
+fn _chitra_jpeg_br_eod(reader): i64    { return load64(reader + _CHITRA_BR_EOD); }
+fn _chitra_jpeg_br_pos(reader): i64    { return load64(reader + _CHITRA_BR_POS); }
 # 1 once a restart marker arrived out of its modulo-8 sequence (jpeg-6, 1.1.1).
-fn _jpeg_br_damaged(reader): i64 { return load64(reader + _CHITRA_BR_DAMAGED); }
+fn _chitra_jpeg_br_damaged(reader): i64 { return load64(reader + _CHITRA_BR_DAMAGED); }
 
 # Resync at a restart-interval boundary (T.81 § F.2.1.3.1 / E.1.1): discard the
 # partial byte (byte-align), then consume the expected RSTn marker (FF D0..D7).
@@ -148,7 +148,7 @@ fn _jpeg_br_damaged(reader): i64 { return load64(reader + _CHITRA_BR_DAMAGED); }
 # _CHITRA_BR_POS points at its 0xFF (whether or not the bit-reader auto-detected it).
 # Returns 0 on success (including "the span is exhausted" — see below), -1 if
 # something other than a restart marker sits where one must be.
-fn _jpeg_br_restart(reader): i64 {
+fn _chitra_jpeg_br_restart(reader): i64 {
     store64(reader + _CHITRA_BR_CNT, 0);
     var base = load64(reader + _CHITRA_BR_BASE);
     var pos = load64(reader + _CHITRA_BR_POS);
@@ -157,7 +157,7 @@ fn _jpeg_br_restart(reader): i64 {
     # With the span exhausted there is no marker to consume and nothing wrong
     # with what was read, so this returns 0 and the caller resets the DC
     # predictors as at any restart. The next bit the decoder asks for cannot be
-    # supplied, and `_jpeg_br_bit` sets _CHITRA_BR_EOD at that FABRICATION point, exactly
+    # supplied, and `_chitra_jpeg_br_bit` sets _CHITRA_BR_EOD at that FABRICATION point, exactly
     # as for a truncated scan without DRI — so `seen_iend` comes back 0. Through
     # 1.1.0 this returned -1 and the decoder refused the file as
     # CHITRA_ERR_JPEG_ENTROPY, "corrupt entropy stream": a partial download of
@@ -204,7 +204,7 @@ fn _jpeg_br_restart(reader): i64 {
 # stream, or bytes spliced in before the marker that ends the scan. libjpeg
 # reports it as "N extraneous bytes before marker". A trailing RSTn is tolerated
 # because libjpeg is silent about one: it is a marker, not data.
-fn _jpeg_br_tail_clean(reader): i64 {
+fn _chitra_jpeg_br_tail_clean(reader): i64 {
     var base = load64(reader + _CHITRA_BR_BASE);
     var i = load64(reader + _CHITRA_BR_POS);
     var end = load64(reader + _CHITRA_BR_END);
@@ -253,7 +253,7 @@ fn _jpeg_br_tail_clean(reader): i64 {
 # stuffing pair (FF 00) the 0xFF is loaded and the 0x00 discarded. On a marker
 # (FF xx, xx != 0) or end-of-data, the marker is recorded (xx, or EOI for a
 # trailing lone FF) and CNT is left 0 so callers pad with zero bits.
-fn _jpeg_br_load_byte(reader): i64 {
+fn _chitra_jpeg_br_load_byte(reader): i64 {
     if (load64(reader + _CHITRA_BR_MARKER) != 0) { return 0; }
     var base = load64(reader + _CHITRA_BR_BASE);
     var pos = load64(reader + _CHITRA_BR_POS);
@@ -269,7 +269,7 @@ fn _jpeg_br_load_byte(reader): i64 {
     if (b == 0xFF) {
         # T.81 § B.1.1.2: a marker may be preceded by ANY number of 0xFF fill
         # bytes. Collapse the run so "FF FF D0" resolves to RST0 instead of a
-        # bogus marker 0xFF — which made _jpeg_br_restart reject a perfectly
+        # bogus marker 0xFF — which made _chitra_jpeg_br_restart reject a perfectly
         # well-formed restart stream. `b` stays 0xFF (every byte in the run is
         # the same value), and pos-1 still points at the LAST 0xFF, which is
         # exactly where the restart resync expects to find it.
@@ -306,10 +306,10 @@ fn _jpeg_br_load_byte(reader): i64 {
 }
 
 # Read one bit MSB-first. Returns 0 past end / after a marker (zero padding).
-fn _jpeg_br_bit(reader): i64 {
+fn _chitra_jpeg_br_bit(reader): i64 {
     var cnt = load64(reader + _CHITRA_BR_CNT);
     if (cnt == 0) {
-        _jpeg_br_load_byte(reader);
+        _chitra_jpeg_br_load_byte(reader);
         cnt = load64(reader + _CHITRA_BR_CNT);
     }
     # ⛔⛔ B-5 (1.0.3) — THE FABRICATION POINT, AND THEREFORE THE ONLY HONEST
@@ -318,9 +318,9 @@ fn _jpeg_br_bit(reader): i64 {
     # precisely what _CHITRA_BR_EOD is defined to mean twenty lines above: "set the
     # moment the reader needs a byte the input does not contain."
     #
-    # `_jpeg_br_load_byte` already set it for a span that simply ran out. What
+    # `_chitra_jpeg_br_load_byte` already set it for a span that simply ran out. What
     # it did NOT set it for was a LATCHED MARKER — and the only markers inside
-    # a scan's span are RSTn, because _jpeg_entropy_span ends the span at the
+    # a scan's span are RSTn, because _chitra_jpeg_entropy_span ends the span at the
     # first marker that is neither stuffing nor a restart. So an RSTn the
     # decoder never asked for (no DRI, DRI=0, or the wrong interval) latched,
     # every subsequent MCU was fabricated from zero bits, and `seen_iend` still
@@ -328,7 +328,7 @@ fn _jpeg_br_bit(reader): i64 {
     # bottom half is invented. Two bytes inserted mid-scan were enough.
     #
     # ⚠ Setting it at the latch instead would be wrong: a LEGITIMATE restart
-    # also latches, and `_jpeg_br_restart` then consumes it and clears
+    # also latches, and `_chitra_jpeg_br_restart` then consumes it and clears
     # _CHITRA_BR_MARKER. Nothing is fabricated on that path and it must keep reporting
     # a clean close. Fabrication, not latching, is the event worth recording.
     if (cnt == 0) {
@@ -341,11 +341,11 @@ fn _jpeg_br_bit(reader): i64 {
 }
 
 # RECEIVE: read n bits as an unsigned value (T.81 § F.2.2.4).
-fn _jpeg_br_bits(reader, n): i64 {
+fn _chitra_jpeg_br_bits(reader, n): i64 {
     var v = 0;
     var i = 0;
     while (i < n) {
-        v = (v << 1) | _jpeg_br_bit(reader);
+        v = (v << 1) | _chitra_jpeg_br_bit(reader);
         i = i + 1;
     }
     return v;
@@ -353,7 +353,7 @@ fn _jpeg_br_bits(reader, n): i64 {
 
 # EXTEND a value received with n bits to its signed coefficient (T.81 § F.2.2.1,
 # figure F.12): values below 2^(n-1) are negative.
-fn _jpeg_extend(v, n): i64 {
+fn _chitra_jpeg_extend(v, n): i64 {
     if (n == 0) { return 0; }
     if (v < (1 << (n - 1))) {
         return v - (1 << n) + 1;
@@ -365,10 +365,10 @@ fn _jpeg_extend(v, n): i64 {
 # maxcode table, extending the code one bit per length until it fits. Returns
 # the symbol (0..255), or -1 on an undecodable code (no length matched, or an
 # index outside the table's symbol list — incomplete-table defense).
-fn _jpeg_decode(reader, table): i64 {
-    var code = _jpeg_br_bit(reader);
+fn _chitra_jpeg_decode(reader, table): i64 {
+    var code = _chitra_jpeg_br_bit(reader);
     var L = 1;
-    var maxc = _jpeg_huff_maxcode(table, 1);
+    var maxc = _chitra_jpeg_huff_maxcode(table, 1);
     var done = 0;
     var bad = 0;
     while (done == 0) {
@@ -377,21 +377,21 @@ fn _jpeg_decode(reader, table): i64 {
             L = L + 1;
             if (L > 16) { done = 1; bad = 1; }
             if (done == 0) {
-                code = (code << 1) | _jpeg_br_bit(reader);
-                maxc = _jpeg_huff_maxcode(table, L);
+                code = (code << 1) | _chitra_jpeg_br_bit(reader);
+                maxc = _chitra_jpeg_huff_maxcode(table, L);
             }
         }
     }
     # The three refusals below back each other up (gate-4, 1.1.1): for a table
-    # _jpeg_huff_build made from the BITS that also set its count, a code that
+    # _chitra_jpeg_huff_build made from the BITS that also set its count, a code that
     # matches length L indexes inside the table, and one that matches no length
     # reaches L = 17, where the index checks refuse it. Neutering any one alone
     # is an equivalent mutant; they are defence in depth, kept deliberately.
     if (bad == 1) { return 0 - 1; }
-    var idx = _jpeg_huff_valptr(table, L) + code - _jpeg_huff_mincode(table, L);
+    var idx = _chitra_jpeg_huff_valptr(table, L) + code - _chitra_jpeg_huff_mincode(table, L);
     if (idx < 0) { return 0 - 1; }
-    if (idx >= _jpeg_huff_count(table)) { return 0 - 1; }
-    return _jpeg_huff_val(table, idx);
+    if (idx >= _chitra_jpeg_huff_count(table)) { return 0 - 1; }
+    return _chitra_jpeg_huff_val(table, idx);
 }
 
 # Decode one 8x8 block's 64 coefficients in zig-zag order into zz_out (64 i64,
@@ -399,17 +399,17 @@ fn _jpeg_decode(reader, table): i64 {
 # run/size (RRRR/SSSS) coding with ZRL (16-zero run) and EOB (T.81 § F.2.2.2).
 # Returns the new DC predictor value; on a corrupt stream sets *err_out to a
 # CHITRA_ERR_JPEG_ENTROPY ChitraErr and returns 0.
-fn _jpeg_decode_block(reader, dct, act, pred, zz_out, err_out): i64 {
+fn _chitra_jpeg_decode_block(reader, dct, act, pred, zz_out, err_out): i64 {
     store64(err_out, 0);
     var i = 0;
     while (i < 64) { store64(zz_out + i * 8, 0); i = i + 1; }
 
-    var t = _jpeg_decode(reader, dct);
+    var t = _chitra_jpeg_decode(reader, dct);
     if (t < 0) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY)); return 0; }
     # DC magnitude category: 0..11 for 8-bit baseline (T.81 Table F.1).
     if (t > 11) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY)); return 0; }
     var diff = 0;
-    if (t > 0) { diff = _jpeg_extend(_jpeg_br_bits(reader, t), t); }
+    if (t > 0) { diff = _chitra_jpeg_extend(_chitra_jpeg_br_bits(reader, t), t); }
     var dc = pred + diff;
     store64(zz_out + 0, dc);
 
@@ -421,7 +421,7 @@ fn _jpeg_decode_block(reader, dct, act, pred, zz_out, err_out): i64 {
     while (done == 0) {
         if (k > 63) { done = 1; }
         if (done == 0) {
-            rs = _jpeg_decode(reader, act);
+            rs = _chitra_jpeg_decode(reader, act);
             if (rs < 0) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY)); done = 1; }
             if (done == 0) {
                 r = (rs >> 4) & 15;
@@ -450,7 +450,7 @@ fn _jpeg_decode_block(reader, dct, act, pred, zz_out, err_out): i64 {
                     k = k + r;
                     if (k > 63) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY)); done = 1; }
                     if (done == 0) {
-                        store64(zz_out + k * 8, _jpeg_extend(_jpeg_br_bits(reader, s), s));
+                        store64(zz_out + k * 8, _chitra_jpeg_extend(_chitra_jpeg_br_bits(reader, s), s));
                         k = k + 1;
                     }
                 }

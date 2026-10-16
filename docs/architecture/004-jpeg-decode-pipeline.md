@@ -62,10 +62,10 @@ order:
 
 | Module | Lines | Owns |
 |---|---|---|
-| [`../../src/jpeg_huffman.cyr`](../../src/jpeg_huffman.cyr) | 462 | `HuffTable` record (MINCODE/MAXCODE/VALPTR/COUNT/HUFFVAL); `_jpeg_huff_build` (Annex C/F table derivation + over-subscription reject); the entropy bit-reader (`_jpeg_br_*`) with byte-stuffing + marker/restart handling, the restart-sequence check and the unconsumed-tail check (`_jpeg_br_tail_clean`); `_jpeg_decode` (DECODE), `_jpeg_br_bits` (RECEIVE), `_jpeg_extend` (EXTEND); `_jpeg_decode_block` (one 8×8 block: DC diff + AC run/size) |
-| [`../../src/jpeg_idct.cyr`](../../src/jpeg_idct.cyr) | 226 | The zig-zag→natural index map; `_jpeg_descale` (signed round-to-nearest); the libjpeg `jpeg_idct_islow` integer IDCT; `_jpeg_idct_block` (dequant + de-zig-zag + 2-D IDCT + level-shift+clamp) |
-| [`../../src/jpeg_markers.cyr`](../../src/jpeg_markers.cyr) | 1060 | `ChitraJpegFrame` record + accessors; the baseline ceilings; `chitra_jpeg_check_signature`; the SOI→SOS marker walk `chitra_jpeg_scan_markers`; `_jpeg_parse_{sof0,dqt,dht,dri,app0,app14}` and the lazy table stores; `_jpeg_colour_evidence_ok` (the APP14 judgement at the first SOS); `_jpeg_resume_to_next_scan` (the walk between scans); `_jpeg_marker_action` (the non-baseline reject table) |
-| [`../../src/jpeg.cyr`](../../src/jpeg.cyr) | 1327 | Public API: `chitra_jpeg_decode`, `chitra_jpeg_decode_rgba8`, `chitra_image_decode` (the **four-format** signature router — PNG, JPEG, BMP, GIF), `chitra_image_decode_budget`; `_jpeg_parse_sos`; and the three functions 0.8.0 split `_jpeg_decode_scan` into — `_jpeg_decode_scans` (multi-scan driver), `_jpeg_decode_one_scan` (MCU loop + plane placement), `_jpeg_build_image` (box upsample + colour pass + `ChitraImage`) — plus `_jpeg_entropy_span`, `_jpeg_structural_espan` (the allocation-free span pre-pass, 1.1.1) and `_jpeg_declared_dims` (the budget's geometry read) |
+| [`../../src/jpeg_huffman.cyr`](../../src/jpeg_huffman.cyr) | 462 | `HuffTable` record (MINCODE/MAXCODE/VALPTR/COUNT/HUFFVAL); `_chitra_jpeg_huff_build` (Annex C/F table derivation + over-subscription reject); the entropy bit-reader (`_jpeg_br_*`) with byte-stuffing + marker/restart handling, the restart-sequence check and the unconsumed-tail check (`_chitra_jpeg_br_tail_clean`); `_chitra_jpeg_decode` (DECODE), `_chitra_jpeg_br_bits` (RECEIVE), `_chitra_jpeg_extend` (EXTEND); `_chitra_jpeg_decode_block` (one 8×8 block: DC diff + AC run/size) |
+| [`../../src/jpeg_idct.cyr`](../../src/jpeg_idct.cyr) | 226 | The zig-zag→natural index map; `_chitra_jpeg_descale` (signed round-to-nearest); the libjpeg `jpeg_idct_islow` integer IDCT; `_chitra_jpeg_idct_block` (dequant + de-zig-zag + 2-D IDCT + level-shift+clamp) |
+| [`../../src/jpeg_markers.cyr`](../../src/jpeg_markers.cyr) | 1060 | `ChitraJpegFrame` record + accessors; the baseline ceilings; `chitra_jpeg_check_signature`; the SOI→SOS marker walk `chitra_jpeg_scan_markers`; `_jpeg_parse_{sof0,dqt,dht,dri,app0,app14}` and the lazy table stores; `_chitra_jpeg_colour_evidence_ok` (the APP14 judgement at the first SOS); `_chitra_jpeg_resume_to_next_scan` (the walk between scans); `_chitra_jpeg_marker_action` (the non-baseline reject table) |
+| [`../../src/jpeg.cyr`](../../src/jpeg.cyr) | 1327 | Public API: `chitra_jpeg_decode`, `chitra_jpeg_decode_rgba8`, `chitra_image_decode` (the **four-format** signature router — PNG, JPEG, BMP, GIF), `chitra_image_decode_budget`; `_chitra_jpeg_parse_sos`; and the three functions 0.8.0 split `_jpeg_decode_scan` into — `_chitra_jpeg_decode_scans` (multi-scan driver), `_chitra_jpeg_decode_one_scan` (MCU loop + plane placement), `_chitra_jpeg_build_image` (box upsample + colour pass + `ChitraImage`) — plus `_chitra_jpeg_entropy_span`, `_chitra_jpeg_structural_espan` (the allocation-free span pre-pass, 1.1.1) and `_chitra_jpeg_declared_dims` (the budget's geometry read) |
 
 ## Why huffman + idct precede markers in the include chain
 
@@ -75,9 +75,9 @@ order is huffman → idct → markers → public. Two reasons, both required by 
 flat-module / strip-concatenation invariant ([item 002](002-flat-modules-distlib-concatenation.md)):
 
 1. **`jpeg_huffman.cyr` is frame-independent table machinery.** Its
-   `_jpeg_huff_build` builds a canonical decode table from a DHT's `BITS` +
+   `_chitra_jpeg_huff_build` builds a canonical decode table from a DHT's `BITS` +
    `HUFFVAL` into caller-owned storage; it knows nothing about `ChitraJpegFrame`.
-   But `jpeg_markers.cyr`'s DHT parser (`_jpeg_parse_dht`) *calls* `_jpeg_huff_build`
+   But `jpeg_markers.cyr`'s DHT parser (`_chitra_jpeg_parse_dht`) *calls* `_chitra_jpeg_huff_build`
    and references `_CHITRA_HT_SIZE` / `HT_*` field offsets to allocate and index the
    frame's 8-table storage. Since concatenation puts a use after its declaration
    only if the declaring module is listed first, `jpeg_huffman.cyr` must come
@@ -86,7 +86,7 @@ flat-module / strip-concatenation invariant ([item 002](002-flat-modules-distlib
 2. **`jpeg_idct.cyr` is likewise frame-independent** (it operates on caller
    buffers: a 64-i64 zig-zag block, a 64-i64 quant table, a 64-i64 output). It is
    not called by the marker walk at all — it is called from `jpeg.cyr` — but it
-   defines `_jpeg_descale`, which `jpeg.cyr`'s color pass also uses, so it sits
+   defines `_chitra_jpeg_descale`, which `jpeg.cyr`'s color pass also uses, so it sits
    above `jpeg.cyr`. Placing it before `jpeg_markers.cyr` keeps the two
    frame-independent leaf modules grouped ahead of the frame-aware ones.
 
@@ -120,7 +120,7 @@ The handoff crosses three functions in `jpeg.cyr`:
 - `chitra_jpeg_scan_markers` fills the SOF fields (width/height/precision/ncomp/
   max_h/max_v, per-component `id`/`H`/`V`/`Tq`), the tables, the restart
   interval, and records `_CHITRA_JF_SOS_OFFSET` (the byte offset of the SOS length field).
-- `_jpeg_parse_sos` re-opens a cursor at `_CHITRA_JF_SOS_OFFSET`, matches each scan
+- `_chitra_jpeg_parse_sos` re-opens a cursor at `_CHITRA_JF_SOS_OFFSET`, matches each scan
   component back to a frame component by `Cs == id` — requiring each to come later in the
   frame than the one before it, since T.81 § B.2.3 keeps a scan's list in frame order and
   libjpeg refuses any other (1.1.1) — and writes the **per-scan**
@@ -134,12 +134,12 @@ The handoff crosses three functions in `jpeg.cyr`:
   They are a property of the *scan*, not the component: in a multi-scan file a
   component absent from a later scan would otherwise retain the earlier scan's
   tables. 0.8.0 deleted `JF_COMP_TD` / `JF_COMP_TA` for exactly that reason.
-- `_jpeg_decode_scans` drives the scans and `_jpeg_decode_one_scan` reads it all
+- `_chitra_jpeg_decode_scans` drives the scans and `_chitra_jpeg_decode_one_scan` reads it all
   back through accessors, never touching raw offsets.
 
 ## The MCU / sampling-factor / plane / box-upsample model
 
-`_jpeg_decode_one_scan` is the heart. For an **interleaved** scan the MCU is
+`_chitra_jpeg_decode_one_scan` is the heart. For an **interleaved** scan the MCU is
 `max_h × max_v` data units wide/tall
 (`mcu_w = 8*max_h`, `mcu_h = 8*max_v`); the image is covered by
 `ceil(w/mcu_w) × ceil(h/mcu_h)` MCUs. Each component `i` contributes `Hi × Vi`
@@ -150,8 +150,8 @@ rather than interleaving into one buffer — is what lets arbitrary `Hi,Vi`
 combinations and the three named subsampling ratios share one code path.
 
 Per MCU, the loop iterates components in scan order, and within a component the
-`Vi × Hi` blocks in raster order; each block goes `_jpeg_decode_block` (entropy)
-→ `_jpeg_idct_block` (dequant + IDCT) → scatter the 64 samples into the plane at
+`Vi × Hi` blocks in raster order; each block goes `_chitra_jpeg_decode_block` (entropy)
+→ `_chitra_jpeg_idct_block` (dequant + IDCT) → scatter the 64 samples into the plane at
 `((mcu_y*Vi + by)*8 + r, (mcu_x*Hi + bx)*8 + c)`. DC predictors live in a small
 per-component array and persist across MCUs (DC is differential).
 
@@ -159,7 +159,7 @@ After all MCUs decode, the color pass produces RGBA8. Upsampling is **box** (no
 interpolation): each output pixel `(x,y)` samples its component plane at
 `(y*Vi/max_v)*comppw + (x*Hi/max_h)` — integer division, nearest-lower sample.
 For 1 component the gray value fills R=G=B with A=255; for 3 it goes through
-`_jpeg_ycc_to_rgb`. The result `ChitraImage` carries a JPEG sentinel in
+`_chitra_jpeg_ycc_to_rgb`. The result `ChitraImage` carries a JPEG sentinel in
 `source_color_type` — `0x100 | ncomp`, with **bit 4 set when the components are
 RGB** rather than YCbCr: `0x101` gray, `0x103` YCbCr, `0x113` RGB (0.6.1). A
 consumer's PNG 0/2/3/4/6 switch can never alias any of them. The order of
@@ -167,7 +167,7 @@ authority for that decision — a JFIF APP0 first (1.0.3; it counts only with a
 payload of at least 14 bytes, 1.1.1), then the APP14 transform, else the
 component ids, else YCbCr — is
 [ADR 0009](../adr/0009-jpeg-colour-transform.md). The evidence is whatever
-precedes the **first** SOS: `_jpeg_resume_to_next_scan` skips APP0/APP14 between
+precedes the **first** SOS: `_chitra_jpeg_resume_to_next_scan` skips APP0/APP14 between
 scans, so a later segment cannot re-decide samples already decoded (1.1.1). An
 *undefined* transform is declined rather than guessed, at the first SOS and only
 where it decides anything — a 3-component frame with no JFIF.
@@ -191,7 +191,7 @@ and wrong for every subsampled colour file.
 The rule that replaced it keys on the **scan**, not the frame:
 
 - A scan is non-interleaved when **`Ns == 1`**, whatever `Nf` is.
-- `_jpeg_decode_one_scan` then walks a scan grid
+- `_chitra_jpeg_decode_one_scan` then walks a scan grid
   `s_cols × s_rows = ceil(x_i/8) × ceil(y_i/8)` over that component's own
   § A.1.1 sample dimensions, one data unit per MCU, with `H_i = V_i = 1` blocks
   per MCU — and `max_h` / `max_v` are left **alone**.
@@ -220,7 +220,7 @@ was false, and the amendment records why).
 
 **Termination is the coverage bitmask, not a counter.** A component may be
 decoded exactly once, so a file gets at most `Nf` scans and every scan must name
-something new; `_jpeg_decode_scans` terminates on `_CHITRA_JF_COVERED` rather than on a
+something new; `_chitra_jpeg_decode_scans` terminates on `_CHITRA_JF_COVERED` rather than on a
 scan limit standing in for it. No scan cap and no resume tripwire were added,
 because neither could fire before coverage does.
 
@@ -237,7 +237,7 @@ stream's framing intrudes on the bit stream — a thing a reader cannot derive f
 the DECODE algorithm alone:
 
 - **Byte stuffing.** A `0xFF 0x00` pair in the stream is a literal `0xFF` data
-  byte (`_jpeg_br_load_byte` loads the `0xFF` and discards the `0x00`).
+  byte (`_chitra_jpeg_br_load_byte` loads the `0xFF` and discards the `0x00`).
 - **Fill bytes are collapsed first (0.3.3).** T.81 § B.1.1.2 permits a marker to
   be preceded by *any number* of `0xFF` fill bytes, so a run of them is consumed
   before the next byte is classified. Before 0.3.3 the entropy reader took the
@@ -259,14 +259,14 @@ the DECODE algorithm alone:
   indistinguishable from zero-padding past a real EOI, so the marker alone
   cannot say whether the scan actually delivered its data. A separate `_CHITRA_BR_EOD`
   flag is set when the reader exhausts its span, read back through
-  `_jpeg_br_eod` and folded into the `ChitraImage`'s `seen_iend`. **The reader
+  `_chitra_jpeg_br_eod` and folded into the `ChitraImage`'s `seen_iend`. **The reader
   is bounded to the scan's own entropy span**, not to the end of the file —
   which 0.8.0 made necessary, since the bytes after a scan are now the next
   scan's header, and which is also what finally made `seen_iend` honest for a
   file truncated mid-entropy with a real `FF D9` appended.
-- **Restart resync.** `_jpeg_decode_one_scan` counts decoded MCUs; when
+- **Restart resync.** `_chitra_jpeg_decode_one_scan` counts decoded MCUs; when
   `restart_interval > 0` and `mi % ri == 0` (and `mi > 0`), it calls
-  `_jpeg_br_restart`, which discards the partial byte (byte-aligns), requires the
+  `_chitra_jpeg_br_restart`, which discards the partial byte (byte-aligns), requires the
   next two bytes to be `0xFF` followed by `0xD0..0xD7` (RSTn), advances past them,
   clears `_CHITRA_BR_MARKER`, and the caller resets all DC predictors to 0. Something
   other than an RSTn at that point returns −1, surfaced as
@@ -281,10 +281,10 @@ the DECODE algorithm alone:
   conditions, any one of which makes the driver report `seen_iend = 0` — never
   an error: `_CHITRA_BR_EOD` (a bit was fabricated), `_CHITRA_BR_DAMAGED` (a restart out of
   sequence), and entropy bytes left in the span that no MCU consumed
-  (`_jpeg_br_tail_clean`; only a trailing RSTn is tolerated — libjpeg's
+  (`_chitra_jpeg_br_tail_clean`; only a trailing RSTn is tolerated — libjpeg's
   "extraneous bytes"). The file must also end its last scan at a real EOI.
 
-`_jpeg_decode` and `_jpeg_decode_block` defend the table edges: an undecodable
+`_chitra_jpeg_decode` and `_chitra_jpeg_decode_block` defend the table edges: an undecodable
 code (no length ≤ 16 matched, or a symbol index outside the table's `COUNT`)
 returns −1 → `CHITRA_ERR_JPEG_ENTROPY`. The magnitude categories are bounded to
 their 8-bit baseline ranges — **DC `t > 11`** and **AC `s > 10`** are rejected
@@ -302,7 +302,7 @@ These three are pure Cyrius/representation quirks — the IDCT and color math ar
 
 1. **`>>` is a LOGICAL shift in Cyrius.** It is therefore wrong for the negative
    intermediates the IDCT and color conversion produce. Both modules use
-   `_jpeg_descale` ([`../../src/jpeg_idct.cyr`](../../src/jpeg_idct.cyr) lines
+   `_chitra_jpeg_descale` ([`../../src/jpeg_idct.cyr`](../../src/jpeg_idct.cyr) lines
    117–124) — signed division with round-to-nearest, symmetric about zero —
    instead of `>>` for descaling. Relatedly, the even-part `CONST_BITS` scaling
    multiplies by `* 8192` (= `1<<13`) rather than left-shifting, so negative
@@ -310,7 +310,7 @@ These three are pure Cyrius/representation quirks — the IDCT and color math ar
    output is verified **byte-identical to ImageMagick** on a real 16×16 baseline
    gradient JPEG with real Annex K Huffman tables and AC entropy.
 
-2. **The marker-action integer convention.** `_jpeg_marker_action` returns a
+2. **The marker-action integer convention.** `_chitra_jpeg_marker_action` returns a
    small positive *action* code (1=SOF0/parse, 2=SOS/stop, 3=standalone,
    4=length-bearing/skip, 5=DQT, 6=DHT, 7=DRI, 8=APP14, 9=APP0) **or** a
    `CHITRA_ERR_*` reject code for a non-baseline mode. Those two numeric ranges
@@ -323,7 +323,7 @@ These three are pure Cyrius/representation quirks — the IDCT and color math ar
    struct-of-arrays sugar, so the scan decoder keeps stack arrays (`preds`,
    `dctabs`, `actabs`, `quants`, `comph`, `compv`) indexed by `comp * 8` (i64
    stride). Two of them — `planes` and `comppw` — live one level up in
-   `_jpeg_decode_scans` and are indexed by **frame** component rather than scan
+   `_chitra_jpeg_decode_scans` and are indexed by **frame** component rather than scan
    component, because a plane outlives the scan that fills it (0.8.0: a
    multi-scan file fills each plane in a different scan). Likewise
    `ChitraJpegFrame`'s per-component specs are a flat block of
@@ -344,8 +344,8 @@ are reused where they fit: `SIGNATURE` 1, `TRUNCATED` 2, `OOM` 6,
 Ceilings are validated **before** any allocation depends on them. The shared
 pixel/byte/dimension caps come from `png_chunks.cyr`
 (`CHITRA_MAX_PIXELS` 16777216, `CHITRA_MAX_RAW_BYTES` 268435456,
-`CHITRA_MAX_DIM` 65535) and gate `_jpeg_parse_sof0` (width/height),
-`_jpeg_decode_one_scan` (per-plane byte counts) and `_jpeg_build_image` (the
+`CHITRA_MAX_DIM` 65535) and gate `_chitra_jpeg_parse_sof0` (width/height),
+`_chitra_jpeg_decode_one_scan` (per-plane byte counts) and `_chitra_jpeg_build_image` (the
 final RGBA byte count). JPEG adds its own in
 `jpeg_markers.cyr`: `CHITRA_MAX_COMPONENTS` 4, `CHITRA_MAX_SAMP_FACTOR` 4,
 `CHITRA_MAX_BLOCKS_PER_MCU` 10, `CHITRA_MAX_QUANT_TABLES` 4,
@@ -356,7 +356,7 @@ That last one is the ceiling a reader is least likely to expect, so it is worth
 stating why it exists separately from the byte caps above. The byte caps bound
 *one* allocation; the ratio cap bounds the allocation against the **entropy
 span** — the bytes the decoder actually decodes, computed by
-`_jpeg_entropy_span`, and explicitly **not** whole-file length. 0.6.1 fixed it
+`_chitra_jpeg_entropy_span`, and explicitly **not** whole-file length. 0.6.1 fixed it
 after measuring the difference: a 16,556-byte file padded with 16,404 bytes of
 *skipped* APPn segments bought a 4096×4096 decode and 117,463,728 bytes, because
 padding it never read was inflating its own allowance. The general form of that
@@ -378,7 +378,7 @@ than a stream of large ones.
 the same inequality, `output > denominator × CHITRA_MAX_JPEG_RATIO`, refusing
 with `CHITRA_ERR_DIMENSIONS`; what differs is the denominator and when it runs.
 
-1. **GATE 0** (`_jpeg_decode_scans`, B-3, 1.0.3) — the RGBA output `w·h·4`
+1. **GATE 0** (`_chitra_jpeg_decode_scans`, B-3, 1.0.3) — the RGBA output `w·h·4`
    against `len`. O(1), before anything is allocated. It is strictly weaker than
    GATE 2 (a sum of spans inside the file can never exceed `len`), so it moves
    no accept/reject outcome. It was added because GATE 2 then ran only after
@@ -386,12 +386,12 @@ with `CHITRA_ERR_DIMENSIONS`; what differs is the denominator and when it runs.
    50,354,832 bytes to be refused. ⚠ `len` counts padding, so GATE 0 alone
    cannot keep the planes unpaid — see the next item. What it still decides is
    the *code* for a frame none of whose scan headers can be read.
-2. **GATE 2, early** (`_jpeg_decode_scans`, 1.1.1) — the RGBA output against the
+2. **GATE 2, early** (`_chitra_jpeg_decode_scans`, 1.1.1) — the RGBA output against the
    **summed entropy spans of every scan**, computed before a single plane exists
-   by `_jpeg_structural_espan`. B-3 had assumed that sum "can only" be known once
+   by `_chitra_jpeg_structural_espan`. B-3 had assumed that sum "can only" be known once
    every scan is decoded; it is byte-structural. The pre-pass reads only the
    fields that place the next scan (`Ls`, `Ns`, the `Cs` list), measures each
-   span with the same `_jpeg_entropy_span` the decode uses, skips everything
+   span with the same `_chitra_jpeg_entropy_span` the decode uses, skips everything
    else — DQT, DHT, DRI, APPn — by its length field, decodes nothing and
    allocates nothing. It is **never stricter than the decode**: when it reaches
    full coverage its sum is exactly GATE 2's denominator; when it stops short
@@ -404,11 +404,11 @@ with `CHITRA_ERR_DIMENSIONS`; what differs is the denominator and when it runs.
    50,354,832 bytes back, and 12,300 bytes before the frame or after EOI did it
    for a single scan. All of those now refuse for the 22,160-byte per-frame
    table cost.
-3. **GATE 1** (`_jpeg_decode_one_scan`, 0.8.0) — each scan's planes against
+3. **GATE 1** (`_chitra_jpeg_decode_one_scan`, 0.8.0) — each scan's planes against
    **that scan's** span, before that scan's planes are allocated. Testing the
    whole output against the first scan's span would reject files djpeg reads: a
    chroma-first scan script spends very unevenly across its scans.
-4. **GATE 2, post-decode** (`_jpeg_decode_scans`, 0.8.0) — the same test as the
+4. **GATE 2, post-decode** (`_chitra_jpeg_decode_scans`, 0.8.0) — the same test as the
    early copy, against the summed spans of the scans actually decoded. Since
    1.1.1 it is the **backstop**: the two walks place each scan at the same
    offset and measure it with the same function, so it cannot fire while they
@@ -420,13 +420,13 @@ spreading its amplification across many cheap scans, the second (until 1.1.1)
 ran too late to stop any of them.
 
 Two further hardening checks are worth naming:
-`_jpeg_parse_sof0` rejects `Hi` or `Vi` of 0 (the CVE-2018-11212 div-by-zero
+`_chitra_jpeg_parse_sof0` rejects `Hi` or `Vi` of 0 (the CVE-2018-11212 div-by-zero
 class) and rejects duplicate component ids — but
-**not** `ΣHi·Vi > 10`, which 0.8.0 moved to `_jpeg_parse_sos` conditioned on
+**not** `ΣHi·Vi > 10`, which 0.8.0 moved to `_chitra_jpeg_parse_sos` conditioned on
 `Ns > 1`, because § B.2.3 scopes it to an interleaved MCU and applying it
 frame-wide rejected files libjpeg writes (the live check is
 [`../../src/jpeg.cyr:213`](../../src/jpeg.cyr)); and
-`_jpeg_huff_build` rejects an over-subscribed table (`code >= 1<<L`) — the check
+`_chitra_jpeg_huff_build` rejects an over-subscribed table (`code >= 1<<L`) — the check
 that stops a malformed DHT from producing out-of-range code values
 ([`../../src/jpeg_huffman.cyr`](../../src/jpeg_huffman.cyr) line 73). The marker
 walk itself cannot loop forever: every iteration advances ≥ 2 bytes or terminates
@@ -445,7 +445,7 @@ The 462 assertions in `jpeg.tcyr`, the 238 in `jpeg_noninterleaved.tcyr` and the
 harness is the generated coverage that complements it.
 
 **Which reference decoder, and when.** `djpeg -nosmooth` is the primary oracle
-for every JPEG cell. chitra matches it exactly on most files and can differ by at most 1 LSB per IDCT output on any file — `_jpeg_descale` rounds half away from zero where libjpeg's arithmetic-shift DESCALE rounds half up, which is inside IEEE 1180 tolerance.
+for every JPEG cell. chitra matches it exactly on most files and can differ by at most 1 LSB per IDCT output on any file — `_chitra_jpeg_descale` rounds half away from zero where libjpeg's arithmetic-shift DESCALE rounds half up, which is inside IEEE 1180 tolerance.
 ImageMagick is a valid *independent second* oracle only for grayscale and 4:4:4:
 it upsamples chroma with a fancy (triangle) filter where chitra and
 `djpeg -nosmooth` use box, so on a 4:2:0 file it differs in 937 of 1536 bytes at

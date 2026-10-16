@@ -126,22 +126,22 @@ fn _chitra_unfilter_image(inflated, pixels, zero_row, height, row_bytes, bpp): i
 # ================================================================
 fn _chitra_parse_ihdr(cur, raw): i64 {
     # Need at least 4(len)+4(type)+13(data)+4(crc) = 25 bytes.
-    if (_cur_can_read(cur, 25) == 0) { return chitra_err(CHITRA_ERR_TRUNCATED); }
-    var chunk_len = _cur_u32_be(cur);
+    if (_chitra_cur_can_read(cur, 25) == 0) { return chitra_err(CHITRA_ERR_TRUNCATED); }
+    var chunk_len = _chitra_cur_u32_be(cur);
     if (chunk_len != 13) { return chitra_err(CHITRA_ERR_BAD_CHUNK); }
 
     # CRC covers the 4 type bytes + 13 data bytes (spec § 5.3 — length
     # is excluded). Compute over the 17 bytes at the current position
     # before consuming them.
-    var crc_ptr = _cur_ptr(cur);
+    var crc_ptr = _chitra_cur_ptr(cur);
     var type_ptr = crc_ptr;
-    if (_chunk_is_ihdr(type_ptr) == 0) { return chitra_err(CHITRA_ERR_BAD_CHUNK); }
+    if (_chitra_chunk_is_ihdr(type_ptr) == 0) { return chitra_err(CHITRA_ERR_BAD_CHUNK); }
 
     var computed = crc32(crc_ptr, 17);
-    _cur_skip(cur, 4);                     # past type
-    var data_ptr = _cur_ptr(cur);
-    _cur_skip(cur, 13);                    # past 13 data bytes
-    var stored = _cur_u32_be(cur);         # 4-byte CRC
+    _chitra_cur_skip(cur, 4);                     # past type
+    var data_ptr = _chitra_cur_ptr(cur);
+    _chitra_cur_skip(cur, 13);                    # past 13 data bytes
+    var stored = _chitra_cur_u32_be(cur);         # 4-byte CRC
     if ((computed & 4294967295) != (stored & 4294967295)) {
         return chitra_err(CHITRA_ERR_CRC);
     }
@@ -209,25 +209,25 @@ fn _chitra_parse_ihdr(cur, raw): i64 {
 # Adam7 interlace (spec § 8). Seven passes, each a reduced sub-image
 # at a fixed (x_start, y_start) offset and (x_step, y_step) stride.
 # ================================================================
-fn _adam7_xs(p): i64 {
+fn _chitra_adam7_xs(p): i64 {
     if (p == 0) { return 0; }   if (p == 1) { return 4; }
     if (p == 2) { return 0; }   if (p == 3) { return 2; }
     if (p == 4) { return 0; }   if (p == 5) { return 1; }
     return 0;
 }
-fn _adam7_ys(p): i64 {
+fn _chitra_adam7_ys(p): i64 {
     if (p == 0) { return 0; }   if (p == 1) { return 0; }
     if (p == 2) { return 4; }   if (p == 3) { return 0; }
     if (p == 4) { return 2; }   if (p == 5) { return 0; }
     return 1;
 }
-fn _adam7_xstep(p): i64 {
+fn _chitra_adam7_xstep(p): i64 {
     if (p == 0) { return 8; }   if (p == 1) { return 8; }
     if (p == 2) { return 4; }   if (p == 3) { return 4; }
     if (p == 4) { return 2; }   if (p == 5) { return 2; }
     return 1;
 }
-fn _adam7_ystep(p): i64 {
+fn _chitra_adam7_ystep(p): i64 {
     if (p == 0) { return 8; }   if (p == 1) { return 8; }
     if (p == 2) { return 8; }   if (p == 3) { return 4; }
     if (p == 4) { return 4; }   if (p == 5) { return 2; }
@@ -236,7 +236,7 @@ fn _adam7_ystep(p): i64 {
 
 # Pixels in a pass row / column for an image of (width|height): the count
 # of grid points at (start, step) within the dimension. 0 if start>=dim.
-fn _adam7_count(dim, start, step): i64 {
+fn _chitra_adam7_count(dim, start, step): i64 {
     if (dim <= start) { return 0; }
     return (dim - start + step - 1) / step;
 }
@@ -249,8 +249,8 @@ fn _chitra_adam7_inflated_size(width, height, channels, depth): i64 {
     var total = 0;
     var p = 0;
     while (p < 7) {
-        var pw = _adam7_count(width, _adam7_xs(p), _adam7_xstep(p));
-        var ph = _adam7_count(height, _adam7_ys(p), _adam7_ystep(p));
+        var pw = _chitra_adam7_count(width, _chitra_adam7_xs(p), _chitra_adam7_xstep(p));
+        var ph = _chitra_adam7_count(height, _chitra_adam7_ys(p), _chitra_adam7_ystep(p));
         if (pw > 0 && ph > 0) {
             var prow = (pw * bpp_bits + 7) / 8;
             total = total + ph * (1 + prow);
@@ -292,12 +292,12 @@ fn _chitra_deinterlace(inflated, pixels, width, height, channels, depth, err_out
     var off = 0;
     var pass = 0;
     while (pass < 7) {
-        var xs = _adam7_xs(pass);
-        var ys = _adam7_ys(pass);
-        var xstep = _adam7_xstep(pass);
-        var ystep = _adam7_ystep(pass);
-        var pass_w = _adam7_count(width, xs, xstep);
-        var pass_h = _adam7_count(height, ys, ystep);
+        var xs = _chitra_adam7_xs(pass);
+        var ys = _chitra_adam7_ys(pass);
+        var xstep = _chitra_adam7_xstep(pass);
+        var ystep = _chitra_adam7_ystep(pass);
+        var pass_w = _chitra_adam7_count(width, xs, xstep);
+        var pass_h = _chitra_adam7_count(height, ys, ystep);
         if (pass_w > 0 && pass_h > 0) {
             var prow_bytes = (pass_w * bpp_bits + 7) / 8;
             var prev = zr;
@@ -386,8 +386,8 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
     while (z < CHITRA_PNG_RAW_SIZE) { store8(raw + z, 0); z = z + 1; }
 
     var cur[24];
-    _cur_init(&cur, src, len);
-    _cur_skip(&cur, CHITRA_PNG_MAGIC_LEN);    # past the 8-byte signature
+    _chitra_cur_init(&cur, src, len);
+    _chitra_cur_skip(&cur, CHITRA_PNG_MAGIC_LEN);    # past the 8-byte signature
 
     # IHDR must be the first chunk (spec § 11.2.2).
     var ihdr_err = _chitra_parse_ihdr(&cur, raw);
@@ -410,15 +410,15 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
         # bytes with no IEND yet = truncated stream. Exactly 0 left is a
         # clean (if IEND-less) end; spec § 5.3 tolerates a missing IEND,
         # but we treat truncation conservatively.
-        var rem = _cur_remaining(&cur);
+        var rem = _chitra_cur_remaining(&cur);
         if (rem == 0) { walking = 0; }
         else { if (rem < 8) {
                 store64(err_out, chitra_err(CHITRA_ERR_TRUNCATED));
                 return 0;
             } else {
 
-                var chunk_len = _cur_u32_be(&cur);
-                var type_ptr = _cur_ptr(&cur);
+                var chunk_len = _chitra_cur_u32_be(&cur);
+                var type_ptr = _chitra_cur_ptr(&cur);
                 # chunk_len must not exceed the remaining data (after the 4 type
                 # bytes) plus the 4 CRC bytes. Validate before any scan.
                 if (chunk_len > CHITRA_MAX_RAW_BYTES) {
@@ -426,25 +426,25 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
                     return 0;
                 }
                 # remaining-after-type must hold chunk_len data + 4 CRC.
-                if (_cur_remaining(&cur) < 4 + chunk_len + 4) {
+                if (_chitra_cur_remaining(&cur) < 4 + chunk_len + 4) {
                     store64(err_out, chitra_err(CHITRA_ERR_TRUNCATED));
                     return 0;
                 }
 
-                var is_idat = _chunk_is_idat(type_ptr);
-                var is_iend = _chunk_is_iend(type_ptr);
-                var is_plte = _chunk_is_plte(type_ptr);
-                var is_trns = _chunk_is_trns(type_ptr);
+                var is_idat = _chitra_chunk_is_idat(type_ptr);
+                var is_iend = _chitra_chunk_is_iend(type_ptr);
+                var is_plte = _chitra_chunk_is_plte(type_ptr);
+                var is_trns = _chitra_chunk_is_trns(type_ptr);
 
                 # CRC covers type(4) + data(chunk_len). Compute over the
                 # contiguous span at type_ptr, then compare against the stored
                 # CRC after the data.
                 var computed = crc32(type_ptr, 4 + chunk_len);
-                _cur_skip(&cur, 4);                  # past type
-                var data_off = _cur_pos(&cur);       # byte offset of data within src
-                var data_ptr = _cur_ptr(&cur);
-                _cur_skip(&cur, chunk_len);          # past data
-                var stored = _cur_u32_be(&cur);      # 4-byte CRC
+                _chitra_cur_skip(&cur, 4);                  # past type
+                var data_off = _chitra_cur_pos(&cur);       # byte offset of data within src
+                var data_ptr = _chitra_cur_ptr(&cur);
+                _chitra_cur_skip(&cur, chunk_len);          # past data
+                var stored = _chitra_cur_u32_be(&cur);      # 4-byte CRC
                 if ((computed & 4294967295) != (stored & 4294967295)) {
                     store64(err_out, chitra_err(CHITRA_ERR_CRC));
                     return 0;
@@ -459,7 +459,7 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
                 # it" — for a file the spec makes invalid. IHDR is not
                 # unrecognised; it is out of place (png-8, 1.1.1). Checked
                 # AFTER the CRC so a corrupt chunk still reports as one.
-                if (_chunk_is_ihdr(type_ptr) == 1) {
+                if (_chitra_chunk_is_ihdr(type_ptr) == 1) {
                     store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
                     return 0;
                 }
@@ -714,25 +714,25 @@ fn chitra_png_parse_raw(src, len, err_out): i64 {
     var idat_buf = alloc(idat_total);
     if (idat_buf == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
     var cur2[24];
-    _cur_init(&cur2, src, len);
-    _cur_skip(&cur2, CHITRA_PNG_MAGIC_LEN);
-    _cur_skip(&cur2, 25);                   # past the validated IHDR chunk
+    _chitra_cur_init(&cur2, src, len);
+    _chitra_cur_skip(&cur2, CHITRA_PNG_MAGIC_LEN);
+    _chitra_cur_skip(&cur2, 25);                   # past the validated IHDR chunk
     var copied = 0;
     var walking2 = 1;
     while (walking2 == 1) {
-        if (_cur_remaining(&cur2) < 8) { walking2 = 0; }
+        if (_chitra_cur_remaining(&cur2) < 8) { walking2 = 0; }
         else {
-            var clen = _cur_u32_be(&cur2);
-            var tptr = _cur_ptr(&cur2);
-            var is_i = _chunk_is_idat(tptr);
-            var is_e = _chunk_is_iend(tptr);
-            _cur_skip(&cur2, 4);            # past type
+            var clen = _chitra_cur_u32_be(&cur2);
+            var tptr = _chitra_cur_ptr(&cur2);
+            var is_i = _chitra_chunk_is_idat(tptr);
+            var is_e = _chitra_chunk_is_iend(tptr);
+            _chitra_cur_skip(&cur2, 4);            # past type
             if (is_i == 1 && clen > 0) {
-                memcpy(idat_buf + copied, _cur_ptr(&cur2), clen);
+                memcpy(idat_buf + copied, _chitra_cur_ptr(&cur2), clen);
                 copied = copied + clen;
             }
-            _cur_skip(&cur2, clen);         # past data
-            _cur_skip(&cur2, 4);            # past CRC
+            _chitra_cur_skip(&cur2, clen);         # past data
+            _chitra_cur_skip(&cur2, 4);            # past CRC
             if (is_e == 1) { walking2 = 0; }
         }
     }

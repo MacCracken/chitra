@@ -109,7 +109,7 @@ fn chitra_raw_free(raw): i64 {
 # A 16-byte record:
 #   +0  base ptr  (start of the byte buffer)
 #   +8  pos       (current read offset; 0 <= pos <= len)
-# `len` is carried separately by callers via _cur_remaining(cur, len)
+# `len` is carried separately by callers via _chitra_cur_remaining(cur, len)
 # style? No — to keep every read self-validating we store len too. Use
 # a 24-byte cursor instead:
 #   +0  base, +8 pos, +16 len.
@@ -119,33 +119,33 @@ var _CHITRA_CUR_POS_OFFSET  = 8;
 var _CHITRA_CUR_LEN_OFFSET  = 16;
 
 # Init a stack cursor: caller passes a >=24-byte buffer.
-fn _cur_init(cur, base, len): i64 {
+fn _chitra_cur_init(cur, base, len): i64 {
     store64(cur + _CHITRA_CUR_BASE_OFFSET, base);
     store64(cur + _CHITRA_CUR_POS_OFFSET, 0);
     store64(cur + _CHITRA_CUR_LEN_OFFSET, len);
     return 0;
 }
 
-fn _cur_pos(cur): i64       { return load64(cur + _CHITRA_CUR_POS_OFFSET); }
-fn _cur_len(cur): i64       { return load64(cur + _CHITRA_CUR_LEN_OFFSET); }
-fn _cur_remaining(cur): i64 {
+fn _chitra_cur_pos(cur): i64       { return load64(cur + _CHITRA_CUR_POS_OFFSET); }
+fn _chitra_cur_len(cur): i64       { return load64(cur + _CHITRA_CUR_LEN_OFFSET); }
+fn _chitra_cur_remaining(cur): i64 {
     return load64(cur + _CHITRA_CUR_LEN_OFFSET) - load64(cur + _CHITRA_CUR_POS_OFFSET);
 }
 
 # True (1) iff `n` bytes can be read from the current position without
 # running past len. n must be >= 0 (callers pass chunk_len which is
 # masked to 31 bits, so always non-negative).
-fn _cur_can_read(cur, n): i64 {
+fn _chitra_cur_can_read(cur, n): i64 {
     if (n < 0) { return 0; }
-    if (_cur_remaining(cur) < n) { return 0; }
+    if (_chitra_cur_remaining(cur) < n) { return 0; }
     return 1;
 }
 
 # Read one u8 at the cursor and advance. Caller MUST have checked
-# _cur_can_read(cur, 1) first; this asserts it returns 0 defensively if
+# _chitra_cur_can_read(cur, 1) first; this asserts it returns 0 defensively if
 # out of bounds (never an OOB load).
-fn _cur_u8(cur): i64 {
-    if (_cur_can_read(cur, 1) == 0) { return 0; }
+fn _chitra_cur_u8(cur): i64 {
+    if (_chitra_cur_can_read(cur, 1) == 0) { return 0; }
     var p = load64(cur + _CHITRA_CUR_BASE_OFFSET) + load64(cur + _CHITRA_CUR_POS_OFFSET);
     var v = load8(p);
     store64(cur + _CHITRA_CUR_POS_OFFSET, load64(cur + _CHITRA_CUR_POS_OFFSET) + 1);
@@ -153,10 +153,10 @@ fn _cur_u8(cur): i64 {
 }
 
 # Read a big-endian u32 (PNG is big-endian throughout, spec § 7) and
-# advance 4 bytes. Returns the value; caller checks _cur_can_read first.
+# advance 4 bytes. Returns the value; caller checks _chitra_cur_can_read first.
 # Masked to 32 bits so a high bit can't sign-extend into a negative i64.
-fn _cur_u32_be(cur): i64 {
-    if (_cur_can_read(cur, 4) == 0) { return 0; }
+fn _chitra_cur_u32_be(cur): i64 {
+    if (_chitra_cur_can_read(cur, 4) == 0) { return 0; }
     var p = load64(cur + _CHITRA_CUR_BASE_OFFSET) + load64(cur + _CHITRA_CUR_POS_OFFSET);
     var b0 = load8(p + 0);
     var b1 = load8(p + 1);
@@ -168,9 +168,9 @@ fn _cur_u32_be(cur): i64 {
 
 # Read a big-endian u16 and advance 2 bytes. JPEG segment lengths are 2-byte
 # big-endian (ITU-T T.81 § B.1.1.4). Masked to 16 bits. Caller checks
-# _cur_can_read(cur, 2) first; returns 0 defensively on OOB (never an OOB load).
-fn _cur_u16_be(cur): i64 {
-    if (_cur_can_read(cur, 2) == 0) { return 0; }
+# _chitra_cur_can_read(cur, 2) first; returns 0 defensively on OOB (never an OOB load).
+fn _chitra_cur_u16_be(cur): i64 {
+    if (_chitra_cur_can_read(cur, 2) == 0) { return 0; }
     var p = load64(cur + _CHITRA_CUR_BASE_OFFSET) + load64(cur + _CHITRA_CUR_POS_OFFSET);
     var b0 = load8(p + 0);
     var b1 = load8(p + 1);
@@ -179,13 +179,13 @@ fn _cur_u16_be(cur): i64 {
 }
 
 # Absolute pointer at the cursor's current position (for chunk-data
-# scanning without copying). Caller validates the span via _cur_can_read.
-fn _cur_ptr(cur): i64 {
+# scanning without copying). Caller validates the span via _chitra_cur_can_read.
+fn _chitra_cur_ptr(cur): i64 {
     return load64(cur + _CHITRA_CUR_BASE_OFFSET) + load64(cur + _CHITRA_CUR_POS_OFFSET);
 }
 
 # Skip `n` bytes forward (no bounds clamp — caller pre-validates).
-fn _cur_skip(cur, n): i64 {
+fn _chitra_cur_skip(cur, n): i64 {
     store64(cur + _CHITRA_CUR_POS_OFFSET, load64(cur + _CHITRA_CUR_POS_OFFSET) + n);
     return 0;
 }
@@ -203,16 +203,16 @@ fn chitra_png_check_signature(src, len): i64 {
 # Chunk-type predicates — 4-byte case-sensitive ASCII (spec § 5.4).
 # `p` points at the 4 type bytes.
 # ================================================================
-fn _chunk_is(p, c0, c1, c2, c3): i64 {
+fn _chitra_chunk_is(p, c0, c1, c2, c3): i64 {
     if (load8(p + 0) == c0 && load8(p + 1) == c1 &&
       load8(p + 2) == c2 && load8(p + 3) == c3) { return 1; }
     return 0;
 }
-fn _chunk_is_ihdr(p): i64 { return _chunk_is(p, 0x49, 0x48, 0x44, 0x52); }
-fn _chunk_is_idat(p): i64 { return _chunk_is(p, 0x49, 0x44, 0x41, 0x54); }
-fn _chunk_is_iend(p): i64 { return _chunk_is(p, 0x49, 0x45, 0x4E, 0x44); }
-fn _chunk_is_plte(p): i64 { return _chunk_is(p, 0x50, 0x4C, 0x54, 0x45); }
-fn _chunk_is_trns(p): i64 { return _chunk_is(p, 0x74, 0x52, 0x4E, 0x53); }
+fn _chitra_chunk_is_ihdr(p): i64 { return _chitra_chunk_is(p, 0x49, 0x48, 0x44, 0x52); }
+fn _chitra_chunk_is_idat(p): i64 { return _chitra_chunk_is(p, 0x49, 0x44, 0x41, 0x54); }
+fn _chitra_chunk_is_iend(p): i64 { return _chitra_chunk_is(p, 0x49, 0x45, 0x4E, 0x44); }
+fn _chitra_chunk_is_plte(p): i64 { return _chitra_chunk_is(p, 0x50, 0x4C, 0x54, 0x45); }
+fn _chitra_chunk_is_trns(p): i64 { return _chitra_chunk_is(p, 0x74, 0x52, 0x4E, 0x53); }
 
 # ================================================================
 # Color-type -> channels-per-pixel (spec § 11.2.2 Table 11.1):

@@ -14,7 +14,7 @@
 #   - PNG  — real scanlines run through sankoch's `zlib_compress`, so the
 #            decode side exercises the genuine inflate + unfilter path, not a
 #            stored-block shortcut. Adam7 fixtures are interleaved using
-#            chitra's OWN pass-geometry helpers (`_adam7_xs` / `_ys` /
+#            chitra's OWN pass-geometry helpers (`_chitra_adam7_xs` / `_ys` /
 #            `_xstep` / `_ystep`), so encoder and decoder cannot disagree
 #            about the layout.
 #   - JPEG — assembled with an in-harness MSB-first bit writer (0xFF stuffing
@@ -149,12 +149,12 @@ fn _mk_png(w, h, ct, depth, interlace, len_out): i64 {
     } else {
         var p = 0;
         while (p < 7) {
-            var xs = _adam7_xs(p);
-            var ys = _adam7_ys(p);
-            var xstep = _adam7_xstep(p);
-            var ystep = _adam7_ystep(p);
-            var pw = _adam7_count(w, xs, xstep);
-            var ph = _adam7_count(h, ys, ystep);
+            var xs = _chitra_adam7_xs(p);
+            var ys = _chitra_adam7_ys(p);
+            var xstep = _chitra_adam7_xstep(p);
+            var ystep = _chitra_adam7_ystep(p);
+            var pw = _chitra_adam7_count(w, xs, xstep);
+            var ph = _chitra_adam7_count(h, ys, ystep);
             if (pw > 0 && ph > 0) {
                 var py = 0;
                 while (py < ph) {

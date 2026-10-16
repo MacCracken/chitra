@@ -51,8 +51,8 @@ from IHDR / PLTE / IDAT / tRNS is validated before any allocation or
 loop bound depends on it.
 
 - **Bounds-checked cursor.** All input is read through a self-validating
-  24-byte cursor (`_cur_can_read` rejects `n < 0` and `remaining < n`;
-  `_cur_u8` / `_cur_u32_be` defensively return 0 rather than ever issuing
+  24-byte cursor (`_chitra_cur_can_read` rejects `n < 0` and `remaining < n`;
+  `_chitra_cur_u8` / `_chitra_cur_u32_be` defensively return 0 rather than ever issuing
   an OOB load), `src/png_chunks.cyr:138`-`167`. u32 reads are masked to
   32 bits so a high bit cannot sign-extend into a negative i64.
 - **Compile-time policy ceilings** cap the largest allocation the
@@ -98,7 +98,7 @@ the audit ([`../audit/2026-06-26-audit.md`](../audit/2026-06-26-audit.md)).
 | Guard | Code | Error |
 |---|---|---|
 | 8-byte signature length + magic check | `chitra_png_check_signature` (`src/png_chunks.cyr:197`) | `CHITRA_ERR_SIGNATURE` |
-| Self-validating bounds-checked cursor | `_cur_can_read` / `_cur_u8` / `_cur_u32_be` (`src/png_chunks.cyr:138`-`167`) | `CHITRA_ERR_TRUNCATED` |
+| Self-validating bounds-checked cursor | `_chitra_cur_can_read` / `_chitra_cur_u8` / `_chitra_cur_u32_be` (`src/png_chunks.cyr:138`-`167`) | `CHITRA_ERR_TRUNCATED` |
 | IHDR length must equal 13 | `src/png_filter.cyr:131` | `CHITRA_ERR_BAD_CHUNK` |
 | IHDR is the first chunk + type tag | `src/png_filter.cyr:138` | `CHITRA_ERR_BAD_CHUNK` |
 | IHDR CRC-32 verification | `src/png_filter.cyr:145`-`147` | `CHITRA_ERR_CRC` |
@@ -139,7 +139,7 @@ ratio cap:
 | tRNS color key compared at FULL sample width (§ 11.3.2 names one exact value) | `src/png_color.cyr` color types 0 / 2 | — (correctness) |
 | `chitra_err_new` cannot return 0 — a BSS fallback `ChitraErr` keeps the failure contract intact when the heap is gone | `src/error.cyr` | — (contract) |
 | JPEG output:input amplification cap `CHITRA_MAX_JPEG_RATIO` | `src/jpeg.cyr` decode-scan entry | `CHITRA_ERR_DIMENSIONS` |
-| Non-segment JPEG markers rejected, not skipped by length (T.81 Table B.1) | `src/jpeg_markers.cyr` `_jpeg_marker_action` | `CHITRA_ERR_JPEG_MARKER` |
+| Non-segment JPEG markers rejected, not skipped by length (T.81 Table B.1) | `src/jpeg_markers.cyr` `_chitra_jpeg_marker_action` | `CHITRA_ERR_JPEG_MARKER` |
 | `0xFF` fill runs collapsed on **both** the header and entropy sides (§ B.1.1.2) | `src/jpeg_markers.cyr`, `src/jpeg_huffman.cyr` | — (accepts valid input) |
 | ZRL run past coefficient 63 rejected, matching the run overrun beside it | `src/jpeg_huffman.cyr` AC loop | `CHITRA_ERR_JPEG_ENTROPY` |
 
@@ -162,7 +162,7 @@ JPEG gained one in 0.3.3, but the two formats added since had none:
 
 | Guard | Code | Error |
 |---|---|---|
-| BMP-RLE amplification cap `CHITRA_MAX_BMP_RLE_RATIO` (4096:1), measured on bytes **consumed** | `src/bmp.cyr` `_bmp_decode_rle` | `CHITRA_ERR_DIMENSIONS` |
+| BMP-RLE amplification cap `CHITRA_MAX_BMP_RLE_RATIO` (4096:1), measured on bytes **consumed** | `src/bmp.cyr` `_chitra_bmp_decode_rle` | `CHITRA_ERR_DIMENSIONS` |
 | GIF amplification cap `CHITRA_MAX_GIF_RATIO` (16,384 frame **pixels** per gathered LZW byte — not RGBA bytes, corrected 1.1.1: a 1,024-byte floor for a 4096×4096 frame), checked **before** the index allocation | `src/gif.cyr` block walk | `CHITRA_ERR_DIMENSIONS` |
 | GCE block size validated (fixed at 4; every field after it is a fixed offset) | `src/gif.cyr` GCE parse | `CHITRA_ERR_GIF_HEADER` |
 | LZW prefix-chain bound moved onto the write index itself, not a parallel counter | `src/gif_lzw.cyr` chain walk | `CHITRA_ERR_GIF_LZW` |

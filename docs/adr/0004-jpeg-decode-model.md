@@ -162,7 +162,7 @@ Two related decisions ride with it:
 > multi-scan and partially-interleaved files are no longer deferred, and
 > `CHITRA_ERR_UNSUPPORTED` no longer covers any JPEG scan geometry; the § A.2
 > class is complete. And the ΣHj·Vj ≤ 10 cap **did** move: it now lives at the
-> *scan* header (`_jpeg_parse_sos`), summed over the scan's own components,
+> *scan* header (`_chitra_jpeg_parse_sos`), summed over the scan's own components,
 > because § B.2.3 scopes it to an interleaved MCU — applied frame-wide it still
 > rejected `cjpeg -sample 4x4,1x1,1x1 -scans`, which is legal, sums to 18, and
 > whose every scan is non-interleaved. It remains ahead of every allocation,

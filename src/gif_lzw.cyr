@@ -31,7 +31,7 @@ var _CHITRA_GIF_LZW_MAX_CODES = 4096;    # 12-bit ceiling; the dictionary never 
 var _CHITRA_GIF_LZW_MAX_WIDTH = 12;
 
 # ================================================================
-# Bit reader over the FLATTENED sub-block payload (see _gif_walk_blocks in
+# Bit reader over the FLATTENED sub-block payload (see _chitra_gif_walk_blocks in
 # gif.cyr — the sub-block chain is concatenated before decode rather than
 # streamed across, so this reader never has to straddle a block boundary).
 #
@@ -42,7 +42,7 @@ var _CHITRA_LZ_LEN  = 8;
 var _CHITRA_LZ_BIT  = 16;
 var _CHITRA_LZ_SIZE = 32;
 
-fn _gif_br_init(st, base, len): i64 {
+fn _chitra_gif_br_init(st, base, len): i64 {
     store64(st + _CHITRA_LZ_BASE, base);
     store64(st + _CHITRA_LZ_LEN, len);
     store64(st + _CHITRA_LZ_BIT, 0);
@@ -61,7 +61,7 @@ fn _gif_br_init(st, base, len): i64 {
 # the frame holds, and gif.cyr zero-fills the remainder. What stops that being
 # an amplification vector — a two-byte stream claiming a 4096x4096 frame — is
 # the output:input cap in gif.cyr, not this function.
-fn _gif_br_bits(st, n): i64 {
+fn _chitra_gif_br_bits(st, n): i64 {
     var base = load64(st + _CHITRA_LZ_BASE);
     var len = load64(st + _CHITRA_LZ_LEN);
     var bit = load64(st + _CHITRA_LZ_BIT);
@@ -81,13 +81,13 @@ fn _gif_br_bits(st, n): i64 {
 }
 
 # ================================================================
-# _gif_lzw_decode — decompress into `out`, at most `out_cap` bytes.
+# _chitra_gif_lzw_decode — decompress into `out`, at most `out_cap` bytes.
 #
 # Returns the byte count written, or -1 with *err_out set. A short result is
 # NOT an error: a stream that hits its End code before filling the frame is
 # well-formed, and the caller decides what an under-filled frame means.
 # ================================================================
-fn _gif_lzw_decode(data, data_len, min_code_size, out, out_cap, err_out): i64 {
+fn _chitra_gif_lzw_decode(data, data_len, min_code_size, out, out_cap, err_out): i64 {
     store64(err_out, 0);
     # Spec § 22: the LZW minimum code size is 2..8. Below 2 there are not
     # enough codes for Clear + End; above 8 exceeds a byte of palette index.
@@ -136,7 +136,7 @@ fn _gif_lzw_decode(data, data_len, min_code_size, out, out_cap, err_out): i64 {
     }
 
     var br[32];
-    _gif_br_init(&br, data, data_len);
+    _chitra_gif_br_init(&br, data, data_len);
 
     var code_size = min_code_size + 1;
     var next_code = clear_code + 2;
@@ -167,7 +167,7 @@ fn _gif_lzw_decode(data, data_len, min_code_size, out, out_cap, err_out): i64 {
             if (data_len * 8 - load64(&br + _CHITRA_LZ_BIT) < 8) { done = 1; }
         }
         code = 0 - 1;
-        if (done == 0) { code = _gif_br_bits(&br, code_size); }
+        if (done == 0) { code = _chitra_gif_br_bits(&br, code_size); }
         if (code < 0) {
             # Ran out of bits without an End code. Tolerated as a clean end:
             # real encoders in the wild omit the terminator, and the frame is

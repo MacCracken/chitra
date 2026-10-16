@@ -11,6 +11,12 @@
 # 1.1.2 renamed every one of them `_CHITRA_*` / `_chitra_*`, and scripts/check-surface.sh now fails
 # `make lint` on any unprefixed top-level `var` in the bundle, so the class cannot come back.
 #
+# ⛔ FUNCTIONS TOO (1.1.3). 84 internal helpers (`_jpeg_*`, `_bmp_*`, `_cur_*`, `_gif_*`, `_chunk_*`,
+# `_adam7_*`, `_png_*`) had no prefix either, and a consumer function of the same name REPLACED
+# chitra's — "duplicate fn … last definition wins", a warning and nothing more. Measured on 1.1.2: a
+# consumer `_jpeg_descale` made a JPEG decode to different pixels. 1.1.3 renamed them `_chitra_*`,
+# and check-surface.sh now fails on any unprefixed top-level `fn` as well.
+#
 # ⚠ THIS SUITE IS THE CONSUMER. It declares the pre-1.1.2 names AFTER `src/lib.cyr`, each set to
 # 3 (a misaligned offset, a nonsense size, a corrupt IDCT constant), then decodes one small file per
 # format and checks the pixels against the reference decoders. Against the 1.1.1 sources it fails;
@@ -151,6 +157,93 @@ var GIF_BLOCK_EXTENSION = 3;
 var GIF_BLOCK_TRAILER = 3;
 var GIF_EXT_GRAPHIC_CTL = 3;
 var GIF_EXT_PLAINTEXT = 3;
+
+# ---- the consumer's own functions: every helper name chitra used through 1.1.2 ----
+# Same arity as chitra's, a distinctive return value, and nothing in common with it.
+fn _adam7_count(p0, p1, p2): i64 { return 7; }
+fn _adam7_xs(p0): i64 { return 7; }
+fn _adam7_xstep(p0): i64 { return 7; }
+fn _adam7_ys(p0): i64 { return 7; }
+fn _adam7_ystep(p0): i64 { return 7; }
+fn _bmp_decode_rle(p0, p1, p2, p3, p4, p5, p6, p7, p8): i64 { return 7; }
+fn _bmp_i32_le(p0): i64 { return 7; }
+fn _bmp_index_at(p0, p1, p2): i64 { return 7; }
+fn _bmp_mask_contiguous(p0): i64 { return 7; }
+fn _bmp_mask_shift(p0): i64 { return 7; }
+fn _bmp_mask_width(p0): i64 { return 7; }
+fn _bmp_parse_header(p0, p1, p2): i64 { return 7; }
+fn _bmp_rle_put(p0, p1, p2, p3, p4, p5): i64 { return 7; }
+fn _bmp_scale_to_8(p0, p1): i64 { return 7; }
+fn _bmp_u16_le(p0): i64 { return 7; }
+fn _bmp_u32_le(p0): i64 { return 7; }
+fn _chunk_is(p0, p1, p2, p3, p4): i64 { return 7; }
+fn _chunk_is_idat(p0): i64 { return 7; }
+fn _chunk_is_iend(p0): i64 { return 7; }
+fn _chunk_is_ihdr(p0): i64 { return 7; }
+fn _chunk_is_plte(p0): i64 { return 7; }
+fn _chunk_is_trns(p0): i64 { return 7; }
+fn _cur_can_read(p0, p1): i64 { return 7; }
+fn _cur_init(p0, p1, p2): i64 { return 7; }
+fn _cur_len(p0): i64 { return 7; }
+fn _cur_pos(p0): i64 { return 7; }
+fn _cur_ptr(p0): i64 { return 7; }
+fn _cur_remaining(p0): i64 { return 7; }
+fn _cur_skip(p0, p1): i64 { return 7; }
+fn _cur_u16_be(p0): i64 { return 7; }
+fn _cur_u32_be(p0): i64 { return 7; }
+fn _cur_u8(p0): i64 { return 7; }
+fn _gif_br_bits(p0, p1): i64 { return 7; }
+fn _gif_br_init(p0, p1, p2): i64 { return 7; }
+fn _gif_lzw_decode(p0, p1, p2, p3, p4, p5): i64 { return 7; }
+fn _gif_pass_start(p0): i64 { return 7; }
+fn _gif_pass_step(p0): i64 { return 7; }
+fn _gif_u16_le(p0): i64 { return 7; }
+fn _gif_walk_blocks(p0, p1, p2, p3, p4, p5): i64 { return 7; }
+fn _jpeg_alloc_huff(p0): i64 { return 7; }
+fn _jpeg_alloc_quant(p0): i64 { return 7; }
+fn _jpeg_br_bit(p0): i64 { return 7; }
+fn _jpeg_br_bits(p0, p1): i64 { return 7; }
+fn _jpeg_br_damaged(p0): i64 { return 7; }
+fn _jpeg_br_eod(p0): i64 { return 7; }
+fn _jpeg_br_init(p0, p1, p2): i64 { return 7; }
+fn _jpeg_br_load_byte(p0): i64 { return 7; }
+fn _jpeg_br_marker(p0): i64 { return 7; }
+fn _jpeg_br_pos(p0): i64 { return 7; }
+fn _jpeg_br_restart(p0): i64 { return 7; }
+fn _jpeg_br_tail_clean(p0): i64 { return 7; }
+fn _jpeg_build_image(p0, p1, p2, p3, p4): i64 { return 7; }
+fn _jpeg_clamp8(p0): i64 { return 7; }
+fn _jpeg_colour_evidence_ok(p0): i64 { return 7; }
+fn _jpeg_declared_dims(p0, p1, p2, p3): i64 { return 7; }
+fn _jpeg_decode(p0, p1): i64 { return 7; }
+fn _jpeg_decode_block(p0, p1, p2, p3, p4, p5): i64 { return 7; }
+fn _jpeg_decode_one_scan(p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10): i64 { return 7; }
+fn _jpeg_decode_scans(p0, p1, p2, p3): i64 { return 7; }
+fn _jpeg_descale(p0, p1): i64 { return 7; }
+fn _jpeg_entropy_span(p0, p1, p2, p3): i64 { return 7; }
+fn _jpeg_extend(p0, p1): i64 { return 7; }
+fn _jpeg_huff_build(p0, p1): i64 { return 7; }
+fn _jpeg_huff_count(p0): i64 { return 7; }
+fn _jpeg_huff_maxcode(p0, p1): i64 { return 7; }
+fn _jpeg_huff_mincode(p0, p1): i64 { return 7; }
+fn _jpeg_huff_val(p0, p1): i64 { return 7; }
+fn _jpeg_huff_valptr(p0, p1): i64 { return 7; }
+fn _jpeg_idct_1d(p0, p1, p2, p3, p4, p5): i64 { return 7; }
+fn _jpeg_idct_block(p0, p1, p2): i64 { return 7; }
+fn _jpeg_idct_out(p0, p1, p2, p3): i64 { return 7; }
+fn _jpeg_marker_action(p0): i64 { return 7; }
+fn _jpeg_parse_app0(p0, p1): i64 { return 7; }
+fn _jpeg_parse_app14(p0, p1): i64 { return 7; }
+fn _jpeg_parse_dht(p0, p1): i64 { return 7; }
+fn _jpeg_parse_dqt(p0, p1): i64 { return 7; }
+fn _jpeg_parse_dri(p0, p1): i64 { return 7; }
+fn _jpeg_parse_sof0(p0, p1): i64 { return 7; }
+fn _jpeg_parse_sos(p0, p1, p2, p3, p4): i64 { return 7; }
+fn _jpeg_resume_to_next_scan(p0, p1, p2, p3, p4): i64 { return 7; }
+fn _jpeg_structural_espan(p0, p1, p2, p3): i64 { return 7; }
+fn _jpeg_ycc_to_rgb(p0, p1, p2, p3): i64 { return 7; }
+fn _jpeg_zigzag_table(): i64 { return 7; }
+fn _png_scale16(p0): i64 { return 7; }
 
 fn fx_ns_png(len_out): i64 {
     var b = alloc(444);
@@ -1355,9 +1448,23 @@ fn test_decoding_leaves_the_consumer_globals_alone() {
     return 0;
 }
 
+# The consumer's functions must stay the consumer's: a call it makes reaches its own definition, not
+# chitra's (and chitra's calls, above, reached chitra's — or the decodes would have failed).
+fn test_consumer_functions_stay_the_consumers() {
+    assert_eq(_adam7_count(0, 0, 0), 7, "the consumer's own _adam7_count answers the consumer");
+    assert_eq(_bmp_decode_rle(0, 0, 0, 0, 0, 0, 0, 0, 0), 7, "the consumer's own _bmp_decode_rle answers the consumer");
+    assert_eq(_chunk_is(0, 0, 0, 0, 0), 7, "the consumer's own _chunk_is answers the consumer");
+    assert_eq(_cur_can_read(0, 0), 7, "the consumer's own _cur_can_read answers the consumer");
+    assert_eq(_gif_br_bits(0, 0), 7, "the consumer's own _gif_br_bits answers the consumer");
+    assert_eq(_jpeg_alloc_huff(0), 7, "the consumer's own _jpeg_alloc_huff answers the consumer");
+    assert_eq(_png_scale16(0), 7, "the consumer's own _png_scale16 answers the consumer");
+    return 0;
+}
+
 fn main() {
     test_consumer_globals_do_not_reach_the_decoders();
     test_decoding_leaves_the_consumer_globals_alone();
+    test_consumer_functions_stay_the_consumers();
     return assert_summary();
 }
 

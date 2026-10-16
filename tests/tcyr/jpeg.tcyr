@@ -210,16 +210,16 @@ fn fx_jpeg_dqt_bad(len_out, pqtq): i64 {
 }
 
 # ================================================================
-# _cur_u16_be (added to png_chunks.cyr for JPEG segment lengths)
+# _chitra_cur_u16_be (added to png_chunks.cyr for JPEG segment lengths)
 # ================================================================
 fn test_cur_u16_be() {
     var buf[2];
     store8(&buf + 0, 0x12);
     store8(&buf + 1, 0x34);
     var cur[24];
-    _cur_init(&cur, &buf, 2);
-    assert_eq(_cur_u16_be(&cur), 4660, "u16_be = 0x1234");
-    assert_eq(_cur_pos(&cur), 2, "pos advanced 2");
+    _chitra_cur_init(&cur, &buf, 2);
+    assert_eq(_chitra_cur_u16_be(&cur), 4660, "u16_be = 0x1234");
+    assert_eq(_chitra_cur_pos(&cur), 2, "pos advanced 2");
     return 0;
 }
 
@@ -454,21 +454,21 @@ fn test_scan_dht() {
         if (chitra_jpeg_frame_huff_present(f) != 0) { t = chitra_jpeg_frame_huff(f, 0, 0); }
     }
     if (t != 0) {
-        assert_eq(_jpeg_huff_count(t), 12, "12 symbols");
+        assert_eq(_chitra_jpeg_huff_count(t), 12, "12 symbols");
         # canonical codes for the Annex K.3.3 DC-luminance table
-        assert_eq(_jpeg_huff_maxcode(t, 1), 0 - 1, "L1 maxcode = -1 (no codes)");
-        assert_eq(_jpeg_huff_mincode(t, 2), 0, "L2 mincode = 0");
-        assert_eq(_jpeg_huff_maxcode(t, 2), 0, "L2 maxcode = 0");
-        assert_eq(_jpeg_huff_valptr(t, 2), 0, "L2 valptr = 0");
-        assert_eq(_jpeg_huff_mincode(t, 3), 2, "L3 mincode = 2 (0b010)");
-        assert_eq(_jpeg_huff_maxcode(t, 3), 6, "L3 maxcode = 6 (0b110)");
-        assert_eq(_jpeg_huff_valptr(t, 3), 1, "L3 valptr = 1");
-        assert_eq(_jpeg_huff_mincode(t, 4), 14, "L4 mincode = 14 (0b1110)");
-        assert_eq(_jpeg_huff_valptr(t, 4), 6, "L4 valptr = 6");
-        assert_eq(_jpeg_huff_mincode(t, 9), 510, "L9 mincode = 510");
-        assert_eq(_jpeg_huff_valptr(t, 9), 11, "L9 valptr = 11");
-        assert_eq(_jpeg_huff_val(t, 0), 0, "huffval[0] = 0");
-        assert_eq(_jpeg_huff_val(t, 11), 11, "huffval[11] = 11");
+        assert_eq(_chitra_jpeg_huff_maxcode(t, 1), 0 - 1, "L1 maxcode = -1 (no codes)");
+        assert_eq(_chitra_jpeg_huff_mincode(t, 2), 0, "L2 mincode = 0");
+        assert_eq(_chitra_jpeg_huff_maxcode(t, 2), 0, "L2 maxcode = 0");
+        assert_eq(_chitra_jpeg_huff_valptr(t, 2), 0, "L2 valptr = 0");
+        assert_eq(_chitra_jpeg_huff_mincode(t, 3), 2, "L3 mincode = 2 (0b010)");
+        assert_eq(_chitra_jpeg_huff_maxcode(t, 3), 6, "L3 maxcode = 6 (0b110)");
+        assert_eq(_chitra_jpeg_huff_valptr(t, 3), 1, "L3 valptr = 1");
+        assert_eq(_chitra_jpeg_huff_mincode(t, 4), 14, "L4 mincode = 14 (0b1110)");
+        assert_eq(_chitra_jpeg_huff_valptr(t, 4), 6, "L4 valptr = 6");
+        assert_eq(_chitra_jpeg_huff_mincode(t, 9), 510, "L9 mincode = 510");
+        assert_eq(_chitra_jpeg_huff_valptr(t, 9), 11, "L9 valptr = 11");
+        assert_eq(_chitra_jpeg_huff_val(t, 0), 0, "huffval[0] = 0");
+        assert_eq(_chitra_jpeg_huff_val(t, 11), 11, "huffval[11] = 11");
     }
     if (f != 0) { assert_eq(chitra_jpeg_frame_width(f), 8, "width 8 after dht"); }
     return 0;
@@ -515,7 +515,7 @@ fn fx_dc_table(): i64 {
     store64(t + _CHITRA_HT_COUNT, 2);
     store64(t + _CHITRA_HT_HUFFVAL + 0 * 8, 0);
     store64(t + _CHITRA_HT_HUFFVAL + 1 * 8, 1);
-    _jpeg_huff_build(t, &bits);
+    _chitra_jpeg_huff_build(t, &bits);
     return t;
 }
 
@@ -530,7 +530,7 @@ fn fx_ac_table(): i64 {
     store64(t + _CHITRA_HT_COUNT, 2);
     store64(t + _CHITRA_HT_HUFFVAL + 0 * 8, 0);
     store64(t + _CHITRA_HT_HUFFVAL + 1 * 8, 1);
-    _jpeg_huff_build(t, &bits);
+    _chitra_jpeg_huff_build(t, &bits);
     return t;
 }
 
@@ -545,12 +545,12 @@ fn fx_entropy_block(len_out): i64 {
 }
 
 fn test_extend() {
-    assert_eq(_jpeg_extend(1, 1), 1, "extend(1,1)=1");
-    assert_eq(_jpeg_extend(0, 1), 0 - 1, "extend(0,1)=-1");
-    assert_eq(_jpeg_extend(5, 3), 5, "extend(5,3)=5");
-    assert_eq(_jpeg_extend(2, 3), 0 - 5, "extend(2,3)=-5");
-    assert_eq(_jpeg_extend(7, 3), 7, "extend(7,3)=7");
-    assert_eq(_jpeg_extend(0, 0), 0, "extend(_,0)=0");
+    assert_eq(_chitra_jpeg_extend(1, 1), 1, "extend(1,1)=1");
+    assert_eq(_chitra_jpeg_extend(0, 1), 0 - 1, "extend(0,1)=-1");
+    assert_eq(_chitra_jpeg_extend(5, 3), 5, "extend(5,3)=5");
+    assert_eq(_chitra_jpeg_extend(2, 3), 0 - 5, "extend(2,3)=-5");
+    assert_eq(_chitra_jpeg_extend(7, 3), 7, "extend(7,3)=7");
+    assert_eq(_chitra_jpeg_extend(0, 0), 0, "extend(_,0)=0");
     return 0;
 }
 
@@ -558,12 +558,12 @@ fn test_bitreader() {
     var buf[4];
     store8(&buf + 0, 0xB5);   # 1011 0101
     var rdr[72];   # _CHITRA_BR_SIZE
-    _jpeg_br_init(&rdr, &buf, 1);
-    assert_eq(_jpeg_br_bit(&rdr), 1, "bit0");
-    assert_eq(_jpeg_br_bit(&rdr), 0, "bit1");
-    assert_eq(_jpeg_br_bit(&rdr), 1, "bit2");
-    assert_eq(_jpeg_br_bit(&rdr), 1, "bit3");
-    assert_eq(_jpeg_br_bits(&rdr, 4), 5, "bits4..7 = 0101 = 5");
+    _chitra_jpeg_br_init(&rdr, &buf, 1);
+    assert_eq(_chitra_jpeg_br_bit(&rdr), 1, "bit0");
+    assert_eq(_chitra_jpeg_br_bit(&rdr), 0, "bit1");
+    assert_eq(_chitra_jpeg_br_bit(&rdr), 1, "bit2");
+    assert_eq(_chitra_jpeg_br_bit(&rdr), 1, "bit3");
+    assert_eq(_chitra_jpeg_br_bits(&rdr, 4), 5, "bits4..7 = 0101 = 5");
     return 0;
 }
 
@@ -573,10 +573,10 @@ fn test_bitreader_stuffing() {
     store8(&buf + 1, 0x00);   # stuffed -> 0xFF is real data
     store8(&buf + 2, 0x80);   # 1000 0000
     var rdr[72];   # _CHITRA_BR_SIZE
-    _jpeg_br_init(&rdr, &buf, 3);
-    assert_eq(_jpeg_br_bits(&rdr, 8), 255, "stuffed 0xFF reads as 255");
-    assert_eq(_jpeg_br_bit(&rdr), 1, "next bit from 0x80 = 1");
-    assert_eq(_jpeg_br_marker(&rdr), 0, "no marker yet");
+    _chitra_jpeg_br_init(&rdr, &buf, 3);
+    assert_eq(_chitra_jpeg_br_bits(&rdr, 8), 255, "stuffed 0xFF reads as 255");
+    assert_eq(_chitra_jpeg_br_bit(&rdr), 1, "next bit from 0x80 = 1");
+    assert_eq(_chitra_jpeg_br_marker(&rdr), 0, "no marker yet");
     return 0;
 }
 
@@ -586,11 +586,11 @@ fn test_bitreader_marker() {
     store8(&buf + 1, 0xFF);
     store8(&buf + 2, 0xD9);   # EOI marker
     var rdr[72];   # _CHITRA_BR_SIZE
-    _jpeg_br_init(&rdr, &buf, 3);
-    assert_eq(_jpeg_br_bit(&rdr), 1, "first data bit");
-    assert_eq(_jpeg_br_bits(&rdr, 7), 0, "rest of 0x80");
-    assert_eq(_jpeg_br_bits(&rdr, 4), 0, "bits after marker pad 0");
-    assert_eq(_jpeg_br_marker(&rdr), 0xD9, "EOI marker detected");
+    _chitra_jpeg_br_init(&rdr, &buf, 3);
+    assert_eq(_chitra_jpeg_br_bit(&rdr), 1, "first data bit");
+    assert_eq(_chitra_jpeg_br_bits(&rdr, 7), 0, "rest of 0x80");
+    assert_eq(_chitra_jpeg_br_bits(&rdr, 4), 0, "bits after marker pad 0");
+    assert_eq(_chitra_jpeg_br_marker(&rdr), 0xD9, "EOI marker detected");
     return 0;
 }
 
@@ -600,10 +600,10 @@ fn test_decode_block() {
     var lo = 0;
     var ent = fx_entropy_block(&lo);
     var rdr[72];   # _CHITRA_BR_SIZE
-    _jpeg_br_init(&rdr, ent, lo);
+    _chitra_jpeg_br_init(&rdr, ent, lo);
     var zz = alloc(512);
     var err = 0;
-    var dc = _jpeg_decode_block(&rdr, dct, act, 0, zz, &err);
+    var dc = _chitra_jpeg_decode_block(&rdr, dct, act, 0, zz, &err);
     assert_eq(err, 0, "decode_block no error");
     assert_eq(dc, 1, "new DC predictor = 1");
     assert_eq(load64(zz + 0 * 8), 1, "zz[0] DC = 1");
@@ -620,10 +620,10 @@ fn test_decode_block_dc_predictor() {
     var lo = 0;
     var ent = fx_entropy_block(&lo);
     var rdr[72];   # _CHITRA_BR_SIZE
-    _jpeg_br_init(&rdr, ent, lo);
+    _chitra_jpeg_br_init(&rdr, ent, lo);
     var zz = alloc(512);
     var err = 0;
-    var dc = _jpeg_decode_block(&rdr, dct, act, 10, zz, &err);
+    var dc = _chitra_jpeg_decode_block(&rdr, dct, act, 10, zz, &err);
     assert_eq(err, 0, "no error");
     assert_eq(dc, 11, "DC = pred(10) + diff(1) = 11");
     assert_eq(load64(zz + 0 * 8), 11, "zz[0] = 11");
@@ -647,7 +647,7 @@ fn fx_quant_ones(): i64 {
 }
 
 fn test_zigzag_table() {
-    var t = _jpeg_zigzag_table();
+    var t = _chitra_jpeg_zigzag_table();
     assert_eq(load64(t + 0 * 8), 0, "zigzag[0] = 0");
     assert_eq(load64(t + 1 * 8), 1, "zigzag[1] = 1");
     assert_eq(load64(t + 2 * 8), 8, "zigzag[2] = 8");
@@ -658,9 +658,9 @@ fn test_zigzag_table() {
 }
 
 fn test_descale() {
-    assert_eq(_jpeg_descale(2048, 11), 1, "descale(2048,11)=1");
-    assert_eq(_jpeg_descale(0 - 2048, 11), 0 - 1, "descale(-2048,11)=-1");
-    assert_eq(_jpeg_descale(0, 18), 0, "descale(0,18)=0");
+    assert_eq(_chitra_jpeg_descale(2048, 11), 1, "descale(2048,11)=1");
+    assert_eq(_chitra_jpeg_descale(0 - 2048, 11), 0 - 1, "descale(-2048,11)=-1");
+    assert_eq(_chitra_jpeg_descale(0, 18), 0, "descale(0,18)=0");
     return 0;
 }
 
@@ -668,7 +668,7 @@ fn test_idct_zero() {
     var zz = fx_zz_zero();
     var q = fx_quant_ones();
     var out = alloc(512);
-    _jpeg_idct_block(zz, q, out);
+    _chitra_jpeg_idct_block(zz, q, out);
     assert_eq(load64(out + 0 * 8), 128, "zero block -> 128 at [0]");
     assert_eq(load64(out + 30 * 8), 128, "zero block -> 128 mid");
     assert_eq(load64(out + 63 * 8), 128, "zero block -> 128 at [63]");
@@ -680,17 +680,17 @@ fn test_idct_dc() {
     var out = alloc(512);
     var zz = fx_zz_zero();
     store64(zz + 0, 8);                 # DC = 8 -> round(8/8)+128 = 129, flat
-    _jpeg_idct_block(zz, q, out);
+    _chitra_jpeg_idct_block(zz, q, out);
     assert_eq(load64(out + 0 * 8), 129, "DC=8 -> 129 at [0]");
     assert_eq(load64(out + 63 * 8), 129, "DC=8 -> 129 flat");
     store64(zz + 0, 0 - 8);            # DC = -8 -> 127
-    _jpeg_idct_block(zz, q, out);
+    _chitra_jpeg_idct_block(zz, q, out);
     assert_eq(load64(out + 0 * 8), 127, "DC=-8 -> 127");
     store64(zz + 0, 2000);            # clamps high
-    _jpeg_idct_block(zz, q, out);
+    _chitra_jpeg_idct_block(zz, q, out);
     assert_eq(load64(out + 0 * 8), 255, "DC=2000 -> clamp 255");
     store64(zz + 0, 0 - 2000);        # clamps low
-    _jpeg_idct_block(zz, q, out);
+    _chitra_jpeg_idct_block(zz, q, out);
     assert_eq(load64(out + 0 * 8), 0, "DC=-2000 -> clamp 0");
     return 0;
 }
@@ -701,7 +701,7 @@ fn test_dequant() {
     var out = alloc(512);
     var zz = fx_zz_zero();
     store64(zz + 0, 4);                 # raw DC 4 * quant 2 = 8 dequant -> 129
-    _jpeg_idct_block(zz, q, out);
+    _chitra_jpeg_idct_block(zz, q, out);
     assert_eq(load64(out + 0 * 8), 129, "dequant 4*2=8 -> 129");
     return 0;
 }
@@ -921,17 +921,17 @@ fn fx_jpeg_ycc_8x8(len_out): i64 {
 
 fn test_ycc_to_rgb() {
     var rgb[8];
-    _jpeg_ycc_to_rgb(128, 128, 128, &rgb);
+    _chitra_jpeg_ycc_to_rgb(128, 128, 128, &rgb);
     assert_eq(load8(&rgb + 0), 128, "neutral R = 128");
     assert_eq(load8(&rgb + 1), 128, "neutral G = 128");
     assert_eq(load8(&rgb + 2), 128, "neutral B = 128");
-    _jpeg_ycc_to_rgb(128, 128, 160, &rgb);
+    _chitra_jpeg_ycc_to_rgb(128, 128, 160, &rgb);
     assert_eq(load8(&rgb + 0), 173, "Cr+32 -> R = 173");
     assert_eq(load8(&rgb + 1), 105, "Cr+32 -> G = 105");
     assert_eq(load8(&rgb + 2), 128, "Cr+32 -> B = 128");
-    _jpeg_ycc_to_rgb(0, 128, 128, &rgb);
+    _chitra_jpeg_ycc_to_rgb(0, 128, 128, &rgb);
     assert_eq(load8(&rgb + 0), 0, "Y=0 -> R = 0");
-    _jpeg_ycc_to_rgb(200, 128, 255, &rgb);
+    _chitra_jpeg_ycc_to_rgb(200, 128, 255, &rgb);
     assert_eq(load8(&rgb + 0), 255, "Cr=255 -> R clamps to 255");
     return 0;
 }
@@ -1541,7 +1541,7 @@ fn fx_dc_table_cat12(): i64 {
     store64(&bits + 1 * 8, 1);
     store64(t + _CHITRA_HT_COUNT, 1);
     store64(t + _CHITRA_HT_HUFFVAL + 0 * 8, 12);
-    _jpeg_huff_build(t, &bits);
+    _chitra_jpeg_huff_build(t, &bits);
     return t;
 }
 
@@ -1554,7 +1554,7 @@ fn fx_dc_table_size0(): i64 {
     store64(&bits + 1 * 8, 1);
     store64(t + _CHITRA_HT_COUNT, 1);
     store64(t + _CHITRA_HT_HUFFVAL + 0 * 8, 0);
-    _jpeg_huff_build(t, &bits);
+    _chitra_jpeg_huff_build(t, &bits);
     return t;
 }
 
@@ -1567,7 +1567,7 @@ fn fx_ac_table_s11(): i64 {
     store64(&bits + 1 * 8, 1);
     store64(t + _CHITRA_HT_COUNT, 1);
     store64(t + _CHITRA_HT_HUFFVAL + 0 * 8, 0x0B);
-    _jpeg_huff_build(t, &bits);
+    _chitra_jpeg_huff_build(t, &bits);
     return t;
 }
 
@@ -1577,10 +1577,10 @@ fn test_reject_dc_oversize() {
     var buf[2];
     store8(&buf + 0, 0x00);
     var rdr[72];   # _CHITRA_BR_SIZE
-    _jpeg_br_init(&rdr, &buf, 2);
+    _chitra_jpeg_br_init(&rdr, &buf, 2);
     var zz = alloc(512);
     var err = 0;
-    var dc = _jpeg_decode_block(&rdr, dct, act, 0, zz, &err);
+    var dc = _chitra_jpeg_decode_block(&rdr, dct, act, 0, zz, &err);
     assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_ENTROPY, "DC category 12 rejected");
     return 0;
 }
@@ -1591,10 +1591,10 @@ fn test_reject_ac_oversize() {
     var buf[2];
     store8(&buf + 0, 0x00);
     var rdr[72];   # _CHITRA_BR_SIZE
-    _jpeg_br_init(&rdr, &buf, 2);
+    _chitra_jpeg_br_init(&rdr, &buf, 2);
     var zz = alloc(512);
     var err = 0;
-    var dc = _jpeg_decode_block(&rdr, dct, act, 0, zz, &err);
+    var dc = _chitra_jpeg_decode_block(&rdr, dct, act, 0, zz, &err);
     assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_ENTROPY, "AC size 11 rejected");
     return 0;
 }
@@ -2499,11 +2499,11 @@ fn test_jpeg_refusal_allocation_is_bounded() {
 
 fn test_dht_table_storage_allocated_at_most_once() {
     # A single DHT segment may carry up to 3,854 table definitions, and
-    # _jpeg_huff_build accepts an all-zero BITS table, so every one of them is
+    # _chitra_jpeg_huff_build accepts an all-zero BITS table, so every one of them is
     # a real definition. Allocating a 2,464-byte record per DEFINITION rather
     # than one block per FRAME would trade a flat refusal cost for one that
     # SCALES with file size — 384 + 64 + 3854 * 2464 = 9,496,704 bytes from a
-    # 64 KB file. The `== 0` test in _jpeg_parse_dht is what makes that
+    # 64 KB file. The `== 0` test in _chitra_jpeg_parse_dht is what makes that
     # unreachable by construction rather than by a bound.
     var n = 3854;
     var total = 4 + n * 17 + 2 + 2;
@@ -3333,7 +3333,7 @@ fn _fx_with_app14(src, lo, t, len_out): i64 {
 # ================================================================
 # jpeg-8 (1.1.1) — the Adobe transform is judged where it decides something.
 #
-# _jpeg_parse_app14 refused transform > 1 the moment it read the segment, before
+# _chitra_jpeg_parse_app14 refused transform > 1 the moment it read the segment, before
 # the frame's component count or a JFIF APP0 could be known. The byte only
 # decides the colour space of a 3-component, non-JFIF frame, and libjpeg
 # decodes every other case exactly as it decodes the file without the APP14.
@@ -3984,7 +3984,7 @@ fn test_dqt_table_id_past_the_store_rejected() {
 
 fn test_dht_symbol_count_past_the_table_rejected() {
     # BITS: 255 codes of length 9 and 2 of length 10 — 257 symbols, a complete
-    # canonical code that _jpeg_huff_build would accept.
+    # canonical code that _chitra_jpeg_huff_build would accept.
     var b = alloc(282);
     var i = 0;
     while (i < 282) {
@@ -4015,7 +4015,7 @@ fn fx_ac_table_run15(): i64 {
     store64(&bits + 1 * 8, 1);
     store64(t + _CHITRA_HT_COUNT, 1);
     store64(t + _CHITRA_HT_HUFFVAL + 0 * 8, 0xF1);
-    _jpeg_huff_build(t, &bits);
+    _chitra_jpeg_huff_build(t, &bits);
     return t;
 }
 
@@ -4029,10 +4029,10 @@ fn test_ac_run_past_coefficient_63_rejected() {
     store8(&buf + 0, 0x2A);
     store8(&buf + 1, 0x80);
     var rdr[72];   # _CHITRA_BR_SIZE
-    _jpeg_br_init(&rdr, &buf, 2);
+    _chitra_jpeg_br_init(&rdr, &buf, 2);
     var zz = alloc(1024);       # slack: a neutered guard writes zz[64]
     var err = 0;
-    _jpeg_decode_block(&rdr, dct, act, 0, zz, &err);
+    _chitra_jpeg_decode_block(&rdr, dct, act, 0, zz, &err);
     assert(err != 0, "gate-1: an AC run reaching k = 64 is refused");
     if (err != 0) {
         assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_ENTROPY, "gate-1: AC run to k = 64 -> JPEG_ENTROPY");
@@ -4056,8 +4056,8 @@ fn test_ac_run_past_coefficient_63_rejected() {
 #     with the same code.
 #   - SOS Ta >= 4: Ta selects presence bit 4 + Ta >= 8, which no DHT can set,
 #     so the table-presence check refuses with the same code.
-#   - _jpeg_decode's `idx < 0`, `idx >= count` and `L > 16`: for a table built
-#     by _jpeg_huff_build from the same BITS that set its count, a code that
+#   - _chitra_jpeg_decode's `idx < 0`, `idx >= count` and `L > 16`: for a table built
+#     by _chitra_jpeg_huff_build from the same BITS that set its count, a code that
 #     matches a length always indexes inside the table, and a code that matches
 #     none falls to the index checks — the three back each other up.
 #   - the multi-scan driver's `sos_off == 0`: without it the driver re-parses
@@ -4232,7 +4232,7 @@ fn fx_ac_table_zrl(): i64 {
     store64(&bits + 1 * 8, 1);
     store64(t + _CHITRA_HT_COUNT, 1);
     store64(t + _CHITRA_HT_HUFFVAL + 0 * 8, 0xF0);
-    _jpeg_huff_build(t, &bits);
+    _chitra_jpeg_huff_build(t, &bits);
     return t;
 }
 
@@ -4246,10 +4246,10 @@ fn test_zrl_past_the_block_rejected() {
     store8(&buf + 0, 0x00);
     store8(&buf + 1, 0x00);
     var rdr[72];   # _CHITRA_BR_SIZE
-    _jpeg_br_init(&rdr, &buf, 2);
+    _chitra_jpeg_br_init(&rdr, &buf, 2);
     var zz = alloc(512);
     var err = 0;
-    _jpeg_decode_block(&rdr, dct, act, 0, zz, &err);
+    _chitra_jpeg_decode_block(&rdr, dct, act, 0, zz, &err);
     assert(err != 0, "gate-4: four ZRLs (k = 65) are refused");
     if (err != 0) {
         assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_ENTROPY, "gate-4: ZRL past the block -> JPEG_ENTROPY");

@@ -16,7 +16,8 @@
 #
 # It also fails when a member of `enum ChitraErrCode` has no chitra_err_name
 # arm, or no literal value pin in tests/tcyr/surface.tcyr (see below), and when
-# the bundle declares a top-level `var` without a chitra prefix (cc-13, 1.1.2).
+# the bundle declares a top-level `var` (cc-13, 1.1.2) or `fn` (1.1.3) without a
+# chitra prefix.
 #
 # It deliberately does NOT parse @public markers. Those are carried two
 # different ways (a file-level banner and a per-function marker), which is
@@ -118,6 +119,21 @@ if [ -s "$tmp/unprefixed" ]; then
     rc=1
 fi
 
+# Functions have the same exposure (1.1.3). A consumer `fn` of the same name
+# REPLACES chitra's — the compiler says "duplicate fn … last definition wins" and
+# links the consumer's. Through 1.1.2, 84 internal helpers (`_jpeg_*`, `_bmp_*`,
+# `_cur_*`, ...) had no prefix, and a consumer `_jpeg_descale` changed JPEG
+# pixels. Every function is `chitra_*` (the frozen 29 plus the classified
+# internals above) or `_chitra_*`.
+grep -E '^fn ' "$BUNDLE" | grep -vE '^fn _?chitra_' \
+    | sed -E 's/^fn ([A-Za-z0-9_]+).*/\1/' > "$tmp/unprefixed_fn" || true
+if [ -s "$tmp/unprefixed_fn" ]; then
+    echo "check-surface: functions without a chitra prefix — a consumer function of"
+    echo "  the same name would silently replace them:"
+    sed 's/^/    /' "$tmp/unprefixed_fn"
+    rc=1
+fi
+
 if [ $rc -eq 0 ]; then
     frozen=$(awk '/^## FROZEN/,/^## INTERNAL_NAMES/' "$MANIFEST" \
         | awk '/^```/ { infence = !infence; next } infence { print }' \
@@ -125,8 +141,9 @@ if [ $rc -eq 0 ]; then
     total=$(wc -l < "$tmp/bundle")
     codes=$(wc -l < "$tmp/enum")
     globals=$(grep -cE '^var ' "$BUNDLE")
+    fns=$(grep -cE '^fn ' "$BUNDLE")
     echo "check-surface: bundle and manifest agree — ${total} exports, ${frozen} frozen;" \
         "${codes} ChitraErrCode members, each named and value-pinned;" \
-        "${globals} globals, all chitra-prefixed"
+        "${globals} globals and ${fns} functions, all chitra-prefixed"
 fi
 exit $rc

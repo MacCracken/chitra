@@ -1,6 +1,6 @@
 # @internal — JPEG dequantization + zig-zag + inverse DCT (0.3.0, bite 5).
 # jpeg_idct.cyr — turn a block of 64 zig-zag-order DCT coefficients (from
-# jpeg_huffman's _jpeg_decode_block) plus its quantization table into 64
+# jpeg_huffman's _chitra_jpeg_decode_block) plus its quantization table into 64
 # natural-order 8-bit samples. Frame-independent: operates on caller buffers.
 #
 # IDCT: the libjpeg `jpeg_idct_islow` integer fixed-point separable algorithm
@@ -43,7 +43,7 @@ var _CHITRA_FIX_3_072711026 = 25172;
 # through a NULL pointer. Const data has no business owning a failure mode.
 var _chitra_jpeg_zz_tbl[512];        # 64 i64 — BSS, no alloc dep
 var _chitra_jpeg_zz_ready = 0;
-fn _jpeg_zigzag_table(): i64 {
+fn _chitra_jpeg_zigzag_table(): i64 {
     if (_chitra_jpeg_zz_ready != 0) { return &_chitra_jpeg_zz_tbl; }
     var t = &_chitra_jpeg_zz_tbl;
     store64(t + 0 * 8, 0);
@@ -116,7 +116,7 @@ fn _jpeg_zigzag_table(): i64 {
 
 # DESCALE: round-to-nearest division by 2^n, symmetric about zero (works for
 # negatives despite the logical `>>`). n >= 1.
-fn _jpeg_descale(x, n): i64 {
+fn _chitra_jpeg_descale(x, n): i64 {
     var half = 1 << (n - 1);
     var div = 1 << n;
     if (x >= 0) { return (x + half) / div; }
@@ -124,8 +124,8 @@ fn _jpeg_descale(x, n): i64 {
 }
 
 # Final per-output store: descale, and (pass 2 only) level-shift +128 + clamp.
-fn _jpeg_idct_out(addr, val, shift, do_ls): i64 {
-    var d = _jpeg_descale(val, shift);
+fn _chitra_jpeg_idct_out(addr, val, shift, do_ls): i64 {
+    var d = _chitra_jpeg_descale(val, shift);
     if (do_ls == 1) {
         d = d + 128;
         if (d < 0) { d = 0; }
@@ -138,7 +138,7 @@ fn _jpeg_idct_out(addr, val, shift, do_ls): i64 {
 # One 1-D inverse DCT stage over 8 values at inp + i*istep, writing 8 results to
 # outp + j*ostep (steps in bytes). `shift` is the descale; `do_ls` enables the
 # pass-2 level-shift + clamp. Identical butterfly for both passes (the islow form).
-fn _jpeg_idct_1d(inp, istep, outp, ostep, shift, do_ls): i64 {
+fn _chitra_jpeg_idct_1d(inp, istep, outp, ostep, shift, do_ls): i64 {
     var s0 = load64(inp + 0 * istep);
     var s1 = load64(inp + 1 * istep);
     var s2 = load64(inp + 2 * istep);
@@ -184,25 +184,25 @@ fn _jpeg_idct_1d(inp, istep, outp, ostep, shift, do_ls): i64 {
     o2 = o2 + oz2 + oz3;
     o3 = o3 + oz1 + oz4;
 
-    _jpeg_idct_out(outp + 0 * ostep, tmp10 + o3, shift, do_ls);
-    _jpeg_idct_out(outp + 7 * ostep, tmp10 - o3, shift, do_ls);
-    _jpeg_idct_out(outp + 1 * ostep, tmp11 + o2, shift, do_ls);
-    _jpeg_idct_out(outp + 6 * ostep, tmp11 - o2, shift, do_ls);
-    _jpeg_idct_out(outp + 2 * ostep, tmp12 + o1, shift, do_ls);
-    _jpeg_idct_out(outp + 5 * ostep, tmp12 - o1, shift, do_ls);
-    _jpeg_idct_out(outp + 3 * ostep, tmp13 + o0, shift, do_ls);
-    _jpeg_idct_out(outp + 4 * ostep, tmp13 - o0, shift, do_ls);
+    _chitra_jpeg_idct_out(outp + 0 * ostep, tmp10 + o3, shift, do_ls);
+    _chitra_jpeg_idct_out(outp + 7 * ostep, tmp10 - o3, shift, do_ls);
+    _chitra_jpeg_idct_out(outp + 1 * ostep, tmp11 + o2, shift, do_ls);
+    _chitra_jpeg_idct_out(outp + 6 * ostep, tmp11 - o2, shift, do_ls);
+    _chitra_jpeg_idct_out(outp + 2 * ostep, tmp12 + o1, shift, do_ls);
+    _chitra_jpeg_idct_out(outp + 5 * ostep, tmp12 - o1, shift, do_ls);
+    _chitra_jpeg_idct_out(outp + 3 * ostep, tmp13 + o0, shift, do_ls);
+    _chitra_jpeg_idct_out(outp + 4 * ostep, tmp13 - o0, shift, do_ls);
     return 0;
 }
 
 # ================================================================
-# _jpeg_idct_block — dequantize + de-zig-zag `zz` (64 i64, zig-zag order) with
+# _chitra_jpeg_idct_block — dequantize + de-zig-zag `zz` (64 i64, zig-zag order) with
 # `quant` (64 i64, zig-zag order) into a natural-order block, run the 2-D IDCT,
 # and write 64 level-shifted clamped samples (0..255) to `out` (64 i64,
 # row-major). The arrays `zz`/`quant`/`out` are caller-owned.
 # ================================================================
-fn _jpeg_idct_block(zz, quant, out): i64 {
-    var zztab = _jpeg_zigzag_table();
+fn _chitra_jpeg_idct_block(zz, quant, out): i64 {
+    var zztab = _chitra_jpeg_zigzag_table();
     var coef[512];   # 64 i64, natural order
     var ws[512];     # 64 i64, pass-1 workspace
     var k = 0;
@@ -214,12 +214,12 @@ fn _jpeg_idct_block(zz, quant, out): i64 {
     }
     var c = 0;
     while (c < 8) {
-        _jpeg_idct_1d(&coef + c * 8, 64, &ws + c * 8, 64, 11, 0);
+        _chitra_jpeg_idct_1d(&coef + c * 8, 64, &ws + c * 8, 64, 11, 0);
         c = c + 1;
     }
     var r = 0;
     while (r < 8) {
-        _jpeg_idct_1d(&ws + r * 64, 8, out + r * 64, 8, 18, 1);
+        _chitra_jpeg_idct_1d(&ws + r * 64, 8, out + r * 64, 8, 18, 1);
         r = r + 1;
     }
     return 0;

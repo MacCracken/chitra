@@ -9,6 +9,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 _Nothing yet._
 
+## [1.1.3] - 2026-10-15 — a consumer's functions can no longer replace chitra's
+
+The function half of 1.1.2's namespace repair, and the item 1.1.2 left first on
+the roadmap. ⛔ **Nothing frozen changed** — the 29 frozen names and the 46
+classified internal `chitra_*` names are untouched; only helpers that were never
+part of any surface were renamed. Decode output is byte-identical to 1.1.2.
+
+### Fixed — 84 internal functions had no chitra prefix
+
+`dist/chitra.cyr` puts every top-level `fn` in `src/` into the consumer's
+program, and 84 of them — `_jpeg_*` (44), `_bmp_*` (11), `_cur_*` (10), `_gif_*`
+(7), `_chunk_*` (6), `_adam7_*` (5) and `_png_*` (1) — carried no prefix. A
+consumer function of the same name **replaced** chitra's: the compiler links the
+later definition and says only "duplicate fn … last definition wins". Measured on
+1.1.2, a consumer `_jpeg_descale` made a JPEG decode to different pixels.
+
+**Repair**: every one is now `_chitra_*` — 579 replacements across `src/`, five
+suites, two fuzz harnesses and the bench harness, purely mechanical (every line
+still inside lint's 120 columns). `build/chitra_smoke` is byte-for-byte the same
+size (347,912 B). The live docs that name these helpers follow (CLAUDE.md,
+SECURITY.md, state.md, ADRs 0002/0004/0006/0008, architecture/003/004 and
+others — 108 citations, all still resolving: `check-anchors.sh` reports 96, 0
+suspicious). Released CHANGELOG entries and dated audits keep the names they
+were written with. No consumer calls any of these helpers.
+
+### Changed — `tests/tcyr/namespace.tcyr` (22 → 29) and the prefix gate
+
+- **The consumer now has functions too**: one for every old helper name, with
+  chitra's exact arity, each returning 7. The suite asserts all four formats
+  still decode to the reference sums, and that one function per family still
+  answers the *consumer's* 7. ⚠ **Checked against the 1.1.2 sources**: 84
+  "duplicate fn" warnings, PNG and JPEG decodes fail, and the suite dies with
+  SIGSEGV. On 1.1.3: 29/29, and zero duplicate warnings.
+- **`check-surface.sh`** now fails on any top-level `fn` without a `chitra_` /
+  `_chitra_` prefix as well as any such `var`, and names it. Proven with a probe
+  `fn _probe_helper` in the bundle. It reports **146 globals and 171 functions,
+  all chitra-prefixed**. ⇒ The bundle's whole namespace is now chitra's, and
+  gated.
+
+### Numbers
+
+**3,978 assertions across 14 suites** (3,971 + 7) and **11,185,700 fuzz
+assertions** under `--poison` (unchanged — a pure rename moves no case), 0
+failures. The 53-file reference corpus decodes byte-identically to 1.1.2.
+`dist/chitra.cyr` 339,306 B.
+
 ## [1.1.2] - 2026-10-15 — a consumer's globals can no longer reach inside chitra
 
 Closes **cc-13**, the one confirmed finding the 1.1.1 P(-1) sweep deferred
