@@ -242,9 +242,9 @@ var _CHITRA_BH_MASK_B      = 96;
 var _CHITRA_BH_MASK_A      = 104;
 var _CHITRA_BMP_HDR_SIZE   = 112;
 
-fn chitra_bmp_hdr_width(h): i64  { return load64(h + _CHITRA_BH_WIDTH); }
-fn chitra_bmp_hdr_height(h): i64 { return load64(h + _CHITRA_BH_HEIGHT); }
-fn chitra_bmp_hdr_bpp(h): i64    { return load64(h + _CHITRA_BH_BPP); }
+fn _chitra_bmp_hdr_width(h): i64  { return load64(h + _CHITRA_BH_WIDTH); }
+fn _chitra_bmp_hdr_height(h): i64 { return load64(h + _CHITRA_BH_HEIGHT); }
+fn _chitra_bmp_hdr_bpp(h): i64    { return load64(h + _CHITRA_BH_BPP); }
 
 # ================================================================
 # _chitra_bmp_parse_header — validate the file header + DIB header and fill a

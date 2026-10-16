@@ -11,7 +11,7 @@
 # from kii (audit 2026-05-22 findings 1/2/3).
 #
 # The handoff to the later color pass is the ChitraPngRaw
-# struct produced by chitra_png_parse_raw (see png_filter.cyr for the
+# struct produced by _chitra_png_parse_raw (see png_filter.cyr for the
 # unfilter step that fills the scanline buffer).
 
 # ================================================================
@@ -44,7 +44,7 @@ var CHITRA_MAX_INFLATE_RATIO = 1100;
 
 # ================================================================
 # ChitraPngRaw — the parse -> colour-pass handoff record (104 bytes).
-# Produced by chitra_png_parse_raw (framing + inflate + unfilter); the
+# Produced by _chitra_png_parse_raw (framing + inflate + unfilter); the
 # canonical-RGBA8 colour pass consumes it. PLTE/tRNS spans are
 # captured here as (offset-into-src, length) pairs — the bytes are NOT
 # processed yet (that is the color pass's job). offset 0 with length 0
@@ -82,25 +82,25 @@ var _CHITRA_RAW_INTERLACE_OFFSET    = 96;   # 0 = none, 1 = Adam7 (chitra 0.2.1)
 var CHITRA_PNG_RAW_SIZE     = 104;
 
 # ---- ChitraPngRaw accessors -------------------------------------
-fn chitra_raw_width(raw): i64       { return load64(raw + _CHITRA_RAW_WIDTH_OFFSET); }
-fn chitra_raw_height(raw): i64      { return load64(raw + _CHITRA_RAW_HEIGHT_OFFSET); }
-fn chitra_raw_bit_depth(raw): i64   { return load64(raw + _CHITRA_RAW_BIT_DEPTH_OFFSET); }
-fn chitra_raw_color_type(raw): i64  { return load64(raw + _CHITRA_RAW_COLOR_TYPE_OFFSET); }
-fn chitra_raw_channels(raw): i64    { return load64(raw + _CHITRA_RAW_CHANNELS_OFFSET); }
-fn chitra_raw_scanlines(raw): i64   { return load64(raw + _CHITRA_RAW_SCANLINES_OFFSET); }
-fn chitra_raw_scanlines_len(raw): i64 { return load64(raw + _CHITRA_RAW_SCANLINES_LEN_OFFSET); }
-fn chitra_raw_plte_off(raw): i64    { return load64(raw + _CHITRA_RAW_PLTE_OFF_OFFSET); }
-fn chitra_raw_plte_len(raw): i64    { return load64(raw + _CHITRA_RAW_PLTE_LEN_OFFSET); }
-fn chitra_raw_trns_off(raw): i64    { return load64(raw + _CHITRA_RAW_TRNS_OFF_OFFSET); }
-fn chitra_raw_trns_len(raw): i64    { return load64(raw + _CHITRA_RAW_TRNS_LEN_OFFSET); }
-fn chitra_raw_seen_iend(raw): i64   { return load64(raw + _CHITRA_RAW_SEEN_IEND_OFFSET); }
-fn chitra_raw_interlace(raw): i64   { return load64(raw + _CHITRA_RAW_INTERLACE_OFFSET); }
+fn _chitra_raw_width(raw): i64       { return load64(raw + _CHITRA_RAW_WIDTH_OFFSET); }
+fn _chitra_raw_height(raw): i64      { return load64(raw + _CHITRA_RAW_HEIGHT_OFFSET); }
+fn _chitra_raw_bit_depth(raw): i64   { return load64(raw + _CHITRA_RAW_BIT_DEPTH_OFFSET); }
+fn _chitra_raw_color_type(raw): i64  { return load64(raw + _CHITRA_RAW_COLOR_TYPE_OFFSET); }
+fn _chitra_raw_channels(raw): i64    { return load64(raw + _CHITRA_RAW_CHANNELS_OFFSET); }
+fn _chitra_raw_scanlines(raw): i64   { return load64(raw + _CHITRA_RAW_SCANLINES_OFFSET); }
+fn _chitra_raw_scanlines_len(raw): i64 { return load64(raw + _CHITRA_RAW_SCANLINES_LEN_OFFSET); }
+fn _chitra_raw_plte_off(raw): i64    { return load64(raw + _CHITRA_RAW_PLTE_OFF_OFFSET); }
+fn _chitra_raw_plte_len(raw): i64    { return load64(raw + _CHITRA_RAW_PLTE_LEN_OFFSET); }
+fn _chitra_raw_trns_off(raw): i64    { return load64(raw + _CHITRA_RAW_TRNS_OFF_OFFSET); }
+fn _chitra_raw_trns_len(raw): i64    { return load64(raw + _CHITRA_RAW_TRNS_LEN_OFFSET); }
+fn _chitra_raw_seen_iend(raw): i64   { return load64(raw + _CHITRA_RAW_SEEN_IEND_OFFSET); }
+fn _chitra_raw_interlace(raw): i64   { return load64(raw + _CHITRA_RAW_INTERLACE_OFFSET); }
 
 # Release a ChitraPngRaw. The stdlib `alloc` is a bump allocator with no
 # per-block free, so this is a no-op kept for API symmetry / a future
 # arena-backed allocator; documented so callers don't assume reclaim.
 # Safe on a 0 ptr.
-fn chitra_raw_free(raw): i64 {
+fn _chitra_raw_free(raw): i64 {
     return 0;
 }
 
@@ -220,7 +220,7 @@ fn _chitra_chunk_is_trns(p): i64 { return _chitra_chunk_is(p, 0x74, 0x52, 0x4E, 
 #   4 grey+alpha -> 2  6 RGBA -> 4
 # Returns -1 for an unknown color type.
 # ================================================================
-fn chitra_png_color_channels(color_type): i64 {
+fn _chitra_png_color_channels(color_type): i64 {
     if (color_type == 0) { return 1; }
     if (color_type == 2) { return 3; }
     if (color_type == 3) { return 1; }

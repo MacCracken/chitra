@@ -50,7 +50,7 @@ error.cyr  →  png_chunks.cyr  →  png_filter.cyr  →  png_color.cyr  →  pn
   constants).
 - `png_chunks.cyr` (byte-buffer cursor + signature/chunk predicates +
   `ChitraPngRaw`) and `png_filter.cyr` (the five spec § 9 unfilter predictors +
-  the `chitra_png_parse_raw` framing driver) build on `error.cyr` and on
+  the `_chitra_png_parse_raw` framing driver) build on `error.cyr` and on
   `sankoch` (DEFLATE inflate + CRC — *not* chitra's job; see
   [`../../src/lib.cyr`](../../src/lib.cyr) and [`0001-...`](../adr/0001-fork-kii-png-decoder.md)).
 - `png_color.cyr` (the canonical-RGBA8 + tRNS color pass) consumes a

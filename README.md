@@ -1,6 +1,6 @@
 # chitra
 
-Version: 1.1.4
+Version: 1.2.0
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder, a sibling AGNOS package in the mould of `sakshi` /
@@ -122,11 +122,11 @@ deliberately — is in [`CHANGELOG.md`](CHANGELOG.md).
 signature predicates, eight `ChitraImage` accessors, six error-API functions
 and `chitra_version` — plus the 56-byte `ChitraImage` and 16-byte `ChitraErr`
 layouts and the `ChitraErrCode` numeric values, cannot change without a major
-bump and an ADR. `dist/chitra.cyr` is a strip-concatenated bundle, so it also
-exports **46 internal names**; the same file lists them, and
-`scripts/check-surface.sh` fails the build if the bundle and that list ever
-disagree in either direction, or if a `ChitraErrCode` member lacks a name or a
-literal value pin.
+bump and an ADR. Since 1.2.0 the public prefix *is* the promise: the bundle's
+`chitra_*` functions are exactly those 29, everything internal is `_chitra_*`,
+and `scripts/check-surface.sh` fails the build if a non-frozen `chitra_*` name
+appears, a frozen one disappears, any top-level function or global lacks a
+chitra prefix, or a `ChitraErrCode` member lacks a name or a literal value pin.
 
 Four things are deliberately outside the promise: the internal names, the
 human-readable `chitra_err_name` strings (the *codes* are frozen — match on

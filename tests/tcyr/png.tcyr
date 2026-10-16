@@ -56,12 +56,12 @@ fn test_signature() {
 # color_type -> channels
 # ================================================================
 fn test_color_channels() {
-    assert_eq(chitra_png_color_channels(0), 1, "grey=1ch");
-    assert_eq(chitra_png_color_channels(2), 3, "rgb=3ch");
-    assert_eq(chitra_png_color_channels(3), 1, "palette=1ch");
-    assert_eq(chitra_png_color_channels(4), 2, "grey+alpha=2ch");
-    assert_eq(chitra_png_color_channels(6), 4, "rgba=4ch");
-    assert_eq(chitra_png_color_channels(5), 0 - 1, "unknown color type=-1");
+    assert_eq(_chitra_png_color_channels(0), 1, "grey=1ch");
+    assert_eq(_chitra_png_color_channels(2), 3, "rgb=3ch");
+    assert_eq(_chitra_png_color_channels(3), 1, "palette=1ch");
+    assert_eq(_chitra_png_color_channels(4), 2, "grey+alpha=2ch");
+    assert_eq(_chitra_png_color_channels(6), 4, "rgba=4ch");
+    assert_eq(_chitra_png_color_channels(5), 0 - 1, "unknown color type=-1");
     return 0;
 }
 
@@ -124,17 +124,17 @@ fn test_parse_rgba8_2x2() {
     var lo = 0;
     var bytes = fx_rgba8_2x2(&lo);
     var err = 0;
-    var raw = chitra_png_parse_raw(bytes, lo, &err);
+    var raw = _chitra_png_parse_raw(bytes, lo, &err);
     assert(raw != 0, "parse rgba8 2x2 ok");
     assert_eq(err, 0, "no error set");
-    assert_eq(chitra_raw_width(raw), 2, "width 2");
-    assert_eq(chitra_raw_height(raw), 2, "height 2");
-    assert_eq(chitra_raw_bit_depth(raw), 8, "bit_depth 8");
-    assert_eq(chitra_raw_color_type(raw), 6, "color_type 6");
-    assert_eq(chitra_raw_channels(raw), 4, "channels 4");
-    assert_eq(chitra_raw_scanlines_len(raw), 16, "scanlines 16 bytes");
+    assert_eq(_chitra_raw_width(raw), 2, "width 2");
+    assert_eq(_chitra_raw_height(raw), 2, "height 2");
+    assert_eq(_chitra_raw_bit_depth(raw), 8, "bit_depth 8");
+    assert_eq(_chitra_raw_color_type(raw), 6, "color_type 6");
+    assert_eq(_chitra_raw_channels(raw), 4, "channels 4");
+    assert_eq(_chitra_raw_scanlines_len(raw), 16, "scanlines 16 bytes");
     # Type-6 depth-8 None filter -> unfiltered bytes ARE the pixels.
-    var sl = chitra_raw_scanlines(raw);
+    var sl = _chitra_raw_scanlines(raw);
     assert_eq(load8(sl + 0), 255, "px0 R");
     assert_eq(load8(sl + 1), 0, "px0 G");
     assert_eq(load8(sl + 2), 0, "px0 B");
@@ -159,12 +159,12 @@ fn test_parse_rgb8_filtered() {
     var lo = 0;
     var bytes = fx_rgb8_2x2_filtered(&lo);
     var err = 0;
-    var raw = chitra_png_parse_raw(bytes, lo, &err);
+    var raw = _chitra_png_parse_raw(bytes, lo, &err);
     assert(raw != 0, "parse rgb8 filtered ok");
-    assert_eq(chitra_raw_color_type(raw), 2, "color_type 2");
-    assert_eq(chitra_raw_channels(raw), 3, "channels 3");
-    assert_eq(chitra_raw_scanlines_len(raw), 12, "scanlines 12 bytes");
-    var sl = chitra_raw_scanlines(raw);
+    assert_eq(_chitra_raw_color_type(raw), 2, "color_type 2");
+    assert_eq(_chitra_raw_channels(raw), 3, "channels 3");
+    assert_eq(_chitra_raw_scanlines_len(raw), 12, "scanlines 12 bytes");
+    var sl = _chitra_raw_scanlines(raw);
     # row0: 10,20,30, 40,50,60   row1: 70,80,90, 100,110,120
     assert_eq(load8(sl + 0), 10, "r0px0 R");
     assert_eq(load8(sl + 1), 20, "r0px0 G");
@@ -186,11 +186,11 @@ fn test_parse_paeth() {
     var lo = 0;
     var bytes = fx_rgba8_1x1_paeth(&lo);
     var err = 0;
-    var raw = chitra_png_parse_raw(bytes, lo, &err);
+    var raw = _chitra_png_parse_raw(bytes, lo, &err);
     assert(raw != 0, "parse 1x1 paeth ok");
-    assert_eq(chitra_raw_width(raw), 1, "width 1");
-    assert_eq(chitra_raw_scanlines_len(raw), 4, "scanlines 4 bytes");
-    var sl = chitra_raw_scanlines(raw);
+    assert_eq(_chitra_raw_width(raw), 1, "width 1");
+    assert_eq(_chitra_raw_scanlines_len(raw), 4, "scanlines 4 bytes");
+    var sl = _chitra_raw_scanlines(raw);
     assert_eq(load8(sl + 0), 123, "paeth px R");
     assert_eq(load8(sl + 1), 200, "paeth px G");
     assert_eq(load8(sl + 2), 55, "paeth px B");
@@ -206,7 +206,7 @@ fn test_reject_bad_signature() {
     var bytes = fx_rgba8_2x2(&lo);
     store8(bytes + 1, 0x00);   # corrupt 'P' of the magic
     var err = 0;
-    var raw = chitra_png_parse_raw(bytes, lo, &err);
+    var raw = _chitra_png_parse_raw(bytes, lo, &err);
     assert_eq(raw, 0, "bad sig -> null");
     assert(err != 0, "bad sig -> err set");
     assert_eq(chitra_err_code(err), CHITRA_ERR_SIGNATURE, "err SIGNATURE");
@@ -221,12 +221,12 @@ fn test_reject_truncated() {
     var bytes = fx_rgba8_2x2(&lo);
     var err = 0;
     # Claim only 40 bytes (past IHDR, mid-IDAT-header) -> truncated.
-    var raw = chitra_png_parse_raw(bytes, 40, &err);
+    var raw = _chitra_png_parse_raw(bytes, 40, &err);
     assert_eq(raw, 0, "truncated -> null");
     assert(err != 0, "truncated -> err set");
     # Also a length shorter than even the signature.
     var err2 = 0;
-    var raw2 = chitra_png_parse_raw(bytes, 5, &err2);
+    var raw2 = _chitra_png_parse_raw(bytes, 5, &err2);
     assert_eq(raw2, 0, "tiny len -> null");
     assert_eq(chitra_err_code(err2), CHITRA_ERR_SIGNATURE, "tiny len -> SIGNATURE");
     return 0;
@@ -239,7 +239,7 @@ fn test_reject_crc() {
     var lo = 0;
     var bytes = fx_crc_corrupt_2x2(&lo);
     var err = 0;
-    var raw = chitra_png_parse_raw(bytes, lo, &err);
+    var raw = _chitra_png_parse_raw(bytes, lo, &err);
     assert_eq(raw, 0, "crc mismatch -> null");
     assert(err != 0, "crc mismatch -> err set");
     assert_eq(chitra_err_code(err), CHITRA_ERR_CRC, "err CRC");
@@ -257,7 +257,7 @@ fn test_reject_bomb() {
     var lo = 0;
     var bytes = fx_bomb_huge_dims(&lo);
     var err = 0;
-    var raw = chitra_png_parse_raw(bytes, lo, &err);
+    var raw = _chitra_png_parse_raw(bytes, lo, &err);
     assert_eq(raw, 0, "bomb -> null");
     assert_eq(chitra_err_code(err), CHITRA_ERR_DIMENSIONS, "err DIMENSIONS");
     return 0;
@@ -513,7 +513,7 @@ fn test_reject_palette_depth16() {
     var lo = 0;
     var bytes = fx_palette_depth16_reject(&lo);
     var err = 0;
-    var raw = chitra_png_parse_raw(bytes, lo, &err);
+    var raw = _chitra_png_parse_raw(bytes, lo, &err);
     assert_eq(raw, 0, "ct3+depth16 -> null");
     assert_eq(chitra_err_code(err), CHITRA_ERR_BIT_DEPTH, "ct3+depth16 -> BIT_DEPTH");
     return 0;
@@ -531,7 +531,7 @@ fn test_reject_no_idat() {
     var lo = 0;
     var bytes = fx_no_idat(&lo);
     var err = 0;
-    var raw = chitra_png_parse_raw(bytes, lo, &err);
+    var raw = _chitra_png_parse_raw(bytes, lo, &err);
     assert_eq(raw, 0, "no idat -> null");
     assert_eq(chitra_err_code(err), CHITRA_ERR_NO_IDAT, "no idat -> NO_IDAT");
     return 0;
@@ -541,7 +541,7 @@ fn test_reject_iend_nonzero() {
     var lo = 0;
     var bytes = fx_iend_nonzero(&lo);
     var err = 0;
-    var raw = chitra_png_parse_raw(bytes, lo, &err);
+    var raw = _chitra_png_parse_raw(bytes, lo, &err);
     assert_eq(raw, 0, "iend nonzero -> null");
     assert_eq(chitra_err_code(err), CHITRA_ERR_BAD_CHUNK, "iend nonzero len -> BAD_CHUNK");
     return 0;
@@ -3200,7 +3200,7 @@ fn test_reject_bad_filter_method() {
     var lo = 0;
     var bytes = fx_bad_filter_method(&lo);
     var err = 0;
-    var raw = chitra_png_parse_raw(bytes, lo, &err);
+    var raw = _chitra_png_parse_raw(bytes, lo, &err);
     assert_eq(raw, 0, "bad filter method -> null");
     assert_eq(chitra_err_code(err), CHITRA_ERR_UNSUPPORTED, "filter method != 0 -> UNSUPPORTED");
     return 0;
@@ -3938,7 +3938,7 @@ fn test_inflate_limit_is_its_own_error() {
     # ⭐ THE COST IS THE HEADLINE. Before 1.0.1 this call allocated ~26.6 MB before failing; the
     # refusal is now a comparison against a number already computed.
     var before = alloc_used();
-    var raw = chitra_png_parse_raw(bytes, lo, &err);
+    var raw = _chitra_png_parse_raw(bytes, lo, &err);
     var spent = alloc_used() - before;
     assert_eq(raw, 0, "an image past the decompressor ceiling is refused");
     assert_eq(chitra_err_code(err), CHITRA_ERR_INFLATE_LIMIT,
@@ -3965,7 +3965,7 @@ fn test_bomb_still_reports_as_a_bomb() {
     # ⇒ Build the fixture you mean to test; do not corrupt another one into it.
     var bytes = fx_oversize_rgb(&lo, 8);
     var err = 0;
-    var raw = chitra_png_parse_raw(bytes, lo, &err);
+    var raw = _chitra_png_parse_raw(bytes, lo, &err);
     assert_eq(raw, 0, "a bomb is still refused");
     assert_eq(chitra_err_code(err), CHITRA_ERR_DIMENSIONS,
       "...as CHITRA_ERR_DIMENSIONS — a bomb is a hostile file, not merely a large one");
@@ -4493,7 +4493,7 @@ fn _z_zeros(n, len_out): i64 {
 # chunk), one IDAT, IEND. Every PLTE entry is (10, 20, 30) and every tRNS byte
 # 0x80, so a decode that succeeds shows which chunk it used.
 fn fx_zero_png(w, h, depth, ct, plte_len, trns_len, len_out): i64 {
-    var row = (w * chitra_png_color_channels(ct) * depth + 7) / 8;
+    var row = (w * _chitra_png_color_channels(ct) * depth + 7) / 8;
     var zl = 0;
     var z = _z_zeros(h * (1 + row), &zl);
     var pb = _pb_new(zl + 2048);
@@ -4611,15 +4611,15 @@ fn _colour_pass_refuses(w, depth, ct, plte_len, trns_len, poke_off, poke_val, la
     var lo = 0;
     var b = fx_zero_png(w, 1, depth, ct, plte_len, trns_len, &lo);
     var err = 0;
-    var raw = chitra_png_parse_raw(b, lo, &err);
+    var raw = _chitra_png_parse_raw(b, lo, &err);
     assert(raw != 0, "colour-pass cell: the unedited file parses (else the cell proves nothing)");
     if (raw != 0) {
         var e1 = 0;
-        assert(chitra_png_color_to_rgba8(raw, b, lo, &e1) != 0,
+        assert(_chitra_png_color_to_rgba8(raw, b, lo, &e1) != 0,
           "colour-pass cell: the unedited raw converts (control)");
         store64(raw + poke_off, poke_val);
         var e2 = 0;
-        var out = chitra_png_color_to_rgba8(raw, b, lo, &e2);
+        var out = _chitra_png_color_to_rgba8(raw, b, lo, &e2);
         assert_eq(out, 0, label);
         assert(e2 != 0, label);
         if (e2 != 0) { assert_eq(chitra_err_code(e2), CHITRA_ERR_BAD_CHUNK, label); }

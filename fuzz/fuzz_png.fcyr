@@ -330,7 +330,7 @@ fn fuzz_png_truncate(): i64 {
 
 # ---- 6. IDAT-stream mutation (0.7.3) ---------------------------------
 # PNG's per-chunk CRC-32 is why this mode has to exist. A random byte flip
-# inside IDAT makes the chunk CRC disagree, so `chitra_png_parse_raw` rejects
+# inside IDAT makes the chunk CRC disagree, so `_chitra_png_parse_raw` rejects
 # with CHITRA_ERR_CRC before sankoch's inflate ever runs: modes 1-3 drive the
 # chunk walk and the signature gate, and stop at the CRC.
 #

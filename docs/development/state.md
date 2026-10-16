@@ -1,11 +1,21 @@
 # chitra — Current State
 
-> **Last refresh**: 2026-10-15 (1.1.4) | **Refresh cadence**: every release.
+> **Last refresh**: 2026-10-15 (1.2.0) | **Refresh cadence**: every release.
 > [`CLAUDE.md`](../../CLAUDE.md) is preferences / process / architecture
 > (durable); this file is **state** (volatile) — it is the home for the
 > version, sizes, and counts `CLAUDE.md` must not inline.
 
 ## Version
+
+**1.2.0** — cut 2026-10-15. ⭐ **The public prefix is the promise.** The 46 internal functions that
+still carried the public `chitra_` prefix — the parsed-PNG `chitra_raw_*` accessors,
+`chitra_png_parse_raw` / `chitra_png_color_to_rgba8`, `chitra_bmp_hdr_*`, `chitra_jpeg_frame_*` /
+`chitra_jpeg_scan_*` and `chitra_jpeg_scan_markers` — are now `_chitra_*` (233 mechanical
+replacements). The bundle's `chitra_*` functions are now **exactly the 29 frozen names**, the
+INTERNAL_NAMES block is gone from `public-surface.md`, and `check-surface.sh` fails on any
+non-frozen `chitra_*` function or any vanished frozen one. A minor, not a patch, because names
+visible since 0.x went away; no consumer called any of them, and the frozen 29 are untouched.
+Decode output is byte-identical to 1.1.4.
 
 **1.1.4** — cut 2026-10-15. ⭐ **CI now builds chitra the way most of its consumers link it.** The
 pin moves `6.7.9` → **`6.7.12`** for its stdlib, whose `sankoch.cyr` is 2.8.7 — at the 2.8.6 floor
@@ -160,12 +170,12 @@ Adam7; **JPEG** JFIF baseline including the full T.81 § A.2 scan model;
 **BMP** with an empty deferral list; **GIF** first frame ([ADR 0005](../adr/0005-gif-first-frame-only.md)).
 Four security audits, every format line-by-line reviewed.
 
-`chitra_version()` → **10104**. **3,978 test assertions** across **14 suites**,
+`chitra_version()` → **10200**. **3,978 test assertions** across **14 suites**,
 **11,649,080 fuzz assertions** under `--poison`, 17 benchmarks — 0 failures throughout.
 
 Released tags: 0.1.0, 0.2.0, 0.2.1, 0.3.0, 0.3.1, 0.3.2, 0.3.3, 0.4.0, 0.5.0,
 0.5.1, 0.5.2, 0.5.3, 0.6.0, 0.6.1, 0.7.0, 0.7.1, 0.7.2, 0.7.3, 0.8.0, 0.9.0,
-1.0.0, 1.0.1, 1.0.2, 1.0.3, 1.0.4, 1.1.0, 1.1.1, 1.1.2, 1.1.3 (1.1.4 is cut but not yet tagged)
+1.0.0, 1.0.1, 1.0.2, 1.0.3, 1.0.4, 1.1.0, 1.1.1, 1.1.2, 1.1.3, 1.1.4 (1.2.0 is cut but not yet tagged)
 (SemVer; **the public surface is frozen as of 1.0.0** — see
 [`public-surface.md`](public-surface.md) for what that covers and
 [ADR 0010](../adr/0010-the-v1-surface.md) for the calls made to get there).
@@ -321,7 +331,7 @@ Shared:
 - The full frozen list — 29 names of the 75 the bundle exports — is
   [`public-surface.md`](public-surface.md), checked against `dist/chitra.cyr`
   by `scripts/check-surface.sh` on every `make lint`.
-- `chitra_version()` → **`10104`** (`major*10000 + minor*100 + patch`).
+- `chitra_version()` → **`10200`** (`major*10000 + minor*100 + patch`).
 - Error API: `chitra_err_new` / `chitra_err` / `chitra_err_code` /
   `chitra_err_detail` / `chitra_err_name` / `chitra_err_print_name` + enum
   `ChitraErrCode`.
@@ -392,7 +402,7 @@ JFIF **baseline** (SOF0) sequential Huffman, 8-bit precision only:
 - **DRI / RST0–7** restart markers — restart intervals reset the DC
   predictors and byte-align the entropy stream.
 
-Decode pipeline: `chitra_jpeg_scan_markers` (SOI..SOS marker walk —
+Decode pipeline: `_chitra_jpeg_scan_markers` (SOI..SOS marker walk —
 DQT / DHT / SOF0 / DRI parse + reject non-baseline) → `_chitra_jpeg_parse_sos` →
 `_chitra_jpeg_decode_scans` → `_chitra_jpeg_decode_one_scan` (per-component MCU loop: `_chitra_jpeg_decode_block`
 [bit-reader + Annex F `DECODE` + `RECEIVE`/`EXTEND`, DC diff + AC run/size],
@@ -485,11 +495,11 @@ PNG + shared:
   this byte cursor.
 - `png_filter.cyr` (671 L) — the five § 9 unfilter predictors
   (None / Sub / Up / Average / Paeth), the Adam7 7-pass deinterlace, and
-  `chitra_png_parse_raw`: the two-pass chunk walk (CRC-32 each chunk via
+  `_chitra_png_parse_raw`: the two-pass chunk walk (CRC-32 each chunk via
   sankoch, parse IHDR, capture PLTE/tRNS spans, concat IDAT, inflate with
   the bomb caps, unfilter into the scanline buffer). Every failure returns
   a `ChitraErr`, never an OOB read.
-- `png_color.cyr` (403 L) — `chitra_png_color_to_rgba8`: the canonical-RGBA8
+- `png_color.cyr` (403 L) — `_chitra_png_color_to_rgba8`: the canonical-RGBA8
   normalization pass — grayscale → (g,g,g,255), RGB → (r,g,b,255), palette →
   PLTE RGB + per-entry tRNS alpha, gray+alpha → (g,g,g,a), RGBA passthrough,
   with tRNS keying for types 0/2 and sub-byte / 16-bit sample handling.
@@ -515,7 +525,7 @@ JPEG (0.3.0):
   `+128` level-shift with `[0,255]` clamp, and `_chitra_jpeg_descale` (signed
   round-to-nearest division, since Cyrius `>>` is logical).
 - `jpeg_markers.cyr` (553 L) — `chitra_jpeg_check_signature`,
-  `chitra_jpeg_scan_markers` (SOI → segment walk → SOS, parsing SOF0 frame
+  `_chitra_jpeg_scan_markers` (SOI → segment walk → SOS, parsing SOF0 frame
   header / DQT / DHT / DRI and **rejecting** non-baseline modes), the
   `ChitraJpegFrame` storage, and the JPEG security guards: sampling factors
   clamped 1..4 (rejecting 0 — the CVE-2018-11212 divide-by-zero), duplicate
@@ -580,23 +590,26 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
 - `dist/chitra.cyr` — **~331 KB** (339,306 bytes / 7,034 lines; `cyrius
   distlib` reports 6,991 code lines — the 1.1.1 repairs and their comments, and
   the longer `_CHITRA_` / `_chitra_` names of 1.1.2 and 1.1.3), regenerated by `cyrius distlib`
-  (= `make dist`). This is the artifact consumers link, and it **exports 75
-  `chitra_*` names, of which 29 are frozen** — the split is
-  [`public-surface.md`](public-surface.md), gated by `scripts/check-surface.sh`
-  on every `make lint`.
+  (= `make dist`). This is the artifact consumers link, and since 1.2.0 its
+  **`chitra_*` functions are exactly the 29 frozen names** — everything internal
+  is `_chitra_*` / `_CHITRA_*` — gated by `scripts/check-surface.sh` on every
+  `make lint` against [`public-surface.md`](public-surface.md). Through 1.1.4 it
+  exported 75 `chitra_*` names, 46 of them internal and listed as such.
 
   **Every cut has been ABI-additive.** 0.6.1 added two names
   (`chitra_image_decode_budget` and the internal
-  `chitra_jpeg_frame_adobe_transform`) and one error code (`CHITRA_ERR_BUDGET`,
+  `_chitra_jpeg_frame_adobe_transform`) and one error code (`CHITRA_ERR_BUDGET`,
   34); 0.9.0 added exactly one (`chitra_image_source_depth`) and moved no
   offset; 1.0.0 added none — its bundle is name-identical to 0.9.0's; **1.0.1
   adds none either, and one error code** (`CHITRA_ERR_INFLATE_LIMIT`, 35);
   **1.0.2 adds neither** — its bundle differs from 1.0.1's by two lines, the
   header stamp and the `chitra_version()` literal; **1.0.3 adds one internal
-  name** (`chitra_jpeg_frame_saw_jfif`) and no error code, so the bundle exports
+  name** (`_chitra_jpeg_frame_saw_jfif`) and no error code, so the bundle exports
   75 with the frozen 29 unchanged; **1.0.4 adds neither** — its bundle
   differs from 1.0.3's by the stamp, the `chitra_version()` literal and the
-  five-line `Requires` header 6.6.20's distlib now writes.
+  five-line `Requires` header 6.6.20's distlib now writes; **1.1.x adds no
+  public name**; **1.2.0 removes 46 non-frozen `chitra_*` names** by renaming
+  them `_chitra_*` — the frozen 29 untouched, and no consumer called any of them.
   Consumers re-pin mechanically.
 - `dist/chitra.deps` — the **1**-leaf stdlib sidecar consumers resolve against:
   `string`. ⭐ **3 → 1 at 1.1.0**: sankoch is a named dep now, so it is not a
@@ -681,7 +694,7 @@ Include chain: `lib.cyr` (74 L) pulls the stdlib set then
     wrong returns the right *set* of pixels in the wrong places, and only
     position-sensitive expectations catch that.
   - `error.tcyr` — **20** (error codes, `chitra_err_*` accessors, name
-    round-trips, `chitra_version` → 10104).
+    round-trips, `chitra_version` → 10200).
   - `interlace.tcyr` — **35** (Adam7 cross-checked against the trusted
     non-interlaced decode for 7 color/depth/odd-dimension cases).
   - `jpeg.tcyr` — **462** (marker scan + non-baseline rejection, SOF0
@@ -850,7 +863,7 @@ path in the library (no chroma planes, no upsample, no color convert).
 
 ## Quality gates
 
-All green at 1.1.4 on cyrius 6.7.12:
+All green at 1.2.0 on cyrius 6.7.12:
 
 | gate | command | result |
 |---|---|---|
@@ -868,7 +881,7 @@ All green at 1.1.4 on cyrius 6.7.12:
 | consumer shape | `make consumer-shape` (1.1.4) | every suite (14, 3,978 assertions) rebuilt with the stdlib `"sankoch"` leaf — the full 2.8.7 bundle of chitra's 6.7.12 pin — in place of the zlib profile; the shape kii / mabda / aethersafha link. Fails on a 6.7.9 pin (stdlib sankoch 2.8.3), at exactly the png-3 floor cells |
 | downstream | scratch kii + three consumer shapes against this tree | kii builds; its 5 suites (599 assertions) and 1 M-iteration decode + `alloc_reset()` fuzz pass. No-sankoch, stdlib-`sankoch` and own-`[deps.sankoch]` consumers each link exactly one sankoch bundle and decode correctly |
 | anchors | `./scripts/check-anchors.sh --suspect` | **96** anchors, 0 suspicious. Since 1.1.1 (C-36) it also flags a citation that lands on a comment-only line (COMMENT) or away from the backticked identifier it names (IDENT), and **exits 1** when anything is flagged; CHANGELOG.md is excluded alongside `docs/audit/`. ⚠ It still cannot know what an uncited line was meant to say — a citation to a real code line naming no identifier is only checked for landing on code |
-| surface | `./scripts/check-surface.sh` | 75 exports, 29 frozen; 37 `ChitraErrCode` members, each named and value-pinned (1.1.1, C-9); 146 top-level globals (1.1.2, cc-13) and 171 functions (1.1.3), every one chitra-prefixed. Run by CI since 1.0.3 (B-9) |
+| surface | `./scripts/check-surface.sh` | the bundle's `chitra_*` functions are exactly the 29 frozen (1.2.0); 37 `ChitraErrCode` members, each named and value-pinned (1.1.1, C-9); 146 top-level globals (1.1.2) and 171 functions (1.1.3), every one chitra-prefixed. Run by CI since 1.0.3 (B-9) |
 
 `make version-check` gained a fifth check at 0.3.2: it now packs `VERSION`
 as `major*10000 + minor*100 + patch` and diffs it against the literal parsed
@@ -928,7 +941,7 @@ Per [`roadmap.md`](roadmap.md), which is forward-only (shipped work lives in
   consumer-shape leg for the sankoch ≥ 2.8.6 floor; the three fuzz paths still
   unreached; a `bench-history.csv` row per release; downstream consumers green
   on 1.1.x (with kii's error mapping and the sankoch floor checked).
-- **1.2.0** — PNG past 16 MiB inflated via `zlib_decompress_capped`.
+- **1.3.0** — PNG past 16 MiB inflated via `zlib_decompress_capped`.
 - **1.x candidates** — SOF1 8-bit JPEG, multi-frame GIF, APNG, progressive JPEG.
 - **Accepted risk (PNG amplification), stated rather than quietly fixed**: a
   2,116-byte 1-bit PNG declaring 4096×4096 decodes to 64 MB, and

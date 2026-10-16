@@ -1,6 +1,6 @@
 # chitra — Roadmap
 
-> **Last Updated**: 2026-10-15 (1.1.4)
+> **Last Updated**: 2026-10-15 (1.2.0)
 >
 > **Forward only.** What ships next, in what order, against what gates. What
 > already shipped is in [`../../CHANGELOG.md`](../../CHANGELOG.md), one entry
@@ -14,10 +14,11 @@
 
 ## How a release is sized
 
-- **Patch (1.1.x)** — repairs, hardening, gates, docs. Nothing that decodes
+- **Patch (1.x.y)** — repairs, hardening, gates, docs. Nothing that decodes
   today may decode differently except to move *toward* the reference decoder.
-- **Minor (1.x.0)** — widens what decodes or adds an entry point. Additive by
-  construction: nothing frozen is renamed, removed or re-laid-out. Each one gets
+- **Minor (1.x.0)** — widens what decodes or adds an entry point, or renames or
+  removes names *outside* the frozen surface (1.2.0 renamed the 46 internal
+  `chitra_*` functions). Nothing frozen is renamed, removed or re-laid-out. Each one gets
   an ADR (or an amendment) when it reverses a recorded decision.
 - **Major (2.0.0)** — anything that changes a frozen name, signature, record
   layout or documented behaviour. **Nothing is planned for it.** The items that
@@ -27,17 +28,11 @@
 Every release runs the closeout pass in [`CLAUDE.md`](../../CLAUDE.md#closeout-pass-before-every-minormajor-bump);
 the ones below name only what is specific to them.
 
-## 1.1.x — maintenance
+## 1.2.x — maintenance
 
-Patch-sized, independent, any order. The 1.1.1 P(-1) sweep
-([audit](../audit/2026-10-15-audit.md)) closed the lock gate, the lint
-deferrals and the anchor checker that used to be listed here; 1.1.2 and 1.1.3
-closed the bundle namespace (every global and function chitra-prefixed, and
-gated); 1.1.4 added the stdlib-`sankoch` consumer-shape CI leg (on a 6.7.12 pin),
-reached the last three unfuzzed paths, and resumed the per-release benchmark row
-(a CLAUDE.md closeout step, so no longer a roadmap item).
+Patch-sized, independent, any order.
 
-- **Downstream consumers green on 1.1.x.** All five — mabda, kii, jalwa,
+- **Downstream consumers green on 1.2.x.** All five — mabda, kii, jalwa,
   aethersafha, crab — pin `1.0.3`. Re-pinning needs no manifest change: crab
   picks up the `zlib` profile transitively, kii / mabda / aethersafha keep the
   stdlib `sankoch` they declare, jalwa keeps its own `[deps.sankoch]`. ⚠ Three
@@ -47,12 +42,10 @@ reached the last three unfuzzed paths, and resumed the per-release benchmark row
   `[deps.sankoch]` ≥ 2.8.6) — ⚠ **all three are below it today**: mabda pins
   cyrius 6.7.5 (stdlib sankoch 2.8.2), kii 6.7.9 (2.8.3), aethersafha 6.6.11
   (2.8.0); and mabda's `gpu_texture_load_png` build, the one that matters most
-  and is unverified from here.
-- **Rename the 46 internal `chitra_*` functions to `_chitra_*`** — optional.
-  Non-breaking by construction (none is frozen), but it touches every test call
-  site and the surface manifest, so it is its own patch or nothing.
+  and is unverified from here. The 1.2.0 rename touches none of them: every
+  name any of the five calls is frozen.
 
-## 1.2.0 — PNG past 16 MiB inflated
+## 1.3.0 — PNG past 16 MiB inflated
 
 A valid PNG whose scanlines inflate past sankoch's 16 MiB
 `DECOMPRESS_MAX_OUTPUT` is refused today with `CHITRA_ERR_INFLATE_LIMIT` (35)

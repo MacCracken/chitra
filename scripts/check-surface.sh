@@ -2,17 +2,20 @@
 # check-surface.sh — the public surface is a list, and this checks the bundle
 # against it.
 #
-# dist/chitra.cyr is a strip-concatenated bundle, so EVERY chitra_-prefixed
-# function in it is callable by a consumer whether or not it was meant to be.
-# docs/development/public-surface.md splits those names into FROZEN (covered by
-# the v1.0 compatibility promise) and INTERNAL_NAMES (visible but not promised).
+# dist/chitra.cyr is a strip-concatenated bundle, so EVERY function in it is
+# callable by a consumer whether or not it was meant to be. Since 1.2.0 the
+# public prefix IS the promise: the bundle's chitra_* functions must be exactly
+# the FROZEN names in docs/development/public-surface.md, and everything internal
+# is _chitra_* / _CHITRA_*. (Through 1.1.4 the manifest also had an
+# INTERNAL_NAMES block of 46 visible-but-unpromised chitra_* names, and which
+# block a name sat in was enforced by nothing but review.)
 #
 # This script fails when the bundle and the manifest disagree in either
 # direction:
-#   * a name in the bundle that the manifest does not list — a new export
-#     nobody classified, which at v1.0 is a promise made by accident;
-#   * a name in the manifest that the bundle no longer has — a removal that
-#     slipped through, or a manifest gone stale.
+#   * a chitra_* function the manifest does not list — a new public name nobody
+#     decided on: freeze it here (a promise, with an ADR) or name it _chitra_*;
+#   * a FROZEN name the bundle no longer has — a removal, which is a breaking
+#     change.
 #
 # It also fails when a member of `enum ChitraErrCode` has no chitra_err_name
 # arm, or no literal value pin in tests/tcyr/surface.tcyr (see below), and when
@@ -49,16 +52,17 @@ comm -13 "$tmp/bundle" "$tmp/manifest" > "$tmp/missing"
 
 rc=0
 if [ -s "$tmp/unlisted" ]; then
-    echo "check-surface: exported but NOT in the manifest —"
-    echo "  a new chitra_* export nobody classified. Add it to FROZEN (and mean"
-    echo "  it) or to INTERNAL_NAMES in docs/development/public-surface.md."
+    echo "check-surface: chitra_* functions that are NOT frozen —"
+    echo "  the public prefix is the promise. Add it to FROZEN in"
+    echo "  docs/development/public-surface.md (and mean it — an ADR), or rename it"
+    echo "  _chitra_* if it is internal."
     sed 's/^/    /' "$tmp/unlisted"
     rc=1
 fi
 if [ -s "$tmp/missing" ]; then
-    echo "check-surface: in the manifest but NOT exported —"
-    echo "  a removal. If it was FROZEN this is a breaking change and needs a"
-    echo "  major bump plus an ADR; if INTERNAL, just drop it from the list."
+    echo "check-surface: FROZEN but no longer in the bundle —"
+    echo "  a removal or a rename of a promised name: a breaking change, which"
+    echo "  needs a major bump plus an ADR."
     sed 's/^/    /' "$tmp/missing"
     rc=1
 fi
@@ -135,14 +139,14 @@ if [ -s "$tmp/unprefixed_fn" ]; then
 fi
 
 if [ $rc -eq 0 ]; then
-    frozen=$(awk '/^## FROZEN/,/^## INTERNAL_NAMES/' "$MANIFEST" \
+    frozen=$(awk '/^## FROZEN/,/^## Internal names/' "$MANIFEST" \
         | awk '/^```/ { infence = !infence; next } infence { print }' \
         | grep -oE 'chitra_[a-z0-9_]+' | sort -u | wc -l)
     total=$(wc -l < "$tmp/bundle")
     codes=$(wc -l < "$tmp/enum")
     globals=$(grep -cE '^var ' "$BUNDLE")
     fns=$(grep -cE '^fn ' "$BUNDLE")
-    echo "check-surface: bundle and manifest agree — ${total} exports, ${frozen} frozen;" \
+    echo "check-surface: bundle and manifest agree — ${total} chitra_* functions, all ${frozen} frozen;" \
         "${codes} ChitraErrCode members, each named and value-pinned;" \
         "${globals} globals and ${fns} functions, all chitra-prefixed"
 fi

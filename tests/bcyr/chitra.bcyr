@@ -1088,7 +1088,7 @@ fn _bench_small(): i64 {
 fn main(): i64 {
     alloc_init();
     # sankoch's crc32 does NOT lazily build its table — chitra calls
-    # crc32_init_table() explicitly in chitra_png_parse_raw (png_filter.cyr).
+    # crc32_init_table() explicitly in _chitra_png_parse_raw (png_filter.cyr).
     # This harness synthesises PNG chunks, so it must do the same before it
     # can CRC one.
     crc32_init_table();

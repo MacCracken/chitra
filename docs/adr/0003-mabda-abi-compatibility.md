@@ -95,7 +95,7 @@ consumer contract and may change freely.
   would, at no abstraction cost.
 - **A tagged-union `Result` instead of the `(ptr, err_out)` pair.**
   Rejected: the `(ptr, 0-on-fail, *err_out set)` shape matches the
-  established `chitra_png_parse_raw` convention (`src/png_filter.cyr:360`) and
+  established `_chitra_png_parse_raw` convention (`src/png_filter.cyr:360`) and
   maps directly onto mabda's `GpuErr` flow. A tagged union would add a
   carrier record with its own layout contract and buy nothing the pair
   does not already give.

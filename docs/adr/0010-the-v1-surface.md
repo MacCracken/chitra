@@ -101,6 +101,14 @@ that actually matters is *saying which names are which*, and that is what
 release without touching the frozen set — it is a non-breaking change by
 construction, because nothing frozen is being renamed.
 
+> **Amended 1.2.0 — done.** The 46 internal names (45 at the freeze, plus
+> `chitra_jpeg_frame_saw_jfif` from 1.0.3) are now `_chitra_*`, and the
+> INTERNAL_NAMES block is gone from `public-surface.md`: `check-surface.sh`
+> now requires the bundle's `chitra_*` functions to be *exactly* the frozen 29.
+> It shipped as a minor rather than a patch because names visible since 0.x went
+> away, even though no consumer called any of them. The frozen 29 are
+> untouched.
+
 ## Consequences
 
 **Positive**

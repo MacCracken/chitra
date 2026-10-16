@@ -244,25 +244,25 @@ fn test_scan_baseline() {
     var lo = 0;
     var b = fx_jpeg_baseline(&lo);
     var err = 0;
-    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    var f = _chitra_jpeg_scan_markers(b, lo, &err);
     assert(f != 0, "baseline scan returns a frame");
     assert_eq(err, 0, "no error on baseline");
-    assert_eq(chitra_jpeg_frame_width(f), 8, "width 8");
-    assert_eq(chitra_jpeg_frame_height(f), 8, "height 8");
-    assert_eq(chitra_jpeg_frame_precision(f), 8, "precision 8");
-    assert_eq(chitra_jpeg_frame_num_components(f), 3, "3 components");
-    assert_eq(chitra_jpeg_frame_seen_sof(f), 1, "seen sof");
+    assert_eq(_chitra_jpeg_frame_width(f), 8, "width 8");
+    assert_eq(_chitra_jpeg_frame_height(f), 8, "height 8");
+    assert_eq(_chitra_jpeg_frame_precision(f), 8, "precision 8");
+    assert_eq(_chitra_jpeg_frame_num_components(f), 3, "3 components");
+    assert_eq(_chitra_jpeg_frame_seen_sof(f), 1, "seen sof");
     # component sampling factors (4:2:0 — comp 0 is 2x2, chroma 1x1)
-    assert_eq(chitra_jpeg_frame_max_h(f), 2, "max_h 2");
-    assert_eq(chitra_jpeg_frame_max_v(f), 2, "max_v 2");
-    assert_eq(chitra_jpeg_frame_comp_id(f, 0), 1, "comp0 id 1");
-    assert_eq(chitra_jpeg_frame_comp_h(f, 0), 2, "comp0 H 2");
-    assert_eq(chitra_jpeg_frame_comp_v(f, 0), 2, "comp0 V 2");
-    assert_eq(chitra_jpeg_frame_comp_tq(f, 0), 0, "comp0 Tq 0");
-    assert_eq(chitra_jpeg_frame_comp_id(f, 1), 2, "comp1 id 2");
-    assert_eq(chitra_jpeg_frame_comp_h(f, 1), 1, "comp1 H 1");
-    assert_eq(chitra_jpeg_frame_comp_tq(f, 1), 1, "comp1 Tq 1");
-    assert_eq(chitra_jpeg_frame_comp_id(f, 2), 3, "comp2 id 3");
+    assert_eq(_chitra_jpeg_frame_max_h(f), 2, "max_h 2");
+    assert_eq(_chitra_jpeg_frame_max_v(f), 2, "max_v 2");
+    assert_eq(_chitra_jpeg_frame_comp_id(f, 0), 1, "comp0 id 1");
+    assert_eq(_chitra_jpeg_frame_comp_h(f, 0), 2, "comp0 H 2");
+    assert_eq(_chitra_jpeg_frame_comp_v(f, 0), 2, "comp0 V 2");
+    assert_eq(_chitra_jpeg_frame_comp_tq(f, 0), 0, "comp0 Tq 0");
+    assert_eq(_chitra_jpeg_frame_comp_id(f, 1), 2, "comp1 id 2");
+    assert_eq(_chitra_jpeg_frame_comp_h(f, 1), 1, "comp1 H 1");
+    assert_eq(_chitra_jpeg_frame_comp_tq(f, 1), 1, "comp1 Tq 1");
+    assert_eq(_chitra_jpeg_frame_comp_id(f, 2), 3, "comp2 id 3");
     return 0;
 }
 
@@ -273,7 +273,7 @@ fn test_scan_dqt() {
     var lo = 0;
     var b = fx_jpeg_dqt_sof(&lo);
     var err = 0;
-    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    var f = _chitra_jpeg_scan_markers(b, lo, &err);
     assert(f != 0, "dqt+sof scan returns a frame");
     assert_eq(err, 0, "no error");
     # Guard the table reads on the frame AND on the presence bit. assert_eq is
@@ -284,15 +284,15 @@ fn test_scan_dqt() {
     # defines something, which makes the unguarded form a null dereference
     # rather than a wrong answer.
     if (f != 0) {
-        assert_eq(chitra_jpeg_frame_quant_present(f), 1, "quant table 0 present (bit 0)");
-        if (chitra_jpeg_frame_quant_present(f) != 0) {
-            assert_eq(chitra_jpeg_frame_quant(f, 0, 0), 1, "quant[0][0] = 1");
-            assert_eq(chitra_jpeg_frame_quant(f, 0, 63), 64, "quant[0][63] = 64");
+        assert_eq(_chitra_jpeg_frame_quant_present(f), 1, "quant table 0 present (bit 0)");
+        if (_chitra_jpeg_frame_quant_present(f) != 0) {
+            assert_eq(_chitra_jpeg_frame_quant(f, 0, 0), 1, "quant[0][0] = 1");
+            assert_eq(_chitra_jpeg_frame_quant(f, 0, 63), 64, "quant[0][63] = 64");
         }
     }
     # SOF still parsed after the DQT
-    assert_eq(chitra_jpeg_frame_width(f), 8, "width 8 after dqt");
-    assert_eq(chitra_jpeg_frame_max_h(f), 2, "max_h 2 after dqt");
+    assert_eq(_chitra_jpeg_frame_width(f), 8, "width 8 after dqt");
+    assert_eq(_chitra_jpeg_frame_max_h(f), 2, "max_h 2 after dqt");
     return 0;
 }
 
@@ -303,7 +303,7 @@ fn test_reject_progressive() {
     var lo = 0;
     var b = fx_jpeg4(&lo, 0xFF, 0xD8, 0xFF, 0xC2);   # SOF2
     var err = 0;
-    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    var f = _chitra_jpeg_scan_markers(b, lo, &err);
     assert_eq(f, 0, "progressive rejected (null frame)");
     assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_PROGRESSIVE, "progressive err code");
     return 0;
@@ -313,7 +313,7 @@ fn test_reject_arithmetic() {
     var lo = 0;
     var b = fx_jpeg4(&lo, 0xFF, 0xD8, 0xFF, 0xCA);   # SOF10 arithmetic
     var err = 0;
-    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    var f = _chitra_jpeg_scan_markers(b, lo, &err);
     assert_eq(f, 0, "arithmetic rejected");
     assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_ARITHMETIC, "arithmetic err code");
     return 0;
@@ -323,7 +323,7 @@ fn test_reject_mode() {
     var lo = 0;
     var b = fx_jpeg4(&lo, 0xFF, 0xD8, 0xFF, 0xC3);   # SOF3 lossless
     var err = 0;
-    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    var f = _chitra_jpeg_scan_markers(b, lo, &err);
     assert_eq(f, 0, "lossless mode rejected");
     assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_MODE, "mode err code");
     return 0;
@@ -334,7 +334,7 @@ fn test_reject_precision12() {
     var b = fx_jpeg_baseline(&lo);
     store8(b + 6, 0x0C);   # precision = 12
     var err = 0;
-    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    var f = _chitra_jpeg_scan_markers(b, lo, &err);
     assert_eq(f, 0, "precision 12 rejected");
     assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_PRECISION, "precision err code");
     return 0;
@@ -345,7 +345,7 @@ fn test_reject_components() {
     var b = fx_jpeg_baseline(&lo);
     store8(b + 11, 0x04);   # Nf = 4
     var err = 0;
-    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    var f = _chitra_jpeg_scan_markers(b, lo, &err);
     assert_eq(f, 0, "4-component rejected");
     assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_COMPONENTS, "components err code");
     return 0;
@@ -357,7 +357,7 @@ fn test_reject_sampling_zero() {
     var b = fx_jpeg_baseline(&lo);
     store8(b + 13, 0x02);   # comp 1 H/V = 0x02 -> H=0, V=2
     var err = 0;
-    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    var f = _chitra_jpeg_scan_markers(b, lo, &err);
     assert_eq(f, 0, "H=0 sampling factor rejected");
     assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_SOF, "zero-factor err code");
     return 0;
@@ -369,7 +369,7 @@ fn test_reject_sampling_big() {
     var b = fx_jpeg_baseline(&lo);
     store8(b + 13, 0x52);   # comp 1 H/V = 0x52 -> H=5, V=2
     var err = 0;
-    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    var f = _chitra_jpeg_scan_markers(b, lo, &err);
     assert_eq(f, 0, "H=5 sampling factor rejected");
     assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_SOF, "big-factor err code");
     return 0;
@@ -381,7 +381,7 @@ fn test_reject_dup_component_id() {
     var b = fx_jpeg_baseline(&lo);
     store8(b + 15, 0x01);   # comp 2 id = 1 (duplicates comp 1)
     var err = 0;
-    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    var f = _chitra_jpeg_scan_markers(b, lo, &err);
     assert_eq(f, 0, "duplicate component id rejected");
     assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_SOF, "dup-id err code");
     return 0;
@@ -392,7 +392,7 @@ fn test_reject_dqt_precision() {
     var lo = 0;
     var b = fx_jpeg_dqt_bad(&lo, 0x10);   # Pq=1 Tq=0
     var err = 0;
-    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    var f = _chitra_jpeg_scan_markers(b, lo, &err);
     assert_eq(f, 0, "16-bit DQT rejected");
     assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_DQT, "dqt precision err code");
     return 0;
@@ -403,7 +403,7 @@ fn test_reject_dqt_tableid() {
     var lo = 0;
     var b = fx_jpeg_dqt_bad(&lo, 0x04);   # Pq=0 Tq=4
     var err = 0;
-    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    var f = _chitra_jpeg_scan_markers(b, lo, &err);
     assert_eq(f, 0, "DQT table id 4 rejected");
     assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_DQT, "dqt tableid err code");
     return 0;
@@ -413,7 +413,7 @@ fn test_reject_bad_signature() {
     var lo = 0;
     var b = fx_jpeg4(&lo, 0x00, 0x01, 0x02, 0x03);
     var err = 0;
-    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    var f = _chitra_jpeg_scan_markers(b, lo, &err);
     assert_eq(f, 0, "non-JPEG rejected");
     assert_eq(chitra_err_code(err), CHITRA_ERR_SIGNATURE, "signature err code");
     return 0;
@@ -424,7 +424,7 @@ fn test_reject_truncated() {
     var b = fx_jpeg_baseline(&lo);
     var err = 0;
     # Only 8 bytes available: SOF0 declares Lf=17 but the payload runs past end.
-    var f = chitra_jpeg_scan_markers(b, 8, &err);
+    var f = _chitra_jpeg_scan_markers(b, 8, &err);
     assert_eq(f, 0, "truncated rejected");
     assert_eq(chitra_err_code(err), CHITRA_ERR_TRUNCATED, "truncated err code");
     return 0;
@@ -434,7 +434,7 @@ fn test_reject_eoi_before_sos() {
     var lo = 0;
     var b = fx_jpeg4(&lo, 0xFF, 0xD8, 0xFF, 0xD9);   # SOI then EOI, no frame
     var err = 0;
-    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    var f = _chitra_jpeg_scan_markers(b, lo, &err);
     assert_eq(f, 0, "EOI before SOS rejected");
     assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_MARKER, "premature EOI err code");
     return 0;
@@ -444,14 +444,14 @@ fn test_scan_dht() {
     var lo = 0;
     var b = fx_jpeg_dht_sof(&lo);
     var err = 0;
-    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    var f = _chitra_jpeg_scan_markers(b, lo, &err);
     assert(f != 0, "dht+sof scan returns a frame");
     assert_eq(err, 0, "no error");
     # Same guard as test_scan_dqt above, and for the same reason.
-    assert_eq(chitra_jpeg_frame_huff_present(f), 1, "DC table slot 0 present");
+    assert_eq(_chitra_jpeg_frame_huff_present(f), 1, "DC table slot 0 present");
     var t = 0;
     if (f != 0) {
-        if (chitra_jpeg_frame_huff_present(f) != 0) { t = chitra_jpeg_frame_huff(f, 0, 0); }
+        if (_chitra_jpeg_frame_huff_present(f) != 0) { t = _chitra_jpeg_frame_huff(f, 0, 0); }
     }
     if (t != 0) {
         assert_eq(_chitra_jpeg_huff_count(t), 12, "12 symbols");
@@ -470,7 +470,7 @@ fn test_scan_dht() {
         assert_eq(_chitra_jpeg_huff_val(t, 0), 0, "huffval[0] = 0");
         assert_eq(_chitra_jpeg_huff_val(t, 11), 11, "huffval[11] = 11");
     }
-    if (f != 0) { assert_eq(chitra_jpeg_frame_width(f), 8, "width 8 after dht"); }
+    if (f != 0) { assert_eq(_chitra_jpeg_frame_width(f), 8, "width 8 after dht"); }
     return 0;
 }
 
@@ -478,7 +478,7 @@ fn test_reject_dht_class() {
     var lo = 0;
     var b = fx_jpeg_dht_bad_class(&lo, 0x20);   # Tc=2 (only 0/1 valid)
     var err = 0;
-    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    var f = _chitra_jpeg_scan_markers(b, lo, &err);
     assert_eq(f, 0, "DHT class 2 rejected");
     assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_DHT, "dht class err code");
     return 0;
@@ -488,7 +488,7 @@ fn test_reject_dht_tableid() {
     var lo = 0;
     var b = fx_jpeg_dht_bad_class(&lo, 0x04);   # Th=4 (only 0..3 valid)
     var err = 0;
-    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    var f = _chitra_jpeg_scan_markers(b, lo, &err);
     assert_eq(f, 0, "DHT table id 4 rejected");
     assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_DHT, "dht tableid err code");
     return 0;
@@ -498,7 +498,7 @@ fn test_reject_dht_oversub() {
     var lo = 0;
     var b = fx_jpeg_dht_oversub(&lo);
     var err = 0;
-    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    var f = _chitra_jpeg_scan_markers(b, lo, &err);
     assert_eq(f, 0, "over-subscribed Huffman table rejected");
     assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_DHT, "dht oversub err code");
     return 0;
@@ -1355,7 +1355,7 @@ fn _expect_jpeg_marker_reject(b0, b1, b2, b3, label) {
     var lo = 0;
     var b = fx_jpeg4(&lo, b0, b1, b2, b3);
     var err = 0;
-    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    var f = _chitra_jpeg_scan_markers(b, lo, &err);
     assert(f == 0, label);
     assert(err != 0, label);
     if (err != 0) { assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_MARKER, label); }
@@ -2457,7 +2457,7 @@ fn test_jpeg_refusal_allocation_is_bounded() {
     # 0.6.1 lazy table allocation. A 15-byte JPEG whose SOF0 declares 12-bit
     # precision is refused, correctly and permanently — and through 0.6.0 it
     # still cost 22,160 bytes that the bump allocator never reclaims, on EVERY
-    # call, because chitra_jpeg_scan_markers allocated the quantization store
+    # call, because _chitra_jpeg_scan_markers allocated the quantization store
     # and all eight Huffman records before any check could refuse the file.
     # That is the path a consumer under attack takes most often.
     var b = alloc(15);
@@ -2563,7 +2563,7 @@ fn test_dht_table_storage_allocated_at_most_once() {
 # cells further down are the ones GATE 0 cannot see.
 #
 # ⚠ The residual 22,160 bytes is the per-FRAME DQT/DHT table allocation from
-# `chitra_jpeg_scan_markers` — 0.6.1's lazy-allocation cost, which is expected
+# `_chitra_jpeg_scan_markers` — 0.6.1's lazy-allocation cost, which is expected
 # and is why the bound below is not tighter.
 # ================================================================
 fn fx_jpeg_amplification_bomb(len_out): i64 {
@@ -3421,7 +3421,7 @@ fn test_app14_ycck_four_components_is_a_component_refusal() {
     var lo2 = 0;
     var b2 = _fx_with_app14(b, lo, 2, &lo2);
     var err = 0;
-    var f = chitra_jpeg_scan_markers(b2, lo2, &err);
+    var f = _chitra_jpeg_scan_markers(b2, lo2, &err);
     assert_eq(f, 0, "jpeg-8: YCCK 4-component frame refused");
     if (err != 0) {
         assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_COMPONENTS,
@@ -3569,7 +3569,7 @@ fn fx_jpeg_dqt16_then(len_out, m): i64 {
 
 fn _expect_scan_code(b, lo, code, name): i64 {
     var err = 0;
-    var f = chitra_jpeg_scan_markers(b, lo, &err);
+    var f = _chitra_jpeg_scan_markers(b, lo, &err);
     assert_eq(f, 0, name);
     assert(err != 0, name);
     if (err != 0) { assert_eq(chitra_err_code(err), code, name); }

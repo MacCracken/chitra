@@ -9,7 +9,7 @@
 [ADR 0007](0007-byte-budget-surface-deferred.md) deferred the byte-budget entry
 point out of 0.6.0 on a measurement: a 15-byte JPEG that is refused —
 correctly, permanently — still spent **22,096 bytes**, because
-`chitra_jpeg_scan_markers` allocated the quantization store and all eight
+`_chitra_jpeg_scan_markers` allocated the quantization store and all eight
 Huffman records before any check could refuse the file. A probe routed through
 that function would make `decode_budget(src, len, 1, &err)` spend 22 KB and
 *then* report "over budget": a memory-ceiling API that is itself an exhaustion

@@ -137,63 +137,63 @@ var _CHITRA_JF_DQT16            = 360;
 # rather than shaved to fit.
 var CHITRA_JPEG_FRAME_SIZE = 384;   # 368 used, 16 B spare
 
-fn chitra_jpeg_frame_width(f): i64          { return load64(f + _CHITRA_JF_WIDTH); }
-fn chitra_jpeg_frame_height(f): i64         { return load64(f + _CHITRA_JF_HEIGHT); }
-fn chitra_jpeg_frame_precision(f): i64      { return load64(f + _CHITRA_JF_PRECISION); }
-fn chitra_jpeg_frame_num_components(f): i64 { return load64(f + _CHITRA_JF_NCOMP); }
-fn chitra_jpeg_frame_seen_sof(f): i64       { return load64(f + _CHITRA_JF_SEEN_SOF); }
-fn chitra_jpeg_frame_max_h(f): i64          { return load64(f + _CHITRA_JF_MAX_H); }
-fn chitra_jpeg_frame_max_v(f): i64          { return load64(f + _CHITRA_JF_MAX_V); }
-fn chitra_jpeg_frame_restart_interval(f): i64 { return load64(f + _CHITRA_JF_RESTART_INTERVAL); }
-fn chitra_jpeg_frame_quant_present(f): i64  { return load64(f + _CHITRA_JF_QUANT_PRESENT); }
-fn chitra_jpeg_frame_huff_present(f): i64   { return load64(f + _CHITRA_JF_HUFF_PRESENT); }
+fn _chitra_jpeg_frame_width(f): i64          { return load64(f + _CHITRA_JF_WIDTH); }
+fn _chitra_jpeg_frame_height(f): i64         { return load64(f + _CHITRA_JF_HEIGHT); }
+fn _chitra_jpeg_frame_precision(f): i64      { return load64(f + _CHITRA_JF_PRECISION); }
+fn _chitra_jpeg_frame_num_components(f): i64 { return load64(f + _CHITRA_JF_NCOMP); }
+fn _chitra_jpeg_frame_seen_sof(f): i64       { return load64(f + _CHITRA_JF_SEEN_SOF); }
+fn _chitra_jpeg_frame_max_h(f): i64          { return load64(f + _CHITRA_JF_MAX_H); }
+fn _chitra_jpeg_frame_max_v(f): i64          { return load64(f + _CHITRA_JF_MAX_V); }
+fn _chitra_jpeg_frame_restart_interval(f): i64 { return load64(f + _CHITRA_JF_RESTART_INTERVAL); }
+fn _chitra_jpeg_frame_quant_present(f): i64  { return load64(f + _CHITRA_JF_QUANT_PRESENT); }
+fn _chitra_jpeg_frame_huff_present(f): i64   { return load64(f + _CHITRA_JF_HUFF_PRESENT); }
 
 # Per-component accessors. `i` is the component index (0..num_components-1).
-fn chitra_jpeg_frame_comp_id(f, i): i64 {
+fn _chitra_jpeg_frame_comp_id(f, i): i64 {
     return load64(f + _CHITRA_JF_COMP + i * _CHITRA_JF_COMP_STRIDE + _CHITRA_JF_COMP_ID);
 }
-fn chitra_jpeg_frame_comp_h(f, i): i64 {
+fn _chitra_jpeg_frame_comp_h(f, i): i64 {
     return load64(f + _CHITRA_JF_COMP + i * _CHITRA_JF_COMP_STRIDE + _CHITRA_JF_COMP_H);
 }
-fn chitra_jpeg_frame_comp_v(f, i): i64 {
+fn _chitra_jpeg_frame_comp_v(f, i): i64 {
     return load64(f + _CHITRA_JF_COMP + i * _CHITRA_JF_COMP_STRIDE + _CHITRA_JF_COMP_V);
 }
-fn chitra_jpeg_frame_comp_tq(f, i): i64 {
+fn _chitra_jpeg_frame_comp_tq(f, i): i64 {
     return load64(f + _CHITRA_JF_COMP + i * _CHITRA_JF_COMP_STRIDE + _CHITRA_JF_COMP_TQ);
 }
-fn chitra_jpeg_frame_sos_offset(f): i64  { return load64(f + _CHITRA_JF_SOS_OFFSET); }
+fn _chitra_jpeg_frame_sos_offset(f): i64  { return load64(f + _CHITRA_JF_SOS_OFFSET); }
 # -1 = no Adobe APP14 segment was present; otherwise the raw transform byte of
 # the LAST one before the first SOS: 0 = RGB (or CMYK at 4 components),
 # 1 = YCbCr, 2 = YCCK, anything else undefined (jpeg-8, 1.1.1 — values above 1
 # are refused at the first SOS, and only where they would decide the colour).
-fn chitra_jpeg_frame_adobe_transform(f): i64 { return load64(f + _CHITRA_JF_ADOBE_TRANSFORM); }
-fn chitra_jpeg_frame_scan_ns(f): i64   { return load64(f + _CHITRA_JF_SCAN_NS); }
-fn chitra_jpeg_frame_covered(f): i64   { return load64(f + _CHITRA_JF_COVERED); }
-fn chitra_jpeg_frame_saw_jfif(f): i64  { return load64(f + _CHITRA_JF_SAW_JFIF); }
-fn chitra_jpeg_scan_comp(f, j): i64 {
+fn _chitra_jpeg_frame_adobe_transform(f): i64 { return load64(f + _CHITRA_JF_ADOBE_TRANSFORM); }
+fn _chitra_jpeg_frame_scan_ns(f): i64   { return load64(f + _CHITRA_JF_SCAN_NS); }
+fn _chitra_jpeg_frame_covered(f): i64   { return load64(f + _CHITRA_JF_COVERED); }
+fn _chitra_jpeg_frame_saw_jfif(f): i64  { return load64(f + _CHITRA_JF_SAW_JFIF); }
+fn _chitra_jpeg_scan_comp(f, j): i64 {
     return load64(f + _CHITRA_JF_SCAN + j * _CHITRA_JF_SCAN_STRIDE + _CHITRA_JF_SCAN_COMP);
 }
-fn chitra_jpeg_scan_td(f, j): i64 {
+fn _chitra_jpeg_scan_td(f, j): i64 {
     return load64(f + _CHITRA_JF_SCAN + j * _CHITRA_JF_SCAN_STRIDE + _CHITRA_JF_SCAN_TD);
 }
-fn chitra_jpeg_scan_ta(f, j): i64 {
+fn _chitra_jpeg_scan_ta(f, j): i64 {
     return load64(f + _CHITRA_JF_SCAN + j * _CHITRA_JF_SCAN_STRIDE + _CHITRA_JF_SCAN_TA);
 }
 
 # Quant-table entry t (0..3), zig-zag position k (0..63). De-zig-zag happens at
 # dequant time (bite 5); this stores the raw spec order.
-fn chitra_jpeg_frame_quant(f, t, k): i64 {
+fn _chitra_jpeg_frame_quant(f, t, k): i64 {
     return load64(load64(f + _CHITRA_JF_QUANT) + (t * 64 + k) * 8);
 }
 
 # HuffTable ptr for class (0=DC, 1=AC) and id (0..3). The HuffTable layout +
 # accessors (_jpeg_huff_*) live in jpeg_huffman.cyr.
-fn chitra_jpeg_frame_huff(f, class, id): i64 {
+fn _chitra_jpeg_frame_huff(f, class, id): i64 {
     return load64(f + _CHITRA_JF_HUFF) + (class * 4 + id) * _CHITRA_HT_SIZE;
 }
 
-# Bump-allocator no-op (matches chitra_raw_free / chitra_image_free). Safe on 0.
-fn chitra_jpeg_frame_free(f): i64 { return 0; }
+# Bump-allocator no-op (matches _chitra_raw_free / chitra_image_free). Safe on 0.
+fn _chitra_jpeg_frame_free(f): i64 { return 0; }
 
 # ================================================================
 # Signature — every JPEG starts with SOI = 0xFF 0xD8 (T.81 § B.2.1).
@@ -263,7 +263,7 @@ fn _chitra_jpeg_marker_action(m): i64 {
 # ================================================================
 # Lazy table storage (0.6.1).
 #
-# Through 0.6.0 chitra_jpeg_scan_markers allocated the quantization store
+# Through 0.6.0 _chitra_jpeg_scan_markers allocated the quantization store
 # (2,048 B) and all eight Huffman records (8 x 2,464 = 19,712 B) up front, on
 # every call, BEFORE any validation that could refuse the file. So a 15-byte
 # JPEG whose SOF0 declares 12-bit precision — refused, correctly, and
@@ -371,7 +371,7 @@ fn _chitra_jpeg_parse_dqt(cur, frame): i64 {
                 # is length-checked, consumed WITHOUT being stored (chitra never
                 # decodes from one) and recorded, and the frame header decides:
                 # SOF0 refuses it as JPEG_DQT, SOF1 / SOF2 / SOF9 / ... report
-                # their own mode code (chitra_jpeg_scan_markers).
+                # their own mode code (_chitra_jpeg_scan_markers).
                 if (load64(frame + _CHITRA_JF_SEEN_SOF) == 1) { rc = CHITRA_ERR_JPEG_DQT; done = 1; }
                 if (done == 0) {
                     if (remaining < 128) { rc = CHITRA_ERR_JPEG_DQT; done = 1; }
@@ -637,7 +637,7 @@ fn _chitra_jpeg_parse_app14(cur, frame): i64 {
     # and reported a YCCK CMYK file as 4 instead of the
     # CHITRA_ERR_JPEG_COMPONENTS (23) its four components earn at SOF0. The
     # raw value is recorded and judged at the first SOS — see
-    # chitra_jpeg_scan_markers.
+    # _chitra_jpeg_scan_markers.
     store64(frame + _CHITRA_JF_ADOBE_TRANSFORM, transform);
     return 0;
 }
@@ -772,7 +772,7 @@ fn _chitra_jpeg_parse_sof0(cur, frame): i64 {
 # fear that a resumed walk would be steered by a cursor inside decoded content,
 # which a planted FF DA could freeze. Nothing here consults the reader.
 #
-# This is a SEPARATE function from chitra_jpeg_scan_markers rather than a mode
+# This is a SEPARATE function from _chitra_jpeg_scan_markers rather than a mode
 # flag on it, because that function re-zeroes the whole frame on entry and stops
 # unconditionally at the first SOS — and it is on the path of every JPEG in the
 # tree. The two share _chitra_jpeg_marker_action and the length-skip shape; they share
@@ -919,7 +919,7 @@ fn _chitra_jpeg_colour_evidence_ok(frame): i64 {
 }
 
 # ================================================================
-# chitra_jpeg_scan_markers — validate the JPEG marker structure from SOI up to
+# _chitra_jpeg_scan_markers — validate the JPEG marker structure from SOI up to
 # SOS, parsing DQT/DHT tables and the SOF0 frame header and rejecting
 # non-baseline modes. Returns a ChitraJpegFrame ptr (caller-owned) on success,
 # or 0 with *err_out set to a ChitraErr. Mirrors the (ptr, err_out) split.
@@ -927,7 +927,7 @@ fn _chitra_jpeg_colour_evidence_ok(frame): i64 {
 # The walk always advances >= 2 bytes per iteration (the FF + marker code) or
 # terminates on the can_read(2) gate, so it cannot loop forever on bad input.
 # ================================================================
-fn chitra_jpeg_scan_markers(src, len, err_out): i64 {
+fn _chitra_jpeg_scan_markers(src, len, err_out): i64 {
     store64(err_out, 0);
     if (chitra_jpeg_check_signature(src, len) == 0) {
         store64(err_out, chitra_err(CHITRA_ERR_SIGNATURE));

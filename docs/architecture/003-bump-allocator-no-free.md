@@ -41,7 +41,7 @@ the point.
 **Through 0.6.0**, a JPEG that was refused still cost **22,160 bytes** (ADR 0007
 measured 22,096 before that release's own APP14 repair grew the frame record
 from 320 to 384). A 15-byte file whose SOF0 declares 12-bit precision is
-rejected correctly — but by then `chitra_jpeg_scan_markers` had already
+rejected correctly — but by then `_chitra_jpeg_scan_markers` had already
 allocated the frame record, the quantization store (2,048 B) and eight Huffman
 table records (19,712 B), none of which come back, and none of it memoized: every
 call paid it again. A consumer fed hostile input paid for the files it *refused*,
@@ -79,10 +79,10 @@ no-ops that return `0`. Only **one is public**: `chitra_image_free`, frozen at
 - `chitra_image_free(img)` — `src/png.cyr`. Body is `return 0;`. The header
   states it plainly: *"The stdlib `alloc` is a bump allocator with no per-block
   free, so this is a documented no-op kept for API symmetry (matches
-  `chitra_raw_free`) and a future arena-backed allocator. Safe on a 0 ptr."*
-- `chitra_raw_free(raw)` — `src/png_chunks.cyr`. Body is `return 0;`. Same
+  `_chitra_raw_free`) and a future arena-backed allocator. Safe on a 0 ptr."*
+- `_chitra_raw_free(raw)` — `src/png_chunks.cyr`. Body is `return 0;`. Same
   rationale.
-- `chitra_jpeg_frame_free(f)` — `src/jpeg_markers.cyr`. Body is `return 0;`. The
+- `_chitra_jpeg_frame_free(f)` — `src/jpeg_markers.cyr`. Body is `return 0;`. The
   `ChitraJpegFrame` and its side allocations (quant / Huffman storage, the MCU
   planes) live in the same bump arena; same no-op rationale, safe on a 0 ptr.
 
@@ -135,7 +135,7 @@ per-image free:
 > ⚠ The fix lives in gitignored `lib/`, so `tests/tcyr/alloc_reset.tcyr` pins
 > it — a future pin bump could withdraw it with no diff in this repo.
 
-Do **not** treat `chitra_image_free` / `chitra_raw_free` / `chitra_jpeg_frame_free`
+Do **not** treat `chitra_image_free` / `_chitra_raw_free` / `_chitra_jpeg_frame_free`
 as memory-pressure relief. They are markers, not collectors.
 
 ## See also

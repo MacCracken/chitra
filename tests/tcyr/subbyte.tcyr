@@ -114,7 +114,7 @@ fn test_reject_rgb_depth4() {
     var lo = 0;
     var bytes = fx_rgb_depth4_reject(&lo);
     var err = 0;
-    var raw = chitra_png_parse_raw(bytes, lo, &err);
+    var raw = _chitra_png_parse_raw(bytes, lo, &err);
     assert_eq(raw, 0, "ct2+depth4 -> null");
     assert_eq(chitra_err_code(err), CHITRA_ERR_BIT_DEPTH, "ct2+depth4 -> BIT_DEPTH");
     return 0;

@@ -102,7 +102,7 @@ the audit ([`../audit/2026-06-26-audit.md`](../audit/2026-06-26-audit.md)).
 | IHDR length must equal 13 | `src/png_filter.cyr:131` | `CHITRA_ERR_BAD_CHUNK` |
 | IHDR is the first chunk + type tag | `src/png_filter.cyr:138` | `CHITRA_ERR_BAD_CHUNK` |
 | IHDR CRC-32 verification | `src/png_filter.cyr:145`-`147` | `CHITRA_ERR_CRC` |
-| Color-type allow-list `{0,2,3,4,6}` | `chitra_png_color_channels` (`src/png_chunks.cyr:223`) + `src/png_filter.cyr:164`-`165` | `CHITRA_ERR_UNSUPPORTED` |
+| Color-type allow-list `{0,2,3,4,6}` | `_chitra_png_color_channels` (`src/png_chunks.cyr:223`) + `src/png_filter.cyr:164`-`165` | `CHITRA_ERR_UNSUPPORTED` |
 | Compression + filter method must be 0 | `src/png_filter.cyr:168`-`169` | `CHITRA_ERR_UNSUPPORTED` |
 | Interlace value gate `{0,1}` | `src/png_filter.cyr:171` | `CHITRA_ERR_INTERLACE` |
 | Bit-depth × color-type Table 11.1 allow-list | `src/png_filter.cyr:175`-`185` | `CHITRA_ERR_BIT_DEPTH` |
@@ -251,7 +251,7 @@ tracked gaps in this ADR's original text; both are now closed.
   must pre-downscale upstream.
 - **Defense-in-depth adds branches.** The color pass re-asserts the
   dimension caps and re-validates the PLTE/tRNS spans against
-  `(src, len)` even though `chitra_png_parse_raw` already checked them
+  `(src, len)` even though `_chitra_png_parse_raw` already checked them
   — so the `@internal` pass stays safe on a hand-built `ChitraPngRaw`.
   The cost is microseconds; the code surface is larger.
 

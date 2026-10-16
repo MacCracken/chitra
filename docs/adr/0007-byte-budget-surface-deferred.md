@@ -36,7 +36,7 @@ bytes.** Measured on this tree with `alloc_used()` deltas:
 | 32 B, PNG signature + garbage, first call | rejected, `TRUNCATED` | 16,504 |
 | the same PNG call again | rejected, `TRUNCATED` | 120 |
 
-`chitra_jpeg_scan_markers` allocates the frame record (320 B), the quantization
+`_chitra_jpeg_scan_markers` allocates the frame record (320 B), the quantization
 table store (4 × 64 × 8 = 2,048 B) and **eight Huffman table records
 (8 × 2,464 = 19,712 B)** up front — before the SOF0 precision check that
 refuses the file. That is ~1,473:1 amplification **on the refusal path**, and

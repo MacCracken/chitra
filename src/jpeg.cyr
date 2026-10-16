@@ -66,7 +66,7 @@ fn _chitra_jpeg_parse_sos(frame, src, len, sos_off, err_out): i64 {
     if (_chitra_cur_can_read(&cur, 3) == 0) { store64(err_out, chitra_err(CHITRA_ERR_TRUNCATED)); return 0; }
     var ls = _chitra_cur_u16_be(&cur);
     var ns = _chitra_cur_u8(&cur);
-    var ncomp = chitra_jpeg_frame_num_components(frame);
+    var ncomp = _chitra_jpeg_frame_num_components(frame);
     # T.81 § B.2.3 bounds Ns as 1 <= Ns <= 4 and requires each Csj to name a
     # DISTINCT component of the frame, so Ns > Nf is malformed by pigeonhole.
     # Both are VALIDITY failures and keep CHITRA_ERR_JPEG_SOS. (Ns < Nf, which
@@ -148,7 +148,7 @@ fn _chitra_jpeg_parse_sos(frame, src, len, sos_off, err_out): i64 {
                 found = 0 - 1;
                 j = 0;
                 while (j < ncomp) {
-                    if (chitra_jpeg_frame_comp_id(frame, j) == cs) { found = j; }
+                    if (_chitra_jpeg_frame_comp_id(frame, j) == cs) { found = j; }
                     j = j + 1;
                 }
                 if (found < 0) { rc = CHITRA_ERR_JPEG_SOS; done = 1; }
@@ -167,7 +167,7 @@ fn _chitra_jpeg_parse_sos(frame, src, len, sos_off, err_out): i64 {
                     # touch is the order of SCANS: `cjpeg -scans` writes Cb's
                     # scan before Y's on request, and that still decodes.
                     if (i > 0) {
-                        if (found <= chitra_jpeg_scan_comp(frame, i - 1)) {
+                        if (found <= _chitra_jpeg_scan_comp(frame, i - 1)) {
                             rc = CHITRA_ERR_JPEG_SOS;
                             done = 1;
                         }
@@ -206,8 +206,8 @@ fn _chitra_jpeg_parse_sos(frame, src, len, sos_off, err_out): i64 {
         var blocks = 0;
         var bi = 0;
         while (bi < ns) {
-            blocks = blocks + chitra_jpeg_frame_comp_h(frame, chitra_jpeg_scan_comp(frame, bi))
-            * chitra_jpeg_frame_comp_v(frame, chitra_jpeg_scan_comp(frame, bi));
+            blocks = blocks + _chitra_jpeg_frame_comp_h(frame, _chitra_jpeg_scan_comp(frame, bi))
+            * _chitra_jpeg_frame_comp_v(frame, _chitra_jpeg_scan_comp(frame, bi));
             bi = bi + 1;
         }
         if (blocks > CHITRA_MAX_BLOCKS_PER_MCU) {
@@ -337,11 +337,11 @@ fn _chitra_jpeg_entropy_span(src, len, start, marker_out): i64 {
 # ================================================================
 fn _chitra_jpeg_structural_espan(frame, src, len, scans_out): i64 {
     store64(scans_out, 0);
-    var ncomp = chitra_jpeg_frame_num_components(frame);
+    var ncomp = _chitra_jpeg_frame_num_components(frame);
     var full = (1 << ncomp) - 1;
     var cur[24];
     _chitra_cur_init(&cur, src, len);
-    _chitra_cur_skip(&cur, chitra_jpeg_frame_sos_offset(frame));
+    _chitra_cur_skip(&cur, _chitra_jpeg_frame_sos_offset(frame));
     var total = 0;
     var scans = 0;
     var mask = 0;
@@ -384,7 +384,7 @@ fn _chitra_jpeg_structural_espan(frame, src, len, scans_out): i64 {
                 fi = 0 - 1;
                 j = 0;
                 while (j < ncomp) {
-                    if (chitra_jpeg_frame_comp_id(frame, j) == cs) { fi = j; }
+                    if (_chitra_jpeg_frame_comp_id(frame, j) == cs) { fi = j; }
                     j = j + 1;
                 }
                 if (fi < 0) { done = 1; }
@@ -459,11 +459,11 @@ fn _chitra_jpeg_structural_espan(frame, src, len, scans_out): i64 {
 # ================================================================
 fn _chitra_jpeg_decode_one_scan(frame, src, len, entropy_start, espan, planes, comppw,
   zz, out, unclean_out, err_out): i64 {
-    var ncomp = chitra_jpeg_frame_num_components(frame);
-    var w = chitra_jpeg_frame_width(frame);
-    var h = chitra_jpeg_frame_height(frame);
-    var max_h = chitra_jpeg_frame_max_h(frame);
-    var max_v = chitra_jpeg_frame_max_v(frame);
+    var ncomp = _chitra_jpeg_frame_num_components(frame);
+    var w = _chitra_jpeg_frame_width(frame);
+    var h = _chitra_jpeg_frame_height(frame);
+    var max_h = _chitra_jpeg_frame_max_h(frame);
+    var max_v = _chitra_jpeg_frame_max_v(frame);
     var mcu_w = 8 * max_h;
     var mcu_h = 8 * max_v;
     var mcu_cols = (w + mcu_w - 1) / mcu_w;
@@ -492,16 +492,16 @@ fn _chitra_jpeg_decode_one_scan(frame, src, len, entropy_start, espan, planes, c
     # ceil(X/8)), while also being right for a one-component SCAN of a
     # THREE-component frame, which the collapse would have got badly wrong.
     # ADR 0006 claimed 0.8.0 could build on the collapse; it could not.
-    var ns = chitra_jpeg_frame_scan_ns(frame);
+    var ns = _chitra_jpeg_frame_scan_ns(frame);
     var s_cols = mcu_cols;
     var s_rows = mcu_rows;
     var sfi = 0;
     var xi = 0;
     var yi = 0;
     if (ns == 1) {
-        sfi = chitra_jpeg_scan_comp(frame, 0);
-        xi = (w * chitra_jpeg_frame_comp_h(frame, sfi) + max_h - 1) / max_h;
-        yi = (h * chitra_jpeg_frame_comp_v(frame, sfi) + max_v - 1) / max_v;
+        sfi = _chitra_jpeg_scan_comp(frame, 0);
+        xi = (w * _chitra_jpeg_frame_comp_h(frame, sfi) + max_h - 1) / max_h;
+        yi = (h * _chitra_jpeg_frame_comp_v(frame, sfi) + max_v - 1) / max_v;
         s_cols = (xi + 7) / 8;
         s_rows = (yi + 7) / 8;
     }
@@ -564,12 +564,12 @@ fn _chitra_jpeg_decode_one_scan(frame, src, len, entropy_start, espan, planes, c
     while (done == 0) {
         if (ci >= ns) { done = 1; }
         if (done == 0) {
-            fi = chitra_jpeg_scan_comp(frame, ci);
-            td = chitra_jpeg_scan_td(frame, ci);
-            ta = chitra_jpeg_scan_ta(frame, ci);
-            tq = chitra_jpeg_frame_comp_tq(frame, fi);
-            chh = chitra_jpeg_frame_comp_h(frame, fi);
-            cvv = chitra_jpeg_frame_comp_v(frame, fi);
+            fi = _chitra_jpeg_scan_comp(frame, ci);
+            td = _chitra_jpeg_scan_td(frame, ci);
+            ta = _chitra_jpeg_scan_ta(frame, ci);
+            tq = _chitra_jpeg_frame_comp_tq(frame, fi);
+            chh = _chitra_jpeg_frame_comp_h(frame, fi);
+            cvv = _chitra_jpeg_frame_comp_v(frame, fi);
             # Blocks per MCU for THIS scan. One for a non-interleaved scan,
             # whatever H_i/V_i say — § A.2.2 is explicit that the factors do not
             # affect the ordering there.
@@ -577,15 +577,15 @@ fn _chitra_jpeg_decode_one_scan(frame, src, len, entropy_start, espan, planes, c
                 chh = 1;
                 cvv = 1;
             }
-            if ((chitra_jpeg_frame_huff_present(frame) & (1 << td)) == 0) { rc = CHITRA_ERR_JPEG_SOS; done = 1; }
+            if ((_chitra_jpeg_frame_huff_present(frame) & (1 << td)) == 0) { rc = CHITRA_ERR_JPEG_SOS; done = 1; }
             if (done == 0) {
-                if ((chitra_jpeg_frame_huff_present(frame) & (1 << (4 + ta))) == 0) {
+                if ((_chitra_jpeg_frame_huff_present(frame) & (1 << (4 + ta))) == 0) {
                     rc = CHITRA_ERR_JPEG_SOS;
                     done = 1;
                 }
             }
             if (done == 0) {
-                if ((chitra_jpeg_frame_quant_present(frame) & (1 << tq)) == 0) {
+                if ((_chitra_jpeg_frame_quant_present(frame) & (1 << tq)) == 0) {
                     rc = CHITRA_ERR_JPEG_SOF;
                     done = 1;
                 }
@@ -629,8 +629,8 @@ fn _chitra_jpeg_decode_one_scan(frame, src, len, entropy_start, espan, planes, c
             if (done == 0) {
                 store64(planes + fi * 8, pl);
                 store64(&preds + ci * 8, 0);
-                store64(&dctabs + ci * 8, chitra_jpeg_frame_huff(frame, 0, td));
-                store64(&actabs + ci * 8, chitra_jpeg_frame_huff(frame, 1, ta));
+                store64(&dctabs + ci * 8, _chitra_jpeg_frame_huff(frame, 0, td));
+                store64(&actabs + ci * 8, _chitra_jpeg_frame_huff(frame, 1, ta));
                 store64(&quants + ci * 8, load64(frame + _CHITRA_JF_QUANT) + tq * 64 * 8);
                 store64(&comph + ci * 8, chh);
                 store64(&compv + ci * 8, cvv);
@@ -643,7 +643,7 @@ fn _chitra_jpeg_decode_one_scan(frame, src, len, entropy_start, espan, planes, c
     if (rc != 0) { store64(err_out, chitra_err(rc)); return 0; }
     done = 0;
 
-    var ri = chitra_jpeg_frame_restart_interval(frame);
+    var ri = _chitra_jpeg_frame_restart_interval(frame);
     var reader[72];   # _CHITRA_BR_SIZE — 72 since 1.1.1's restart-sequence fields
     # Bound the reader to THIS SCAN's entropy span, not to the rest of the file.
     #
@@ -775,11 +775,11 @@ fn _chitra_jpeg_decode_one_scan(frame, src, len, entropy_start, espan, planes, c
 }
 
 fn _chitra_jpeg_build_image(frame, planes, comppw, closed, err_out): i64 {
-    var ncomp = chitra_jpeg_frame_num_components(frame);
-    var w = chitra_jpeg_frame_width(frame);
-    var h = chitra_jpeg_frame_height(frame);
-    var max_h = chitra_jpeg_frame_max_h(frame);
-    var max_v = chitra_jpeg_frame_max_v(frame);
+    var ncomp = _chitra_jpeg_frame_num_components(frame);
+    var w = _chitra_jpeg_frame_width(frame);
+    var h = _chitra_jpeg_frame_height(frame);
+    var max_h = _chitra_jpeg_frame_max_h(frame);
+    var max_v = _chitra_jpeg_frame_max_v(frame);
 
     # ---- box upsample + color convert -> RGBA8 ----
     if (w * h * 4 > CHITRA_MAX_RAW_BYTES) { store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS)); return 0; }
@@ -789,8 +789,8 @@ fn _chitra_jpeg_build_image(frame, planes, comppw, closed, err_out): i64 {
     # the scan just decoded — a different quantity that merely coincides for a
     # single interleaved scan. H_i/H_max is what the box upsampler needs.
     var p0 = load64(planes + 0);
-    var h0 = chitra_jpeg_frame_comp_h(frame, 0);
-    var v0 = chitra_jpeg_frame_comp_v(frame, 0);
+    var h0 = _chitra_jpeg_frame_comp_h(frame, 0);
+    var v0 = _chitra_jpeg_frame_comp_v(frame, 0);
     var pw0 = load64(comppw + 0);
     var p1 = 0;
     var p2 = 0;
@@ -849,14 +849,14 @@ fn _chitra_jpeg_build_image(frame, planes, comppw, closed, err_out): i64 {
     #      `saw_JFIF_marker` first, then the Adobe marker, then the ids. This is
     #      that order.
     var is_rgb = 0;
-    var adobe = chitra_jpeg_frame_adobe_transform(frame);
+    var adobe = _chitra_jpeg_frame_adobe_transform(frame);
     if (ncomp == 3) {
-        if (chitra_jpeg_frame_saw_jfif(frame) == 0) {
+        if (_chitra_jpeg_frame_saw_jfif(frame) == 0) {
             if (adobe == 0) { is_rgb = 1; }
             if (adobe < 0) {
-                if (chitra_jpeg_frame_comp_id(frame, 0) == 0x52) {
-                    if (chitra_jpeg_frame_comp_id(frame, 1) == 0x47) {
-                        if (chitra_jpeg_frame_comp_id(frame, 2) == 0x42) { is_rgb = 1; }
+                if (_chitra_jpeg_frame_comp_id(frame, 0) == 0x52) {
+                    if (_chitra_jpeg_frame_comp_id(frame, 1) == 0x47) {
+                        if (_chitra_jpeg_frame_comp_id(frame, 2) == 0x42) { is_rgb = 1; }
                     }
                 }
             }
@@ -866,11 +866,11 @@ fn _chitra_jpeg_build_image(frame, planes, comppw, closed, err_out): i64 {
     if (ncomp == 3) {
         p1 = load64(planes + 8);
         p2 = load64(planes + 16);
-        h1 = chitra_jpeg_frame_comp_h(frame, 1);
-        v1 = chitra_jpeg_frame_comp_v(frame, 1);
+        h1 = _chitra_jpeg_frame_comp_h(frame, 1);
+        v1 = _chitra_jpeg_frame_comp_v(frame, 1);
         pw1 = load64(comppw + 8);
-        h2 = chitra_jpeg_frame_comp_h(frame, 2);
-        v2 = chitra_jpeg_frame_comp_v(frame, 2);
+        h2 = _chitra_jpeg_frame_comp_h(frame, 2);
+        v2 = _chitra_jpeg_frame_comp_v(frame, 2);
         pw2 = load64(comppw + 16);
         y = 0;
         while (y < h) {
@@ -962,9 +962,9 @@ fn _chitra_jpeg_build_image(frame, planes, comppw, closed, err_out): i64 {
 # ================================================================
 fn _chitra_jpeg_decode_scans(frame, src, len, err_out): i64 {
     store64(err_out, 0);
-    var ncomp = chitra_jpeg_frame_num_components(frame);
-    var w = chitra_jpeg_frame_width(frame);
-    var h = chitra_jpeg_frame_height(frame);
+    var ncomp = _chitra_jpeg_frame_num_components(frame);
+    var w = _chitra_jpeg_frame_width(frame);
+    var h = _chitra_jpeg_frame_height(frame);
 
     # ⛔⛔ GATE 0 (B-3, 1.0.3) — REFUSE BEFORE THE PLANES, NOT AFTER THEM.
     # GATE 2 below is the honest whole-image bound, and through 1.1.0 it ran
@@ -1030,7 +1030,7 @@ fn _chitra_jpeg_decode_scans(frame, src, len, err_out): i64 {
     var out = alloc(512);
     if (out == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
 
-    var sos_off = chitra_jpeg_frame_sos_offset(frame);
+    var sos_off = _chitra_jpeg_frame_sos_offset(frame);
     var entropy_start = 0;
     var espan = 0;
     var endmark = 0;
@@ -1052,7 +1052,7 @@ fn _chitra_jpeg_decode_scans(frame, src, len, err_out): i64 {
             return 0;
         }
         if (unclean == 1) { any_unclean = 1; }
-        if (chitra_jpeg_frame_covered(frame) == full) { done = 1; }
+        if (_chitra_jpeg_frame_covered(frame) == full) { done = 1; }
         if (done == 0) {
             sos_off = _chitra_jpeg_resume_to_next_scan(frame, src, len, entropy_start + espan, err_out);
             if (load64(err_out) != 0) { return 0; }
@@ -1103,7 +1103,7 @@ fn _chitra_jpeg_decode_scans(frame, src, len, err_out): i64 {
 # @public
 fn chitra_jpeg_decode(src, len, err_out): i64 {
     store64(err_out, 0);
-    var frame = chitra_jpeg_scan_markers(src, len, err_out);
+    var frame = _chitra_jpeg_scan_markers(src, len, err_out);
     if (frame == 0) { return 0; }
     return _chitra_jpeg_decode_scans(frame, src, len, err_out);
 }
@@ -1129,14 +1129,14 @@ fn chitra_jpeg_decode_rgba8(src, len, w_out, h_out): i64 {
 # _chitra_jpeg_declared_dims — the dimensions SOF0 declares, without decoding or
 # allocating anything.
 #
-# This walks segments structurally, exactly as chitra_jpeg_scan_markers does —
+# This walks segments structurally, exactly as _chitra_jpeg_scan_markers does —
 # by length, honouring standalone markers and § B.1.1.2 fill bytes — but it
 # parses nothing and stores nothing. It is not a second header parser: it
 # validates no field, builds no table, and its only output is (w, h). Anything
 # it does not understand returns 0, and the real parser then has the final say
 # on the same bytes.
 #
-# The reason it exists rather than reusing chitra_jpeg_scan_markers: that
+# The reason it exists rather than reusing _chitra_jpeg_scan_markers: that
 # function allocates the quantization and Huffman stores as it meets DQT and
 # DHT segments, so using it to answer "how big is this image?" costs ~22 KB for
 # any real JPEG — on a budget REFUSAL, which is the path this API exists to
@@ -1235,8 +1235,8 @@ fn _chitra_declared_rgba_bytes(src, len): i64 {
         var berr = 0;
         var hdr = _chitra_bmp_parse_header(src, len, &berr);
         if (hdr == 0) { return 0; }
-        w = chitra_bmp_hdr_width(hdr);
-        h = chitra_bmp_hdr_height(hdr);
+        w = _chitra_bmp_hdr_width(hdr);
+        h = _chitra_bmp_hdr_height(hdr);
         if (h < 0) { h = 0 - h; }        # negative height = top-down rows
     }
     if (chitra_gif_check_signature(src, len) == 1) {

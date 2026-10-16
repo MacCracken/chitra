@@ -64,7 +64,7 @@ order:
 |---|---|---|
 | [`../../src/jpeg_huffman.cyr`](../../src/jpeg_huffman.cyr) | 462 | `HuffTable` record (MINCODE/MAXCODE/VALPTR/COUNT/HUFFVAL); `_chitra_jpeg_huff_build` (Annex C/F table derivation + over-subscription reject); the entropy bit-reader (`_jpeg_br_*`) with byte-stuffing + marker/restart handling, the restart-sequence check and the unconsumed-tail check (`_chitra_jpeg_br_tail_clean`); `_chitra_jpeg_decode` (DECODE), `_chitra_jpeg_br_bits` (RECEIVE), `_chitra_jpeg_extend` (EXTEND); `_chitra_jpeg_decode_block` (one 8×8 block: DC diff + AC run/size) |
 | [`../../src/jpeg_idct.cyr`](../../src/jpeg_idct.cyr) | 226 | The zig-zag→natural index map; `_chitra_jpeg_descale` (signed round-to-nearest); the libjpeg `jpeg_idct_islow` integer IDCT; `_chitra_jpeg_idct_block` (dequant + de-zig-zag + 2-D IDCT + level-shift+clamp) |
-| [`../../src/jpeg_markers.cyr`](../../src/jpeg_markers.cyr) | 1060 | `ChitraJpegFrame` record + accessors; the baseline ceilings; `chitra_jpeg_check_signature`; the SOI→SOS marker walk `chitra_jpeg_scan_markers`; `_jpeg_parse_{sof0,dqt,dht,dri,app0,app14}` and the lazy table stores; `_chitra_jpeg_colour_evidence_ok` (the APP14 judgement at the first SOS); `_chitra_jpeg_resume_to_next_scan` (the walk between scans); `_chitra_jpeg_marker_action` (the non-baseline reject table) |
+| [`../../src/jpeg_markers.cyr`](../../src/jpeg_markers.cyr) | 1060 | `ChitraJpegFrame` record + accessors; the baseline ceilings; `chitra_jpeg_check_signature`; the SOI→SOS marker walk `_chitra_jpeg_scan_markers`; `_jpeg_parse_{sof0,dqt,dht,dri,app0,app14}` and the lazy table stores; `_chitra_jpeg_colour_evidence_ok` (the APP14 judgement at the first SOS); `_chitra_jpeg_resume_to_next_scan` (the walk between scans); `_chitra_jpeg_marker_action` (the non-baseline reject table) |
 | [`../../src/jpeg.cyr`](../../src/jpeg.cyr) | 1327 | Public API: `chitra_jpeg_decode`, `chitra_jpeg_decode_rgba8`, `chitra_image_decode` (the **four-format** signature router — PNG, JPEG, BMP, GIF), `chitra_image_decode_budget`; `_chitra_jpeg_parse_sos`; and the three functions 0.8.0 split `_jpeg_decode_scan` into — `_chitra_jpeg_decode_scans` (multi-scan driver), `_chitra_jpeg_decode_one_scan` (MCU loop + plane placement), `_chitra_jpeg_build_image` (box upsample + colour pass + `ChitraImage`) — plus `_chitra_jpeg_entropy_span`, `_chitra_jpeg_structural_espan` (the allocation-free span pre-pass, 1.1.1) and `_chitra_jpeg_declared_dims` (the budget's geometry read) |
 
 ## Why huffman + idct precede markers in the include chain
@@ -96,7 +96,7 @@ topology that orders the PNG five orders these four.
 
 ## The `ChitraJpegFrame` handoff
 
-`chitra_jpeg_scan_markers` walks SOI→SOS once and produces a heap `ChitraJpegFrame`
+`_chitra_jpeg_scan_markers` walks SOI→SOS once and produces a heap `ChitraJpegFrame`
 (`CHITRA_JPEG_FRAME_SIZE = 384` bytes, deliberately over-reserved so the alloc
 size stays stable as fields are added). It grew from 320 for `_CHITRA_JF_ADOBE_TRANSFORM`
 @232 (0.6.1) and the per-scan block 0.8.0 added — `_CHITRA_JF_SCAN_NS` @240, `_CHITRA_JF_SCAN`
@@ -117,7 +117,7 @@ before a component is allowed to reference them.
 
 The handoff crosses three functions in `jpeg.cyr`:
 
-- `chitra_jpeg_scan_markers` fills the SOF fields (width/height/precision/ncomp/
+- `_chitra_jpeg_scan_markers` fills the SOF fields (width/height/precision/ncomp/
   max_h/max_v, per-component `id`/`H`/`V`/`Tq`), the tables, the restart
   interval, and records `_CHITRA_JF_SOS_OFFSET` (the byte offset of the SOS length field).
 - `_chitra_jpeg_parse_sos` re-opens a cursor at `_CHITRA_JF_SOS_OFFSET`, matches each scan
@@ -461,7 +461,7 @@ and GIF unqualified, and for JPEG with this narrowing.
   — the include-order / strip-concatenation invariant that forces the
   huffman → idct → markers → jpeg ordering.
 - [`003-bump-allocator-no-free.md`](003-bump-allocator-no-free.md) — the
-  allocation model the per-plane / per-frame allocs assume (`chitra_jpeg_frame_free`
+  allocation model the per-plane / per-frame allocs assume (`_chitra_jpeg_frame_free`
   is a no-op).
 - [`../development/state.md`](../development/state.md) — current bundle size,
   line counts, version, and the open fuzz/bench gates (volatile; this note stays

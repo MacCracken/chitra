@@ -8,7 +8,7 @@
 #
 # PLTE/tRNS access wiring (documented choice): the ChitraPngRaw captures
 # PLTE/tRNS only as (offset-into-original-src, length) spans — the bytes
-# themselves are not retained. chitra_png_parse_raw does NOT copy them
+# themselves are not retained. _chitra_png_parse_raw does NOT copy them
 # (no struct widening, no extra allocs on the parse path). The public
 # decode entry (png.cyr) still holds the original (src, len), so it
 # passes src + len into the color pass, which resolves the spans via
@@ -24,12 +24,12 @@
 
 # ================================================================
 # Color-type sample-byte sizes (bit depth 8 => 1 byte per channel).
-# These mirror chitra_png_color_channels but name the per-color-type
+# These mirror _chitra_png_color_channels but name the per-color-type
 # byte strides the color pass walks the scanline with.
 # ================================================================
 
 # ================================================================
-# chitra_png_color_to_rgba8 — the color pass.
+# _chitra_png_color_to_rgba8 — the color pass.
 #
 # Inputs:
 #   raw  — a ChitraPngRaw with scanlines populated (parse_raw output).
@@ -69,22 +69,22 @@ fn _chitra_png_scale16(v): i64 {
 }
 
 # ================================================================
-fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
+fn _chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
     store64(err_out, 0);
 
-    var width = chitra_raw_width(raw);
-    var height = chitra_raw_height(raw);
-    var color_type = chitra_raw_color_type(raw);
-    var channels = chitra_raw_channels(raw);
-    var scan = chitra_raw_scanlines(raw);
-    var scan_len = chitra_raw_scanlines_len(raw);
+    var width = _chitra_raw_width(raw);
+    var height = _chitra_raw_height(raw);
+    var color_type = _chitra_raw_color_type(raw);
+    var channels = _chitra_raw_channels(raw);
+    var scan = _chitra_raw_scanlines(raw);
+    var scan_len = _chitra_raw_scanlines_len(raw);
 
     # Bytes per sample: 1 at depth 8, 2 at depth 16. At depth 16 each
     # big-endian sample is truncated to its HIGH byte (offset +0 of the
     # 2-byte pair) — the same lossy 16->8 reduction kii's terminal path
     # used, keeping rendered output byte-identical. Sub-byte depths never
     # reach here (parse_raw rejects 1/2/4), so bps is always 1 or 2.
-    var bit_depth = chitra_raw_bit_depth(raw);
+    var bit_depth = _chitra_raw_bit_depth(raw);
     var bps = bit_depth / 8;
 
     # width*height was capped <= CHITRA_MAX_PIXELS in parse_raw, so
@@ -118,8 +118,8 @@ fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
     if (out == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
 
     # ---- resolve + validate the tRNS span against (src, len) -------
-    var trns_off = chitra_raw_trns_off(raw);
-    var trns_len = chitra_raw_trns_len(raw);
+    var trns_off = _chitra_raw_trns_off(raw);
+    var trns_len = _chitra_raw_trns_len(raw);
     var has_trns = 0;
     var trns_ptr = 0;
     if (trns_len > 0) {
@@ -175,8 +175,8 @@ fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
         if (color_type == 3) {
             # palette: the d-bit index selects a PLTE entry; per-entry tRNS
             # alpha (same as the depth-8 palette path).
-            var plte_off = chitra_raw_plte_off(raw);
-            var plte_len = chitra_raw_plte_len(raw);
+            var plte_off = _chitra_raw_plte_off(raw);
+            var plte_len = _chitra_raw_plte_len(raw);
             var entry_count = plte_len / 3;
             if (entry_count <= 0) { store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK)); return 0; }
             if (plte_off < 0 || plte_off + plte_len > len) {
@@ -308,8 +308,8 @@ fn chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
 
     # ---- palette (3): index -> PLTE[index]; alpha from tRNS array ---
     if (color_type == 3) {
-        var plte_off = chitra_raw_plte_off(raw);
-        var plte_len = chitra_raw_plte_len(raw);
+        var plte_off = _chitra_raw_plte_off(raw);
+        var plte_len = _chitra_raw_plte_len(raw);
         var entry_count = plte_len / 3;
         # Palette images REQUIRE a PLTE chunk (spec § 11.2.3).
         if (entry_count <= 0) {

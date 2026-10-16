@@ -9,6 +9,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 _Nothing yet._
 
+## [1.2.0] - 2026-10-15 — the public prefix is the promise
+
+⛔ **Nothing frozen changed** — the 29 names, both record layouts and every
+`ChitraErrCode` value are as at 1.0.0. Decode output is byte-identical to 1.1.4.
+A minor rather than a patch because 46 names that had been visible in the bundle
+since 0.x go away; none was ever covered by the 1.0 promise, and no consumer —
+mabda, kii, jalwa, aethersafha, crab — calls any of them.
+
+### Changed — the 46 internal `chitra_*` functions are now `_chitra_*`
+
+The bundle is a strip-concatenation, so every function in it is callable. At the
+1.0.0 freeze the 45 internal ones that carried the *public* `chitra_` prefix were
+listed in an INTERNAL_NAMES block of `public-surface.md` rather than renamed
+(ADR 0010 § 4: "a non-breaking change by construction … can happen in any later
+release"); `chitra_jpeg_frame_saw_jfif` joined them in 1.0.3. They are renamed now:
+the parsed-PNG `chitra_raw_*` accessors, `chitra_png_parse_raw`,
+`chitra_png_color_to_rgba8`, `chitra_png_color_channels`, `chitra_bmp_hdr_*`,
+`chitra_jpeg_scan_markers`, and the `chitra_jpeg_frame_*` / `chitra_jpeg_scan_*`
+accessors — 233 mechanical replacements across `src/`, five suites, the fuzz and
+bench harnesses, plus the live docs that name them (released CHANGELOG entries
+and dated audits keep the names they were written with).
+
+⇒ With 1.1.2 (globals) and 1.1.3 (helpers), **every name chitra puts in a
+consumer's program is now either one of the 29 frozen `chitra_*` functions, a
+public `CHITRA_*` constant, or internal by name (`_chitra_*` / `_CHITRA_*`).**
+
+### Changed — `check-surface.sh`: one equality instead of a classification
+
+`public-surface.md` drops the INTERNAL_NAMES block; the gate now requires the
+bundle's `chitra_*` functions to be **exactly** the FROZEN names. Through 1.1.4 it
+compared the bundle with the *union* of FROZEN and INTERNAL_NAMES, so which list
+a name sat in — and therefore whether it was promised — was enforced by review
+alone. Now a new public-prefixed name cannot appear without being frozen, which
+is a decision. Proven both ways: a probe `chitra_probe_internal` in the bundle
+fails it ("not frozen — … rename it `_chitra_*` if it is internal"), and a frozen
+name renamed away fails it ("a breaking change").
+It reports **29 `chitra_*` functions, all 29 frozen**; 37 enum members named and
+pinned; 146 globals and 171 functions, all chitra-prefixed.
+
+### Documentation
+
+- ADR 0010 § 4 amended: done.
+- **`roadmap.md` cleaned of completed work**: the 1.1.x section's history of what
+  earlier patches closed, and the rename item itself, are gone. The sizing rules
+  now say that renaming or removing *non-frozen* names is minor-sized, which is
+  this release; "PNG past 16 MiB inflated" moves from 1.2.0 to **1.3.0**.
+
+### Numbers
+
+**3,978 assertions across 14 suites**, the consumer-shape leg's 3,978, and
+**11,649,080 fuzz assertions** under `--poison` — 0 failures. The 53-file
+reference corpus decodes byte-identically to 1.1.4.
+
 ## [1.1.4] - 2026-10-15 — CI builds chitra the way most consumers link it
 
 ⛔ **No decode code changed.** The 53-file reference corpus decodes

@@ -1,11 +1,15 @@
 # chitra — the public surface
 
-> The list `scripts/check-surface.sh` checks `dist/chitra.cyr` against. Every
-> `chitra_`-prefixed function in the bundle must appear in exactly one of the
-> two blocks below, so a name cannot appear or vanish unnoticed. Note what the
-> gate does and does not check: it compares the **union** of the two blocks
-> against the bundle. *Which* block a name sits in — and therefore whether it
-> is promised — is enforced by review, not by the script. Since 1.1.1 the same
+> The list `scripts/check-surface.sh` checks `dist/chitra.cyr` against. Since
+> 1.2.0 the rule is a single equality: **the `chitra_`-prefixed functions in the
+> bundle are exactly the FROZEN names below** — nothing more, nothing less.
+> Everything else chitra defines is `_chitra_*` / `_CHITRA_*`, and the same script
+> fails on any top-level `fn` or `var` without a chitra prefix. So the public
+> prefix *is* the promise: a new `chitra_*` function cannot appear without being
+> added here, which is a decision, and a frozen one cannot vanish unnoticed. (Through
+> 1.1.4 a second, INTERNAL_NAMES block listed 46 visible-but-unpromised
+> `chitra_*` names, and which block a name sat in was enforced only by review.)
+> Since 1.1.1 the same
 > script also fails when a member of the bundle's `enum ChitraErrCode` has no
 > `chitra_err_name` arm or no literal value pin in `tests/tcyr/surface.tcyr`,
 > because the promise covers the enum's numeric values and a new member could
@@ -17,18 +21,21 @@
 
 ## Why this file exists
 
-`dist/chitra.cyr` is a strip-concatenated bundle, so *every* `chitra_`-prefixed
-function in it is callable by a consumer whether or not it was meant to be.
-Before this file, "the surface is frozen" was an assertion with nothing behind
-it: 45 of the then-74 exported names were internal (46 of 75 since 1.0.3), and nothing distinguished them
-from the 29 that are not.
+`dist/chitra.cyr` is a strip-concatenated bundle, so *every* function in it is
+callable by a consumer whether or not it was meant to be. Before this file, "the
+surface is frozen" was an assertion with nothing behind it: 45 of the then-74
+exported `chitra_*` names were internal, and nothing distinguished them from the
+29 that are not.
 
-The distinction matters most at v1.0, because the promise being made is about
-the FROZEN block only, and it is now in force. A consumer reaching into the INTERNAL block is not
-covered by it — and the names there are deliberately not `_`-prefixed only
-because renaming 45 functions immediately before a freeze is a large churn
-diff for zero runtime benefit, with a real risk of a typo silently disabling a
-test.
+At the 1.0.0 freeze the internal names were classified rather than renamed —
+renaming 45 functions immediately before a freeze was a large churn diff for
+zero runtime benefit. **1.2.0 did the rename**: the 46 internal `chitra_*` names
+(the parsed-PNG `chitra_raw_*` accessors, `chitra_png_parse_raw` /
+`chitra_png_color_to_rgba8` / `chitra_png_color_channels`, the
+`chitra_bmp_hdr_*` and `chitra_jpeg_frame_*` / `chitra_jpeg_scan_*` accessors and
+`chitra_jpeg_scan_markers`) are now `_chitra_*`, so the prefix itself says what
+is promised. No consumer called any of them; the rename got a minor bump rather
+than a patch because names that had been visible since 0.x went away.
 
 ## The promise, and its edges
 
@@ -40,7 +47,8 @@ documented behaviour there is a **major bump plus an ADR**.
 What it does **not** cover, stated because a promise with unstated edges is not
 a promise:
 
-- **The INTERNAL_NAMES block.** May change or disappear in any release.
+- **Anything `_chitra_*` or `_CHITRA_*`.** Internal by name: it may change or
+  disappear in any release. (Through 1.1.4 that was the INTERNAL_NAMES block.)
 - **Bit-exact output across releases.** The contract is *correct* RGBA8, held
   to external oracles. A repair that moves bytes toward the oracle is a bug
   fix, not a break — 0.7.x's § 13.13 depth-16 rescaling changed the output of
@@ -97,39 +105,13 @@ chitra_err_name                  chitra_err_print_name
 chitra_version
 ```
 
-## INTERNAL_NAMES
+## Internal names
 
-Visible in `dist/chitra.cyr` and **not frozen**. These exist because the bundle
-is a flat concatenation, not because they are an API. They may change or
-disappear in any release.
-
-```
-chitra_raw_bit_depth             chitra_raw_channels
-chitra_raw_color_type            chitra_raw_free
-chitra_raw_height                chitra_raw_interlace
-chitra_raw_plte_len              chitra_raw_plte_off
-chitra_raw_scanlines             chitra_raw_scanlines_len
-chitra_raw_seen_iend             chitra_raw_trns_len
-chitra_raw_trns_off              chitra_raw_width
-chitra_png_parse_raw             chitra_png_color_to_rgba8
-chitra_png_color_channels
-chitra_bmp_hdr_bpp               chitra_bmp_hdr_height
-chitra_bmp_hdr_width
-chitra_jpeg_scan_markers         chitra_jpeg_frame_free
-chitra_jpeg_frame_width          chitra_jpeg_frame_height
-chitra_jpeg_frame_precision      chitra_jpeg_frame_num_components
-chitra_jpeg_frame_seen_sof       chitra_jpeg_frame_max_h
-chitra_jpeg_frame_max_v          chitra_jpeg_frame_restart_interval
-chitra_jpeg_frame_quant          chitra_jpeg_frame_quant_present
-chitra_jpeg_frame_huff           chitra_jpeg_frame_huff_present
-chitra_jpeg_frame_sos_offset     chitra_jpeg_frame_comp_id
-chitra_jpeg_frame_comp_h         chitra_jpeg_frame_comp_v
-chitra_jpeg_frame_comp_tq        chitra_jpeg_frame_adobe_transform
-chitra_jpeg_frame_scan_ns        chitra_jpeg_frame_covered
-chitra_jpeg_frame_saw_jfif
-chitra_jpeg_scan_comp            chitra_jpeg_scan_td
-chitra_jpeg_scan_ta
-```
+There is no list: since 1.2.0 an internal function or global is one whose name
+starts with `_chitra_` / `_CHITRA_`, and `check-surface.sh` fails on any
+`chitra_*` function that is not in FROZEN above, and on any top-level `fn` or
+`var` with no chitra prefix at all. 1.1.2 and 1.1.3 prefixed the 128 globals and
+84 helpers that had none; 1.2.0 renamed the 46 that had the *public* prefix.
 
 ## Records
 

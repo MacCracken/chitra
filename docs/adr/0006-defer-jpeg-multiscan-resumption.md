@@ -94,7 +94,7 @@ same code. A naive relaxation is strictly worse than the rejection it replaces.
 
 What a correct implementation actually needs, all of it new:
 
-1. **A resumable marker walk.** `chitra_jpeg_scan_markers` stops at the first
+1. **A resumable marker walk.** `_chitra_jpeg_scan_markers` stops at the first
    SOS. Resumption would derive its restart offset from `_chitra_jpeg_br_pos`, which
    is a position inside *decoded content* rather than a bounds-checked header
    field — the first time in chitra's history a parser cursor is steered by
@@ -122,7 +122,7 @@ What a correct implementation actually needs, all of it new:
    chitra*, not attacker input — the check belongs there as a tripwire, and the
    walk must reject at the resume point rather than searching forward for the
    next marker.
-6. **SOF-once across resumes.** `chitra_jpeg_scan_markers` re-zeroes
+6. **SOF-once across resumes.** `_chitra_jpeg_scan_markers` re-zeroes
    `_CHITRA_JF_SEEN_SOF` on entry, so resumption must re-enter a walk on the *existing*
    frame or a post-scan SOF0 will redefine geometry after allocation.
 
@@ -166,7 +166,7 @@ covers DHT between scans and stops there.
 **4. EOI is rejected.** `_chitra_jpeg_marker_action` returns `CHITRA_ERR_JPEG_MARKER`
 for `0xD9` unconditionally, because through 0.7.3 reaching EOI during the
 header walk meant "no scan present". A resumed walk that reuses
-`chitra_jpeg_scan_markers` would therefore reject the file's own end marker.
+`_chitra_jpeg_scan_markers` would therefore reject the file's own end marker.
 
 **5. The scan component list has nowhere to live.** `_chitra_jpeg_parse_sos` builds
 its selector list locally and discards it; the frame has no scan-component

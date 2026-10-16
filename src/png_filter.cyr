@@ -1,6 +1,6 @@
 # @internal — PNG unfilter predictors + the raw-decode driver.
 # png_filter.cyr — the five PNG filter-undo predictors (spec § 9) and
-# chitra_png_parse_raw, the top-level byte-buffer framing driver that
+# _chitra_png_parse_raw, the top-level byte-buffer framing driver that
 # produces a ChitraPngRaw (parsed IHDR + inflated, unfiltered scanlines).
 #
 # Forked from kii/src/png.cyr's _png_paeth / _png_unfilter_row and
@@ -161,7 +161,7 @@ fn _chitra_parse_ihdr(cur, raw): i64 {
     var interlace = load8(data_ptr + 12);
 
     # ---- supported-feature gates (fail loud, never half-decode) ----
-    var channels = chitra_png_color_channels(color_type);
+    var channels = _chitra_png_color_channels(color_type);
     if (channels < 0) { return chitra_err(CHITRA_ERR_UNSUPPORTED); }
     # Compression + filter methods: spec § 11.2.2 defines ONLY method 0 for
     # each. Reject any other loud rather than mis-decoding a spoofed header.
@@ -345,7 +345,7 @@ fn _chitra_deinterlace(inflated, pixels, width, height, channels, depth, err_out
 }
 
 # ================================================================
-# chitra_png_parse_raw — the parse-stage top-level. Turns (src, len) PNG
+# _chitra_png_parse_raw — the parse-stage top-level. Turns (src, len) PNG
 # bytes into a ChitraPngRaw (parsed IHDR + inflated, unfiltered raw
 # scanlines + captured PLTE/tRNS spans). Returns the ChitraPngRaw ptr
 # on success, or 0 on failure with the ChitraErr written through
@@ -357,7 +357,7 @@ fn _chitra_deinterlace(inflated, pixels, width, height, channels, depth, err_out
 # concatenates the IDAT payloads, inflates (with the bomb caps), and
 # unfilters into the scanline buffer.
 # ================================================================
-fn chitra_png_parse_raw(src, len, err_out): i64 {
+fn _chitra_png_parse_raw(src, len, err_out): i64 {
     store64(err_out, 0);
 
     # crc32() needs its slice-by-8 table built first (it does not lazy-

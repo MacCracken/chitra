@@ -54,7 +54,7 @@ include "lib/sankoch-zlib.cyr"
 # chitra domain modules — flat, dependency order.
 # error.cyr is dep-free. png_chunks.cyr (byte-buffer cursor +
 # signature + chunk predicates + ChitraPngRaw struct/accessors) and
-# png_filter.cyr (the 5 unfilter predictors + chitra_png_parse_raw
+# png_filter.cyr (the 5 unfilter predictors + _chitra_png_parse_raw
 # framing driver) build on error.cyr + sankoch; png_color.cyr (the
 # canonical-RGBA8 + tRNS color pass) consumes a ChitraPngRaw; png.cyr
 # (the public decode API + ChitraImage) sits atop all three.
