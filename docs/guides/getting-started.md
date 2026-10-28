@@ -277,15 +277,17 @@ the pixels. A *malformed* IEND (e.g. non-zero length) is a hard error.
 | `CHITRA_ERR_BMP_RLE` | 32 | Corrupt BMP run-length stream: a run or delta leaving the bitmap, or a truncated opcode |
 | `CHITRA_ERR_BMP_MASK` | 33 | BMP channel mask non-contiguous, overlapping, wider than the pixel, or leaving no color channel |
 | `CHITRA_ERR_BUDGET` | 34 | `chitra_image_decode_budget` refused: the image's RGBA8 output would exceed the caller's `max_bytes`. **The file is fine** — this is the only code that reports a caller policy rather than anything about the input |
-| `CHITRA_ERR_INFLATE_LIMIT` | 35 | The PNG is valid and the caller allowed it, but its inflated scanline data exceeds what the linked `sankoch` will emit (`DECOMPRESS_MAX_OUTPUT`, 16 MiB) — about **5.6 megapixels of RGB**. Refused from the header, before allocating. **Distinct from `CHITRA_ERR_INFLATE`**, which means the decompressor reported a *failure*: a corrupt stream can be retried or reported as damaged, this one can only be refused |
+| `CHITRA_ERR_INFLATE_LIMIT` | 35 | **Not returned since 1.3.0.** Through 1.2.x: a valid PNG whose inflated scanline data exceeded `sankoch`'s 16 MiB default (about 5.6 megapixels of RGB), refused from the header. 1.3.0 names its own ceiling, so those files decode. The value stays defined because the enum is frozen; keep any mapping you have for it, it is simply dead |
 | `CHITRA_ERR_OTHER` | 99 | Anything else |
 
-⛔ **`CHITRA_ERR_INFLATE_LIMIT` (1.0.1) is a capability limit, not a verdict on the file.** Before
-1.0.1 this surfaced as `CHITRA_ERR_INFLATE` — and expensively: chitra's own ceiling is 256 MB,
-sixteen times what sankoch emits, so it allocated the IDAT concatenation *and* a full-size inflate
-buffer before the decompressor refused. Measured at **26,617,512 bytes spent to return 0**, on an
-allocator with no `free()`. It is now under 64 KiB. The ceiling itself is sankoch's and only sankoch
-can raise it.
+⛔ **A PNG past 16 MiB of scanlines decodes from 1.3.0.** From 1.0.1 to 1.2.x it was refused as
+`CHITRA_ERR_INFLATE_LIMIT`, cheaply, because sankoch's one-shot inflate stops at 16 MiB. chitra now
+calls `zlib_decompress_capped` with the exact size IHDR implies, which every sankoch from 2.7.13
+provides (the 2.8.6 floor above is higher). ⚠ **Budget memory for it**: the worst case is now a
+4096×4096 16-bit RGBA file, measured at **416,391,288 bytes** for an 80.8 MB file, not the ~100 MB of
+1.2.x — see SECURITY.md. `chitra_image_decode_budget` bounds the RGBA8 output, not that working set.
+A corrupt stream past 16 MiB that used to answer 35 without being read now answers what is wrong with
+it, usually `CHITRA_ERR_INFLATE`.
 
 Note that `CHITRA_ERR_INTERLACE` and `CHITRA_ERR_BIT_DEPTH` are narrower
 than their names suggest: Adam7 *and* every spec-legal bit depth decode,

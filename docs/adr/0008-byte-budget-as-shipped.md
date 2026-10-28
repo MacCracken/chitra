@@ -56,6 +56,15 @@ What it does **not** cover, named rather than glossed:
 - **Working buffers during a decode that is begun.** Those are bounded by the
   format's own caps, not by `max_bytes`. Budgeting N bounds the *output* at N;
   peak working set is a small multiple of it.
+  ⭐ *Amended 1.3.0*: "small multiple" now has a number. For PNG it is at most
+  **~5× N plus the compressed size**: 16-bit RGBA holds inflated scanlines
+  (2× N), unfiltered scanlines (2× N) and the output together, beside a copy of
+  the IDAT data. Through 1.2.x sankoch's 16 MiB inflate default refused every
+  such file above ~2 megapixels, so the multiple was never reached at size;
+  1.3.0 decodes them, and a 4096×4096 RGBA16 file of 80.8 MB measured
+  416,391,288 B against an N of 67,108,864. The decision stands — the budget
+  is still the one bound a caller can apply from the header — but a caller
+  sizing a process from N must apply the multiple.
 - **sankoch's allocations**, which chitra does not route: ~41 KB of one-time
   table setup on the process's first PNG decode (16,384 for the CRC-32 table,
   ~25,000 for the inflate tables), plus **32 bytes per `zlib_decompress`

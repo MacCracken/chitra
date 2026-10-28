@@ -74,7 +74,7 @@ loop bound depends on it.
   DEFLATE's theoretical 1032:1 ceiling per RFC 1951 § 3.2.5 —
   (`:636`-`639`) defend against zip-bomb inputs. sankoch's inflate is
   also bounded to the exact pre-computed output size, and the result is
-  checked for an exact byte-count match (`:743`-`753`).
+  checked for an exact byte-count match (`:730`-`740`).
 - **CRC-32 on every chunk.** IHDR and every walked chunk have their
   stored CRC-32 verified against a recomputation over `type + data`
   (`src/png_filter.cyr:145`-`147`, `:442`-`451`).
@@ -116,12 +116,12 @@ the audit ([`../audit/2026-06-26-audit.md`](../audit/2026-06-26-audit.md)).
 | Derived inflated/pixel-size caps (Adam7-aware) | `src/png_filter.cyr:617`-`624` | `CHITRA_ERR_DIMENSIONS` |
 | Zero-IDAT structural reject | `src/png_filter.cyr:629`-`632` | `CHITRA_ERR_NO_IDAT` |
 | Decompression-bomb ratio cap (1100:1) | `src/png_filter.cyr:636`-`639` | `CHITRA_ERR_DIMENSIONS` |
-| Inflate failure + exact-size second line | `src/png_filter.cyr:752`-`753` | `CHITRA_ERR_INFLATE` |
-| Per-row filter-byte allow-list `{0..4}` | `_chitra_unfilter_row` (`src/png_filter.cyr:39`) → non-interlaced `:769` / deinterlace `:312` | `CHITRA_ERR_FILTER` |
+| Inflate failure + exact-size second line | `src/png_filter.cyr:739`-`740` | `CHITRA_ERR_INFLATE` |
+| Per-row filter-byte allow-list `{0..4}` | `_chitra_unfilter_row` (`src/png_filter.cyr:39`) → non-interlaced `:756` / deinterlace `:312` | `CHITRA_ERR_FILTER` |
 | Color-pass re-assert of dimension caps | `src/png_color.cyr:96`-`104` | `CHITRA_ERR_DIMENSIONS` |
 | Scanline-buffer sufficiency check | `src/png_color.cyr:111`-`115` | `CHITRA_ERR_DIMENSIONS` |
 | tRNS span re-validated within `(src, len)` | `src/png_color.cyr:125`-`129` | `CHITRA_ERR_BAD_CHUNK` |
-| tRNS length per color-type (gray 2 / RGB 6 / palette ≤ entries) | `src/png_color.cyr:144`,`:229` (gray) / `:266` (RGB) / `:187`,`:327` (palette); since 1.1.1 also refused before any allocation, `src/png_filter.cyr:685`-`711` | `CHITRA_ERR_BAD_CHUNK` |
+| tRNS length per color-type (gray 2 / RGB 6 / palette ≤ entries) | `src/png_color.cyr:144`,`:229` (gray) / `:266` (RGB) / `:187`,`:327` (palette); since 1.1.1 also refused before any allocation, `src/png_filter.cyr:669`-`695` | `CHITRA_ERR_BAD_CHUNK` |
 | Palette index OOB hard-reject | `src/png_color.cyr:197`, `:335` | `CHITRA_ERR_BAD_CHUNK` |
 | Palette images require non-empty, in-bounds PLTE | `src/png_color.cyr:181`-`185` (sub-byte path), `:315` (8-bit path) | `CHITRA_ERR_BAD_CHUNK` |
 | Allocation-failure check on every alloc | throughout `src/png_filter.cyr`, `src/png_color.cyr`, `src/png.cyr` | `CHITRA_ERR_OOM` |
@@ -200,8 +200,8 @@ row changes only what a refusal *costs*, the third only what it *says*.
 | Guard | Code | Error |
 |---|---|---|
 | A second IHDR is malformed (§ 5.6: exactly one) — it fell to the unknown-critical branch and read `UNSUPPORTED` through 1.1.0 | `src/png_filter.cyr:462`-`465` | `CHITRA_ERR_BAD_CHUNK` |
-| Colour type 3 without a non-empty PLTE, a palette tRNS longer than PLTE, and a type-0/2 tRNS of the wrong length are refused at the end of the chunk walk, **before the first allocation** (the colour-pass checks above stay as defence in depth) | `src/png_filter.cyr:682`-`711` | `CHITRA_ERR_BAD_CHUNK` |
-| sankoch's own allocation failure inside `zlib_decompress` (`-ERR_OOM`) is an OOM, not a corrupt stream | `src/png_filter.cyr:751` | `CHITRA_ERR_OOM` |
+| Colour type 3 without a non-empty PLTE, a palette tRNS longer than PLTE, and a type-0/2 tRNS of the wrong length are refused at the end of the chunk walk, **before the first allocation** (the colour-pass checks above stay as defence in depth) | `src/png_filter.cyr:666`-`695` | `CHITRA_ERR_BAD_CHUNK` |
+| sankoch's own allocation failure inside `zlib_decompress` (`-ERR_OOM`) is an OOM, not a corrupt stream | `src/png_filter.cyr:738` | `CHITRA_ERR_OOM` |
 
 The second row is the 1.0.3 "a cap belongs before the allocation it exists to
 prevent" shape in its fourth format: a 2,116-byte 4096×4096 depth-1 palette PNG

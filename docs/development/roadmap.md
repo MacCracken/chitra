@@ -1,6 +1,6 @@
 # chitra — Roadmap
 
-> **Last Updated**: 2026-10-15 (1.2.0)
+> **Last Updated**: 2026-10-28 (1.3.0)
 >
 > **Forward only.** What ships next, in what order, against what gates. What
 > already shipped is in [`../../CHANGELOG.md`](../../CHANGELOG.md), one entry
@@ -28,40 +28,38 @@
 Every release runs the closeout pass in [`CLAUDE.md`](../../CLAUDE.md#closeout-pass-before-every-minormajor-bump);
 the ones below name only what is specific to them.
 
-## 1.2.x — maintenance
+## 1.3.x — maintenance
 
 Patch-sized, independent, any order.
 
-- **Downstream consumers green on 1.2.x.** All five — mabda, kii, jalwa,
+- **PNG's peak working set.** 1.3.0 decodes PNGs past 16 MiB of scanlines, and
+  the worst case grew with it: a 4096×4096 RGBA16 file holds the IDAT copy, the
+  inflated scanlines, the unfiltered scanlines and the RGBA8 output at once —
+  416,391,288 B measured for an 80.8 MB file (SECURITY.md). Two cuts would shrink
+  it with no output change:
+  - **Unfilter non-interlaced rows in place**, compacting them inside the
+    inflate buffer. The write cursor never overtakes the read cursor (row `y`
+    writes at `y*rb`, reads from `y*(rb+1)+1`), so the separate scanline buffer
+    goes: up to 134 MB. Adam7 still scatters into its own buffer.
+  - **Inflate the IDAT chunks where they lie**, through sankoch's streaming
+    decoder, instead of concatenating them first: the compressed size again.
+  Measure before and after on the 4096×4096 RGBA16 file and the 1.3.0 corpus;
+  both must stay byte-identical to ImageMagick.
+- **Downstream consumers green on 1.3.x.** All five — mabda, kii, jalwa,
   aethersafha, crab — pin `1.0.3`. Re-pinning needs no manifest change: crab
   picks up the `zlib` profile transitively, kii / mabda / aethersafha keep the
-  stdlib `sankoch` they declare, jalwa keeps its own `[deps.sankoch]`. ⚠ Three
+  stdlib `sankoch` they declare, jalwa keeps its own `[deps.sankoch]`. ⚠ Four
   things to check while re-pinning: kii's error mapping (a second IHDR now
-  arrives as `PNG_ERR_HEADER`, a sankoch OOM as `PNG_ERR_IDAT_TOO_LARGE`); the
+  arrives as `PNG_ERR_HEADER`, a sankoch OOM as `PNG_ERR_IDAT_TOO_LARGE`, and its
+  `PNG_ERR_INFLATE_LIMIT` arm is dead from 1.3.0); the
   sankoch floor for the three stdlib-leaf consumers (cyrius ≥ 6.7.11, or their own
   `[deps.sankoch]` ≥ 2.8.6) — ⚠ **all three are below it today**: mabda pins
   cyrius 6.7.5 (stdlib sankoch 2.8.2), kii 6.7.9 (2.8.3), aethersafha 6.6.11
-  (2.8.0); and mabda's `gpu_texture_load_png` build, the one that matters most
-  and is unverified from here. The 1.2.0 rename touches none of them: every
-  name any of the five calls is frozen.
-
-## 1.3.0 — PNG past 16 MiB inflated
-
-A valid PNG whose scanlines inflate past sankoch's 16 MiB
-`DECOMPRESS_MAX_OUTPUT` is refused today with `CHITRA_ERR_INFLATE_LIMIT` (35)
-— cheaply, from the header, but refused. That is roughly 5.6 megapixels of RGB,
-so an ordinary photo saved as PNG fails. The `zlib` profile ships
-`zlib_decompress_capped(src, len, dst, cap, max_output)`, which accepts a
-ceiling above 16 MiB. chitra already computes the exact inflated size from IHDR
-and bounds it with `CHITRA_MAX_PIXELS` / `CHITRA_MAX_RAW_BYTES` and the
-inflate-ratio cap, so it can name its own ceiling.
-
-- **Widens acceptance** — files answering code 35 start decoding — so it is a
-  minor with an entry, not a swap. Code 35 stays defined (frozen); it may
-  become unreachable, and the docs must then say so.
-- The memory story changes with it: the worst case for a valid PNG becomes the
-  pixel cap (64 MB of RGBA), not 16 MiB of scanlines. SECURITY.md and the
-  byte-budget ADR 0008 must be re-read against that.
+  (2.8.0); mabda's `gpu_texture_load_png` build, the one that matters most and
+  is unverified from here; and the memory a consumer now needs for a large PNG
+  (above). Every sankoch they link has `zlib_decompress_capped`, which 1.3.0
+  calls. The 1.2.0 rename touches none of them: every name any of the five calls
+  is frozen.
 
 ## 1.x — candidates, not scheduled
 
@@ -114,7 +112,12 @@ nowhere else in the tree. Each changed how the next cut was done.
   first cut of the PNG scanline mode was measured by error-code distribution
   before it was believed — ~99% of CRC-repaired IDAT mutations fail inflate and
   only 0.6% reach the predictors, while scanline mutation puts 69% into the
-  unfilter path. Neither number was predictable from the code.
+  unfilter path. Neither number was predictable from the code. 1.3.0 found the same
+  thing one level down, in a single keyed case: `k % 960 == 210` was meant to
+  allocate once per 960 cases, but 960 is a multiple of the 15-cell period, so
+  the key fixed the cell to 1-bit grey, which the pixel cap refuses from the
+  header. It never once allocated. A rare-case key inherits every modulus
+  the case number is already used for.
 - **Ask what the denominator is** (0.5.3). A cap must be measured on what the
   attacker *spent*, not what they supplied. The first BMP amplification cap
   divided by file size, so appending padding raised the attacker's own

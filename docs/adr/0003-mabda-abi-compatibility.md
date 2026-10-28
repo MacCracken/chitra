@@ -42,7 +42,7 @@ contract, with two specific rules.**
 
 (a) **`ChitraErr` is a fixed 16-byte record deliberately
 layout-compatible with mabda's `GpuErr`** — `+0` code, `+8` detail
-pointer (layout: `ChitraErr`, `src/error.cyr:9-11`; `chitra_err_new` at `:115`). The shared
+pointer (layout: `ChitraErr`, `src/error.cyr:9-11`; `chitra_err_new` at `:116`). The shared
 shape means a chitra decode failure maps onto `GPU_ERR_IMAGE_DECODE`
 with zero translation: mabda reads the code and detail pointer at the
 offsets its own `GpuErr` already uses.

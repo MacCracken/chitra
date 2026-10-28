@@ -9,6 +9,118 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 _Nothing yet._
 
+## [1.3.0] - 2026-10-28 — PNG past 16 MiB of scanlines
+
+⛔ **Nothing frozen changed**: the 29 names, both record layouts and every
+`ChitraErrCode` value are as at 1.0.0. A minor because more files decode.
+
+### Changed — a PNG past sankoch's 16 MiB default decodes
+
+From 1.0.1 to 1.2.x a valid PNG whose scanlines inflated past sankoch's 16 MiB
+one-shot default (`DECOMPRESS_MAX_OUTPUT`) was refused from the header as
+`CHITRA_ERR_INFLATE_LIMIT` (35). That is about 5.6 megapixels of RGB, so an
+ordinary photo saved as PNG failed. chitra now inflates through
+`zlib_decompress_capped(src, len, dst, inflated_size, inflated_size)`. The
+ceiling is the exact size IHDR implies, which the pixel cap,
+`CHITRA_MAX_RAW_BYTES` and the 1100:1 ratio cap have already bounded by then.
+- A stream that runs past that size fails exactly as one that ran past the
+  buffer always did, so a file within 16 MiB inflates as it did in 1.2.x.
+- Every sankoch a consumer links today has the capped entry: it arrived in 2.7.13,
+  and the oldest stdlib copy in use (aethersafha's 6.6.11) is 2.8.0. Its
+  `out_max` threading is the same in 2.8.0, 2.8.2, 2.8.3 and 2.8.9.
+- ⚠ **Code 35 is unreachable from 1.3.0.** It stays defined, because the enum's
+  values are frozen. A *corrupt* or lying PNG past 16 MiB that answered 35
+  without being read now answers what is wrong with it, usually
+  `CHITRA_ERR_INFLATE`. 35 never was a verdict on the file: it was returned
+  before the file was checked.
+
+**Reference-verified** against nine large ImageMagick PNGs: RGB8 3000×2000;
+RGBA16, grey16, grey+alpha8 and palette8 at 4096×4096; Adam7 RGB8 2600² and
+RGB16 3000²; and grey8 at 4096×4095 (1 byte under 16 MiB) and 4096×4096
+(4,096 over). All nine are **byte-identical** to `magick … -depth 8 rgba:-`.
+1.2.1 refused all but the under-16-MiB control as code 35. The control decodes
+identically on both, at an identical cost.
+
+### Security — the memory a valid PNG can cost rises, by design
+
+The worst case for a valid PNG used to be ~100 MB (SECURITY.md, 1.0.3), because
+the 16 MiB refusal stopped 16-bit RGBA at about 2 megapixels. It is now 16-bit
+RGBA at the pixel cap. The inflated scanlines (≤ 134.3 MB), the unfiltered
+scanlines (≤ 134.2 MB) and the RGBA8 output (67.1 MB) are live together, beside
+the IDAT concatenation. Measured: **416,391,288 B** for a valid 80.8 MB 4096×4096
+RGBA16 file.
+- Above 16 MiB, the ratio cap is now the only header check before the inflate
+  buffer. About 122 KB of non-bomb IDAT declaring that geometry costs the 134 MB
+  buffer before its stream turns out to be garbage. That is the same 1100:1 the
+  cap always allowed, at eight times the old absolute size.
+- `png.tcyr` pins the half that can be held: a corrupt stream never pays for the
+  scanline or RGBA buffer. Moving either of them ahead of the inflate's size check
+  made a 25 KB corrupt 3000×3000 file spend 54,028,120 B instead of ~27 MB, and
+  the cell catches it.
+- SECURITY.md, CLAUDE.md (new PNG hardening rule 13), the getting-started guide
+  and [ADR 0008](docs/adr/0008-byte-budget-as-shipped.md), amended, now say so.
+  The budget still bounds only the RGBA8 output N; a PNG's working set is at
+  most ~5× N plus the compressed size.
+- Shrinking it is on the roadmap as 1.3.x maintenance:
+  - unfiltering non-interlaced rows in place saves up to 134 MB;
+  - inflating IDAT chunks where they lie saves the compressed size.
+
+### Tests
+
+- **`test_past_16mib_decodes`**: a real 2400×2400 RGB8 PNG, 17,282,400 inflated
+  bytes, deflated by sankoch's own `zlib_compress`.
+  - Every pixel is distinct, and all 23,040,000 RGBA bytes are compared.
+  - Rows are Sub- and Up-filtered. That drives two predictors past 16 MiB, and
+    it is what makes the fixture affordable. Unfiltered, the pattern defeats
+    LZ77: 12.5 MB of stream, 1.8 s to compress and 1.3 s to inflate. Filtered,
+    the stream is 47,934 B and `png.tcyr` runs in 1.3 s.
+  - The same stream under an IHDR one row short, then one row long, is refused at
+    the inflate, so the capped call's ceiling is the IHDR size.
+- **`test_corrupt_past_16mib_stops_at_the_inflate`** replaces
+  `test_inflate_limit_is_its_own_error`. The same 25 KB corrupt 3000×3000 file
+  now answers `CHITRA_ERR_INFLATE` and spends the inflate buffer and nothing after
+  it.
+- **The bomb cell** loses its "...and not INFLATE_LIMIT" assertion, which can no
+  longer fail. It gains a cost bound instead: the bomb is refused under 64 KiB,
+  before the 27 MB buffer.
+- **Mutation-checked**, each mutant against the tree:
+  - restoring the 16 MiB refusal fails 3 assertions (got 35);
+  - calling plain `zlib_decompress` fails 2 (got 5);
+  - allocating the scanline buffer before the inflate fails the cost cell;
+  - moving the ratio cap after the inflate-buffer allocation fails the bomb's
+    cost bound.
+- `png.tcyr` goes 602 → 614 assertions.
+
+### Fuzzing — mode 10 retargeted, and a blind spot found in it
+
+`fuzz_png` mode 10 (1.1.4) aimed at the LIMIT outcome, which no longer exists.
+Left as it was, every case it aimed there would now allocate ~17 MB.
+- **Retargeted.** Its big-payload kinds sit on or above the bomb line, refused
+  from the header. Two keyed cases in 960 reach the inflate past 16 MiB: the bomb
+  edge from below (~18 MB) and the old 16 MiB line from above.
+- ⚠ **Measured before it was believed**, as the roadmap's lessons require. The
+  1.1.4 "allocating" key, and a first 1.3.0 attempt, never once allocated.
+  960 is a multiple of 15, so `k % 960` fixes the cell: always 1-bit grey, which
+  the pixel cap refuses from the header at that size (0 of 19,200 cases spent
+  over 4 MiB). The keys now pick RGBA8, one plain and one Adam7. 40 cases spend
+  over 4 MiB, every one refused at the inflate (`INFLATE` 1,650 → 1,690).
+- The self-check's 4096×4096 case now asserts the refusal comes **from the
+  inflate**, not from the header.
+- The PNG harness's peak RSS is 123 MB (was 6.5 MB), below the GIF harness's
+  207 MB.
+
+### Process — benchmarks recorded for 1.2.1
+
+`bench-history.csv` gained 17 rows stamped `b0e860c` (1.2.1). Their geomean is
+1.008× the last recorded set (1.1.3), which is within noise. The PNG rows are
+1–3 % slower.
+
+### Numbers
+
+**3,992 assertions across 14 suites** (3,980 at 1.2.1), **11,649,080 fuzz
+assertions** under `--poison` (unchanged; 56 s), and the consumer-shape leg's
+3,992 again — 0 failures throughout.
+
 ## [1.2.1] - 2026-10-28 — cyrius 6.7.18, sankoch 2.8.9
 
 ⛔ **No decode code changed, and nothing frozen moved.** `dist/chitra.cyr` differs

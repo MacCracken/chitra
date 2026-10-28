@@ -85,15 +85,16 @@ enum ChitraErrCode {
     # ⚠ CORRECTED 1.0.3 — this used to say "no sankoch entry point can exceed it and chitra cannot
     # work around it", and the second half stopped being true when sankoch **2.7.13** added
     # `zlib_decompress_capped`, which lets a caller that has independently bounded its own output
-    # name its own ceiling. That entry point is vendored and works. chitra still calls plain
-    # `zlib_decompress` DELIBERATELY: adopting the capped form retires files that currently answer
-    # this code, so it is a release with an entry, not a swap.
+    # name its own ceiling.
+    # ⛔ UNREACHABLE SINCE 1.3.0. chitra now inflates through `zlib_decompress_capped` with the exact
+    # size IHDR implies as the ceiling, so every file that answered this code decodes (or fails for
+    # its own reasons). The member stays because the enum's numeric values are frozen.
     # ⚠ THIS USED TO SURFACE AS `CHITRA_ERR_INFLATE` — "the decompressor reported a failure" — which
     # is true and useless: it does not distinguish a corrupt stream from a perfectly good image that
     # is simply too large for this build. A caller can retry a corrupt file, or ask the user; it can
     # only ever refuse this one. ⇒ Reported by crab 2026-08-31, whose thumbnailer needed to tell the
     # operator WHICH kind of nothing it was showing.
-    CHITRA_ERR_INFLATE_LIMIT    = 35;  # inflated size exceeds sankoch's DECOMPRESS_MAX_OUTPUT
+    CHITRA_ERR_INFLATE_LIMIT    = 35;  # 1.0.1-1.2.x: past sankoch's 16 MiB; unreachable since 1.3.0
     CHITRA_ERR_OTHER      = 99;  # catch-all
 }
 

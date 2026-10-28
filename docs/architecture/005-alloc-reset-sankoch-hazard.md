@@ -156,7 +156,7 @@ sankoch 2.8.0.** Through 2.7.x `_sankoch_lock`'s copy of the guard was compiled
 out under `CYRIUS_TARGET_AGNOS`, so on AGNOS only `crc32_init_table`'s copy
 fired (2.8.0 runs it on every target; the 2.8.9 `zlib` profile chitra links
 does). chitra's PNG path calls `crc32_init_table()`
-(`src/png_filter.cyr:372`) well before `zlib_decompress()` (`:743`), so the
+(`src/png_filter.cyr:372`) well before `zlib_decompress_capped()` (`:730`), so the
 covering call always happens first.
 
 ⚠ **This note is retired, not deleted, and the guard is now asserted in-tree.**

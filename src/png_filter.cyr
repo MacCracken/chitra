@@ -638,28 +638,13 @@ fn _chitra_png_parse_raw(src, len, err_out): i64 {
         return 0;
     }
 
-    # ⛔ ORDER IS LOAD-BEARING: THIS SITS AFTER THE BOMB CAPS, NOT BEFORE THEM. A tiny IDAT claiming
-    # a 3000x3000 image is a decompression BOMB and must keep being reported as one
-    # (`CHITRA_ERR_DIMENSIONS`); only a stream whose ratio is plausible — a real photograph — reaches
-    # here and earns the "too large for this decompressor" answer. A first draft checked first and
-    # silently reclassified every bomb.
-    # ⛔⛔ REFUSE BEFORE ALLOCATING WHAT THE DECOMPRESSOR WILL NOT FILL (1.0.1).
-    # `CHITRA_MAX_RAW_BYTES` is 256 MB — **sixteen times** what `sankoch` will actually emit. So a
-    # 4096x2160 RGB PNG (26.5 MB inflated) passed every check above, chitra allocated the IDAT
-    # concatenation AND the 26.5 MB inflate buffer, called `zlib_decompress`, and got
-    # `ERR_OUTPUT_LIMIT` back — which was reported as a bare `CHITRA_ERR_INFLATE`.
-    # ⚠ MEASURED by crab, 2026-08-31: **26,617,512 bytes spent to return 0.** On a bump allocator
-    # with no `free()` — which is what cyrius ships — those bytes never come back. A consumer
-    # thumbnailing a photo directory exhausted memory learning nothing.
-    # ⭐ THE CEILING IS READ FROM sankoch, NOT COPIED. `DECOMPRESS_MAX_OUTPUT` is the value the
-    # decoder itself enforces; hardcoding 16777216 here would be a second number meaning the same
-    # thing, free to drift the moment sankoch raises its backstop.
-    # ⛔ AND IT IS ITS OWN ERROR CODE. `CHITRA_ERR_INFLATE` cannot distinguish a corrupt stream from
-    # a valid image too large for this build, and those two want opposite things from a caller.
-    if (inflated_size > DECOMPRESS_MAX_OUTPUT) {
-        store64(err_out, chitra_err(CHITRA_ERR_INFLATE_LIMIT));
-        return 0;
-    }
+    # ⭐ NO DECOMPRESSOR CEILING ANY MORE (1.3.0). From 1.0.1 to 1.2.x a file whose inflated size
+    # passed every cap above but exceeded sankoch's 16 MiB `DECOMPRESS_MAX_OUTPUT` was refused here
+    # as `CHITRA_ERR_INFLATE_LIMIT` — about 5.6 megapixels of RGB, so an ordinary photo saved as PNG.
+    # The inflate below now names its own ceiling instead (`zlib_decompress_capped`), and every
+    # number that ceiling could be is already bounded: CHITRA_MAX_PIXELS at IHDR, then
+    # CHITRA_MAX_RAW_BYTES and the 1100:1 ratio cap above. ⇒ Code 35 is unreachable from 1.3.0; it
+    # stays defined because the enum's values are frozen.
 
     # ⛔⛔ REFUSE WHAT THE CHUNK LIST HAS ALREADY DECIDED, BEFORE THE FIRST ALLOCATION (png-1 / cc-5,
     # 1.1.1). The colour pass refuses a palette image with no PLTE (or an empty one), a palette tRNS
@@ -672,9 +657,8 @@ fn _chitra_png_parse_raw(src, len, err_out): i64 {
     # 71,335,368 B to return CHITRA_ERR_BAD_CHUNK, in an arena that never frees. Its valid twin
     # spends the same, so this is waste on a refusal rather than a new ceiling — the 1.0.3 "a cap
     # belongs BEFORE the allocation it exists to prevent" shape, in its fourth format.
-    # ⛔ ORDER: after the bomb caps, so a bomb keeps CHITRA_ERR_DIMENSIONS, a file with no IDAT data
-    # keeps CHITRA_ERR_NO_IDAT and an over-ceiling one keeps CHITRA_ERR_INFLATE_LIMIT; before
-    # `alloc(idat_total)`, which is the whole point.
+    # ⛔ ORDER: after the bomb caps, so a bomb keeps CHITRA_ERR_DIMENSIONS and a file with no IDAT
+    # data keeps CHITRA_ERR_NO_IDAT; before `alloc(idat_total)`, which is the whole point.
     # ⚠ These MIRROR the colour pass's conditions exactly — `> 0` on the tRNS length is its
     # `has_trns`, because a zero-length tRNS means "no key" there and must mean it here too — so no
     # accept/reject outcome moves, only what the refusal costs. The colour-pass checks stay, as
@@ -740,7 +724,10 @@ fn _chitra_png_parse_raw(src, len, err_out): i64 {
     # ---- inflate ----
     var inflated = alloc(inflated_size);
     if (inflated == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
-    var n = zlib_decompress(idat_buf, idat_total, inflated, inflated_size);
+    # The ceiling is the exact size IHDR implies (1.3.0), in place of sankoch's 16 MiB default: a
+    # stream that runs past it fails exactly as one that runs past `dst_cap` always did, so a file
+    # within 16 MiB inflates identically to 1.2.x.
+    var n = zlib_decompress_capped(idat_buf, idat_total, inflated, inflated_size, inflated_size);
     # ⛔ AN ALLOCATION FAILURE IS NOT A CORRUPT STREAM (png-2 / cc-6, 1.1.1). sankoch returns
     # `-ERR_OOM` when its own allocations fail: the lazily built decode tables on a process's first
     # inflate (or the first after an alloc_reset()); through 2.8.8 also a per-call bit reader. Every

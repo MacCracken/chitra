@@ -99,14 +99,32 @@ decode. Each maps to a `ChitraErrCode`
   cases capped in that cut is that those bombs supplied *nothing* — 2 and 4
   bytes for 16.7 M pixels. **The operative bound for PNG is
   `CHITRA_MAX_PIXELS`**: a caller decoding untrusted PNGs should budget
-  **~100 MB** per decode as the worst case, not the file size, and remember that
-  the bump allocator makes that cumulative.
+  **~340 MB plus the compressed size** per decode as the worst case (since
+  1.3.0; ~100 MB before it), not the file size, and remember that the bump
+  allocator makes that cumulative.
   ⚠ **This figure was 64 MB here until 1.0.3 and it was 1.57x low.** 64 MB
   counts only the RGBA8 output; a decode also holds the fused IDAT
   accumulation, the inflated scanline buffer and the unfilter scratch at the
   same time. Measured at the 1.0.3 sweep: a **16,373-byte valid PNG** spends
   **100,704,816 bytes**. A caller sizing a budget from the old number would have
   under-provisioned by a third.
+  ⚠ **And 1.3.0 raised it again, by design.** Through 1.2.x sankoch's 16 MiB
+  one-shot default refused every PNG whose scanlines inflated past it
+  (`CHITRA_ERR_INFLATE_LIMIT`), which made a 1-bit 4096×4096 image the worst
+  case. 1.3.0 decodes those files, so the worst case is now 16-bit RGBA at the
+  pixel cap: the inflated scanlines (≤ 134.3 MB), the unfiltered scanlines
+  (≤ 134.2 MB) and the RGBA8 output (67.1 MB) are live together, beside the IDAT
+  concatenation, which copies the compressed data. Measured: a valid
+  4096×4096 RGBA16 PNG of 80.8 MB spends **416,391,288 bytes**. Above 16 MiB the
+  ratio cap is now the only header check between a hostile file and the inflate
+  buffer: ~122 KB of non-bomb IDAT declaring that geometry costs the 134 MB
+  buffer before its stream is found to be garbage. That is the 1100:1 the cap
+  always allowed, at eight times the old absolute ceiling. The scanline and
+  RGBA buffers are allocated only after the inflate verifies, so a corrupt
+  stream never pays for them (pinned in `png.tcyr`). A caller that must bound
+  this uses `chitra_image_decode_budget`, which refuses from the header on the
+  output size — the working set is at most ~5× that output plus the
+  compressed size.
 - ✅ **Raw-buffer ceiling** — every derived buffer size is bounded by
   `CHITRA_MAX_RAW_BYTES = 268435456` (256 MB)
   ([`src/png_chunks.cyr:38`](src/png_chunks.cyr)), and every allocation is
@@ -122,7 +140,7 @@ decode. Each maps to a `ChitraErrCode`
   32-byte bit reader on every call — and chitra reported that as `CHITRA_ERR_INFLATE`, which a caller reads
   as a damaged file: a valid PNG decoded under memory pressure could be refused,
   and cached, as corrupt. It now maps to `CHITRA_ERR_OOM`
-  ([`src/png_filter.cyr:751`](src/png_filter.cyr)); every other negative return
+  ([`src/png_filter.cyr:738`](src/png_filter.cyr)); every other negative return
   is still the stream's fault. With that, the clause above is true of every
   allocating sankoch entry point chitra calls. The IHDR-derived inflated/pixel buffer sizes over the ceiling
   fail as `CHITRA_ERR_DIMENSIONS` ([`src/png_filter.cyr:617-624`](src/png_filter.cyr));
@@ -158,7 +176,7 @@ decode. Each maps to a `ChitraErrCode`
   `CHITRA_ERR_BAD_CHUNK`.
   ⚠ **Since 1.1.1 the facts the chunk list has already settled are refused
   before the first allocation**, at the end of the chunk walk
-  ([`src/png_filter.cyr:682-711`](src/png_filter.cyr)): colour type 3 with no
+  ([`src/png_filter.cyr:666-695`](src/png_filter.cyr)): colour type 3 with no
   (or an empty) PLTE, a palette tRNS longer than the palette, and a colour-type
   0 / 2 tRNS that is not 2 / 6 bytes. Through 1.1.0 the colour pass refused them
   only after the IDAT concatenation, the inflate buffer, the scanlines and the
