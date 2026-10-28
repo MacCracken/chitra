@@ -1,6 +1,6 @@
 # chitra
 
-Version: 1.2.0
+Version: 1.2.1
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder, a sibling AGNOS package in the mould of `sakshi` /
@@ -155,7 +155,7 @@ is a bug fix — the § 13.13 depth-16 rescaling change in 0.7.x changed every
 
 ## Dependencies
 
-- **sankoch, `zlib` profile** — `[deps.sankoch]` tag `2.8.7`,
+- **sankoch, `zlib` profile** — `[deps.sankoch]` tag `2.8.9`,
   `dist/sankoch-zlib.cyr`: zlib inflate + CRC-32, and none of sankoch's other
   codecs.
 - **Cyrius stdlib** (8 leaves to build chitra itself) — `string`, `fmt`,

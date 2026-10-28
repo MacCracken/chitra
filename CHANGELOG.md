@@ -9,6 +9,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 _Nothing yet._
 
+## [1.2.1] - 2026-10-28 — cyrius 6.7.18, sankoch 2.8.9
+
+⛔ **No decode code changed, and nothing frozen moved.** `dist/chitra.cyr` differs
+from 1.2.0 only in its two version lines and one corrected comment. A 32-file generated corpus decodes
+byte-identically on 6.7.18 + sankoch 2.8.9 and on 1.2.0's 6.7.12 + 2.8.7. It covers
+PNG grey 1/4/8/16, palette 4/8, grey+alpha, RGB and RGBA at 8 and 16, and Adam7;
+JPEG 4:2:0 / 4:2:2 / 4:4:4, grey, `cjpeg -rgb`, restart intervals, optimized
+tables, plus the progressive and quality-5 refusals; BMP 1/4/8 bpp, RLE8, 565, 24
+and 32 bpp; GIF, 2-colour and interlaced.
+
+### Changed — cyrius pin `6.7.12` → `6.7.18`
+
+`lib/` re-resolved from clean: the same 26-file closure, with 18 stdlib hashes in
+`cyrius.lock` updated. Nothing in the 6.7.13–6.7.18 migration notes reaches
+chitra's code: struct values, multi-value returns, generics, receives and vector
+values are features chitra does not use, and lint, fmt and vet stay clean.
+6.7.17's refusal of a statement that is only a value builtin (`load8(p);`) matches
+nothing in the tree. `build/chitra_smoke` is 352,008 → 352,024 B, or 36,616 →
+36,632 B with `CYRIUS_DCE=1`. The stdlib `sankoch.cyr` is 2.8.9 from 6.7.17, so
+`make consumer-shape` now runs the same sankoch as chitra's own profile.
+
+### Changed — sankoch `2.8.7` → `2.8.9` (`zlib` profile)
+
+2.8.8 is a toolchain bump and nothing else. 2.8.9 moves batch inflate's 32-byte
+bit reader from the bump allocator onto the codec's stack. ⭐ So a warm PNG decode
+now allocates **nothing** in sankoch, and every PNG decode keeps 32 B less of the
+arena for the life of the process. sankoch reports no output change (its 47 SIZE
+rows are identical), and the corpus above shows none here. The vendored
+`lib/sankoch-zlib.cyr` is byte-identical to the 2.8.9 tag's
+`dist/sankoch-zlib.cyr`. The arena canary (`_sankoch_arena_guard`) is still in
+it, and `alloc_reset.tcyr` passes.
+⚠ **The lock had to be regenerated from clean.** `cyrius deps` over the 1.2.0 lock
+kept sankoch@2.8.7's commit line beside the new 2.8.9 one ("fail-closed; delete
+cyrius.lock to re-pin"). It was rebuilt with `rm cyrius.lock && cyrius deps`: one
+commit pin, `cyrius deps --locked` clean, `--verify` 26/26.
+
+### Fixed — png-2 re-aimed, because the allocation it injected into is gone
+
+`png.tcyr`'s png-2 cell (1.1.1) proves that a failed allocation inside
+`zlib_decompress` is `CHITRA_ERR_OOM`, not `CHITRA_ERR_INFLATE`. It injected the
+failure at sankoch's per-call bit reader, so under 2.8.9 it failed "the injection
+missed" — exactly as its header said a future sankoch would make it fail. Now
+it:
+- first pins that a warm decode with the injection armed succeeds and leaves it
+  armed, so a warm decode makes no sankoch allocation;
+- clears sankoch's decode tables with sankoch's own arena-reset hook,
+  `_huffman_reset_tables`, leaving the CRC table warm;
+- injects at the table rebuild, checks the decode refuses as `CHITRA_ERR_OOM`, and
+  checks that the next decode rebuilds the tables.
+
+⚠ **Mutation-checked again**: with the mapping at `src/png_filter.cyr:751`
+disabled, the cell fails `got 5, expected 6`, as it did at 1.1.1. `png.tcyr` goes
+600 → 602 assertions.
+
+The docs that described the per-call allocation are corrected: SECURITY.md,
+CLAUDE.md's PNG rule 12, the comment above that mapping, and
+[ADR 0008](docs/adr/0008-byte-budget-as-shipped.md), amended. 0008's exclusion of
+sankoch's allocations stays, because a consumer's own, older sankoch wins
+(closest-wins). The getting-started guide's toolchain → stdlib-sankoch mapping
+gains 6.7.17 → 2.8.9.
+
+### Numbers
+
+**3,980 assertions across 14 suites** (3,978 at 1.2.0), **11,649,080 fuzz
+assertions** under `--poison` (unchanged, 56 s), and the consumer-shape leg's
+3,980 again — 0 failures throughout.
+
 ## [1.2.0] - 2026-10-15 — the public prefix is the promise
 
 ⛔ **Nothing frozen changed** — the 29 names, both record layouts and every

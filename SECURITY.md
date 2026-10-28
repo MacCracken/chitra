@@ -48,7 +48,7 @@ For PNG, DEFLATE decompression itself is **not** chitra's code — it is
 `sankoch`'s job (RFC 1950 / 1951 `zlib_decompress`); chitra owns the framing, the
 bounds discipline around the inflate call, and the post-inflate exact-size check.
 ⚠ **Which sankoch runs is the consumer's program's choice, not chitra's.** chitra
-pins the 2.8.7 `zlib` profile, but a consumer's own sankoch bundle wins
+pins the 2.8.9 `zlib` profile, but a consumer's own sankoch bundle wins
 (closest-wins), and below **2.8.6** inflate accepts stream classes zlib refuses
 (incomplete Huffman codes, `hdist` 31/32). chitra's guarantee that its PNG path
 refuses what zlib refuses therefore holds only when the linked sankoch is ≥ 2.8.6
@@ -118,8 +118,8 @@ decode. Each maps to a `ChitraErrCode`
   `(0, *err_out = CHITRA_ERR_OOM)`; now the code keeps it.
   ⚠ **And until 1.1.1 it held for `crc32_init_table` only.** `zlib_decompress`
   returns `-ERR_OOM` when sankoch's own allocations fail — its lazily built
-  decode tables on a process's first inflate, the 32-byte bit-reader on every
-  call — and chitra reported that as `CHITRA_ERR_INFLATE`, which a caller reads
+  decode tables on a process's first inflate and, through sankoch 2.8.8, a
+  32-byte bit reader on every call — and chitra reported that as `CHITRA_ERR_INFLATE`, which a caller reads
   as a damaged file: a valid PNG decoded under memory pressure could be refused,
   and cached, as corrupt. It now maps to `CHITRA_ERR_OOM`
   ([`src/png_filter.cyr:751`](src/png_filter.cyr)); every other negative return

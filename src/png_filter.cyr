@@ -743,7 +743,7 @@ fn _chitra_png_parse_raw(src, len, err_out): i64 {
     var n = zlib_decompress(idat_buf, idat_total, inflated, inflated_size);
     # ⛔ AN ALLOCATION FAILURE IS NOT A CORRUPT STREAM (png-2 / cc-6, 1.1.1). sankoch returns
     # `-ERR_OOM` when its own allocations fail: the lazily built decode tables on a process's first
-    # inflate (or the first after an alloc_reset()), and the 32-byte bit-reader on every call. Every
+    # inflate (or the first after an alloc_reset()); through 2.8.8 also a per-call bit reader. Every
     # negative return used to become CHITRA_ERR_INFLATE, which the guide tells a caller means a
     # damaged file — so a valid PNG decoded under memory pressure was reported, and could be cached,
     # as corrupt. B-1 (1.0.3) restored the OOM contract for crc32_init_table only; this is the other

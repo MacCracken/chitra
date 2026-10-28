@@ -4662,25 +4662,38 @@ fn test_pixel_cap_refuses_before_allocating() {
 # png-2 / cc-6 (1.1.1) — an allocation failure INSIDE zlib_decompress is
 # CHITRA_ERR_OOM, not CHITRA_ERR_INFLATE.
 #
-# B-1 (above, and first) covers the CRC table. Once that is warm, the only
-# allocation sankoch makes on a warm decode is the 32-byte bit-reader in
-# br_init, and through 1.1.0 its failure came back as CHITRA_ERR_INFLATE —
-# "a corrupt stream" — for a valid file.
-# ⚠ THE INJECTION INDEX IS SANKOCH'S INTERNAL ORDER, as B-1 learned. So this cell
-# pins its own preconditions — every lazily built decode table is already warm —
-# and then that the one-shot injection was actually CONSUMED by the decode. A
-# future sankoch that reorders or drops the allocation fails here, loudly, as
-# "the injection missed", not as a chitra regression.
-# ⚠ MUTATION-CHECKED: with the mapping removed this fails with got 5, expected 6.
+# B-1 (above, and first) covers the CRC table. Through 1.1.0 a failed
+# allocation inside zlib_decompress came back as CHITRA_ERR_INFLATE — "a corrupt
+# stream" — for a valid file.
+# ⚠ THE INJECTION INDEX IS SANKOCH'S INTERNAL ORDER, as B-1 learned — AND IT HAS
+# MOVED AGAIN. Through sankoch 2.8.8 a warm decode still allocated a 32-byte bit
+# reader in br_init on every call, and this cell injected there. sankoch 2.8.9
+# (1.2.1) put that reader on the codec's stack, so this cell's first form failed
+# as "the injection missed", exactly as written to. A warm decode now makes NO
+# sankoch allocation — pinned below — and the only allocations left inside
+# zlib_decompress are its lazily built decode tables. So the cell clears those
+# with sankoch's own arena-reset hook (`_huffman_reset_tables`, what its
+# alloc_reset() guard and its OOM sweep call), leaves the CRC table warm, and
+# injects at the rebuild. It still pins that the one-shot injection was CONSUMED
+# by the decode, so the next reorder fails as "the injection missed" too.
+# ⚠ MUTATION-CHECKED (1.1.1 at the bit reader; re-checked 1.2.1 at the tables):
+# with the mapping removed this fails with got 5, expected 6.
 # ================================================================
 fn test_inflate_oom_is_oom_not_inflate() {
     var lo = 0;
     var bytes = fx_rgba8_2x2(&lo);
     var e0 = 0;
     assert(chitra_png_decode(bytes, lo, &e0) != 0, "png-2: warm-up decode succeeds");
-    assert_eq(_huff_tables_allocd, 1, "png-2: sankoch's Huffman tables are warm before the injection");
-    assert(_huff_fixed_litlen_lens != 0, "png-2: ...and its fixed-code lengths");
-    assert(_ddec_cl_order != 0, "png-2: ...and its dynamic-header workspace");
+    assert(crc32_table != 0, "png-2: the CRC table is warm, so an injection cannot land in it");
+    _sankoch_alloc_set_fail_at(0);
+    var ew = 0;
+    assert(chitra_png_decode(bytes, lo, &ew) != 0, "png-2: a warm decode with the injection armed succeeds");
+    var armed = 0;
+    if (_sankoch_alloc_fail_at == 0) { armed = 1; }
+    _sankoch_alloc_set_fail_at(0 - 1);
+    assert_eq(armed, 1, "png-2: ...and leaves it armed: a warm decode makes no sankoch allocation (2.8.9)");
+    _huffman_reset_tables();
+    assert_eq(_huff_tables_allocd, 0, "png-2: sankoch's decode tables are cold before the injection");
     _sankoch_alloc_set_fail_at(0);
     var err = 0;
     var img = chitra_png_decode(bytes, lo, &err);
@@ -4696,6 +4709,7 @@ fn test_inflate_oom_is_oom_not_inflate() {
     }
     var e2 = 0;
     assert(chitra_png_decode(bytes, lo, &e2) != 0, "png-2: the next decode of the same bytes succeeds");
+    assert_eq(_huff_tables_allocd, 1, "png-2: ...and rebuilds the decode tables");
     return 0;
 }
 

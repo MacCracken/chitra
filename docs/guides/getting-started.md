@@ -97,14 +97,15 @@ allows **one bundle per program**, so never add a second. Then run
 `cyrius deps`.
 
 ⚠ **If your sankoch wins, it must be at least 2.8.6.** chitra's own manifest
-pins 2.8.7, but closest-wins means a bundle you link replaces it, and nothing
+pins 2.8.9, but closest-wins means a bundle you link replaces it, and nothing
 checks its version. Below 2.8.6, inflate accepts stream classes zlib refuses
 (incomplete Huffman codes, `hdist` 31/32), so chitra decodes PNGs that libpng
 and ImageMagick reject, and it also misses 2.8.5–2.8.6's CRC and inflate
-speed-ups. A stdlib `"sankoch"` leaf is 2.8.7 from **cyrius 6.7.11**; 6.7.6–6.7.10
+speed-ups. A stdlib `"sankoch"` leaf is 2.8.9 from cyrius 6.7.17 and 2.8.7 from
+**cyrius 6.7.11**; 6.7.6–6.7.10
 ship 2.8.3, 6.7.5 ships 2.8.2 and 6.6.5–6.6.18 ship 2.8.0. On an older
 toolchain, declare `[deps.sankoch]` at 2.8.6 or later instead of the stdlib
-leaf. chitra's own pin (cyrius 6.7.12, stdlib sankoch 2.8.7) meets the floor,
+leaf. chitra's own pin (cyrius 6.7.18, stdlib sankoch 2.8.9) meets the floor,
 and since 1.1.4 CI runs every suite in exactly this shape — the stdlib leaf in
 place of chitra's profile — on that pin (`make consumer-shape`), so it fails if
 chitra ever pins a toolchain below it.

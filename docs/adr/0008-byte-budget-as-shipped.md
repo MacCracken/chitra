@@ -60,6 +60,10 @@ What it does **not** cover, named rather than glossed:
   table setup on the process's first PNG decode (16,384 for the CRC-32 table,
   ~25,000 for the inflate tables), plus **32 bytes per `zlib_decompress`
   call** thereafter.
+  ⭐ *Amended 1.2.1*: sankoch 2.8.9, chitra's pin from 1.2.1, keeps that bit
+  reader on the codec's stack, so with chitra's own sankoch a warm decode
+  allocates nothing in sankoch (pinned by `png.tcyr`'s png-2 cell). The
+  exclusion stays: a consumer's own sankoch wins (closest-wins) and may be older.
 - **The cumulative total across calls.** The bump allocator never frees, so
   this bounds one decode, not a process.
 
