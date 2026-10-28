@@ -9,6 +9,129 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 _Nothing yet._
 
+## [1.3.1] - 2026-10-28 — a large PNG's peak memory, cut twice
+
+⛔ **No output changed, and nothing frozen moved.** A patch: the same files decode
+to the same bytes, using less memory.
+
+### Changed — the scanline buffer is gone for non-interlaced PNGs
+
+1.3.0 decodes PNGs past 16 MiB of scanlines, and its worst case held four large
+buffers at once: the IDAT copy, the inflated scanlines, the unfiltered scanlines
+and the RGBA8 output. Non-interlaced rows are now unfiltered **in place**,
+compacted inside the inflate buffer, so the third of those is never allocated.
+- Row `r` is read from `r*(1+row_bytes)+1` and written at `r*row_bytes`, so its
+  output trails its input by `r+1` bytes. Every predictor reads `in[i]` before
+  it writes `out[i]`, so each write lands on a byte already consumed.
+- The write ends before row `r+1`'s filter byte and never reaches row `r-1`'s
+  output, which is row `r`'s `prev`.
+- `_chitra_unfilter_row` and `_chitra_unfilter_image` are unchanged apart from
+  the comment stating that contract.
+- Adam7 keeps its buffer: deinterlacing scatters every pass across the whole
+  image.
+
+**Measured on the 1.3.0 corpus**, every non-interlaced file drops by exactly its
+scanline size and every Adam7 file is unchanged:
+
+| file | 1.3.0 | 1.3.1 |
+|---|---|---|
+| RGBA16 4096×4096 (80.8 MB) | 416,391,288 B | **282,173,560 B** (−32.2 %) |
+| RGB8 3000×2000 | 69,312,640 B | 51,312,640 B (−26.0 %) |
+| grey+alpha8 4096×4096 | 144,223,552 B | 110,669,120 B (−23.3 %) |
+| grey16 4096×4096 | 161,991,104 B | 128,436,672 B (−20.7 %) |
+| grey8 / palette8 4096×4096 | ~108 MB | ~91.6 MB (−15.5 %) |
+| RGB16 Adam7 3000², RGB8 Adam7 2600² | 184.4 / 78.7 MB | unchanged |
+
+- **Adam7 is now the worst case.** A 97.9 MB 4096×4096 RGBA16 Adam7 file spends
+  433,525,296 B on both releases.
+- **The memory guidance changes with it.** A non-interlaced PNG's working set is
+  at most ~3× its RGBA8 output plus the compressed size; Adam7 stays at ~5×.
+  SECURITY.md, CLAUDE.md's PNG rule 13, the getting-started guide and
+  [ADR 0008](docs/adr/0008-byte-budget-as-shipped.md), amended, now say so.
+- **Reference-verified.** The nine large ImageMagick PNGs from 1.3.0, plus the
+  Adam7 RGBA16 file, are all still byte-identical to `magick … -depth 8 rgba:-`.
+  The 32-file mixed corpus is byte-identical to 1.2.x.
+- **Speed is neutral.** In an interleaved A/B of two prebuilt bench binaries
+  (six runs each, minimums), the PNG rows are 0.999–1.009, geomean 1.005. A
+  sequential run had read +1.5–3 %, including on the untouched Adam7 row —
+  machine drift, not the change.
+
+### Changed — one IDAT chunk is inflated where it lies
+
+A PNG with exactly one non-empty IDAT chunk is inflated straight from the
+caller's buffer. Its data is already contiguous there, and zlib only reads it,
+so the concatenation copy (the compressed size) is skipped. stb_image_write and
+lodepng write a single IDAT, and so does every small ImageMagick file in the
+corpus. libpng-based encoders split it (ImageMagick: 32 KB chunks), and those
+still concatenate.
+- Pass 1 already walks every chunk, so it counts the non-empty IDATs and keeps
+  the last one's data pointer. Empty IDATs, which are spec-legal, neither count
+  nor move the pointer.
+- **Measured.** The 80.8 MB RGBA16 file re-chunked as one IDAT spends
+  **201,405,384 B**, against 282,173,560 B as libpng split it; the 3000×2000
+  RGB8 file, 42,052,928 B against 51,312,640 B. Both are byte-identical to
+  ImageMagick.
+- **Every small file saves at least its IDAT size** versus 1.3.0. With the
+  in-place unfilter too, `rgba16.png` drops 9,496 B on a 2,686-byte stream.
+- **Speed.** With both cuts, the PNG bench rows are 0.986–0.993, geomean
+  **0.990**, Adam7 included, since every bench fixture is a single IDAT.
+
+### Investigated and declined — inflating split IDAT chunks in place
+
+The roadmap's other cut, feeding each IDAT chunk to sankoch's streaming decoder
+instead of concatenating, was measured before it was written.
+- It produces identical bytes and would save the compressed size on every
+  libpng-style file (80.8 MB of the RGBA16 file's 282).
+- But it inflates **44 % slower** on that file's stream (6.99 s one-shot,
+  10.06 s streaming, repeatable) and **51 % slower** on the RGB8 photo's
+  (840 → 1,270 ms). Inflate dominates a large decode, so that is +34–40 % decode
+  time.
+- It also allocates 312 B of sankoch contexts per decode (192 + 96 + 24), which
+  never come back. 2.8.9 had just removed a per-call allocation.
+- Declined. The roadmap keeps it, with a trigger: a sankoch streaming decoder
+  near one-shot speed.
+
+### Tests
+
+- **`test_unfilter_image_in_place`** compares an in-place unfilter with a
+  separate-buffer one byte for byte. It covers all five filter types (row `r`
+  uses `r % 5`, so each follows each), pixel strides 1/3/6/8, and rows of
+  1–24 bytes. Row 0's output trails its input by one byte.
+  ⚠ Mutation-checked: running the Up predictor right to left is still correct out
+  of place, and fails this cell in 4 of 5 strides (12–133 bytes wrong). The
+  1-byte row has no order to get wrong.
+- **`test_past_16mib_decodes`** gains a cost bound: the 2400×2400 decode spends
+  less than the IDAT copy, the inflate buffer and the RGBA output together.
+  ⚠ Mutation-checked: restoring the separate scanline buffer spends 57,657,696 B
+  and fails it.
+- **`test_single_idat_is_not_copied`** decodes one 197 KB stream three ways, and
+  all three must decode every pixel correctly:
+  - as one IDAT;
+  - as one IDAT between two empty ones;
+  - cut at byte 1 and byte 1000, so the zlib header straddles a chunk boundary.
+
+  The first two must spend less than the inflate buffer plus the RGBA output. The
+  split one must pay the copy: it is the control that proves the bound measures
+  the copy.
+  ⚠ Mutation-checked:
+  - always concatenating fails all three bounds;
+  - counting empty chunks as parts makes the flanked file pay the copy;
+  - letting an empty chunk set the data pointer makes the flanked file inflate
+    garbage.
+
+  A first draft kept the *first* chunk's pointer behind an `idat_parts == 0`
+  test. With exactly one non-empty chunk, first and last are the same chunk, so
+  the test could not change an outcome, and it was removed rather than kept as
+  a guard that cannot fire.
+- `png.tcyr` goes 614 → 640 assertions.
+
+### Numbers
+
+**4,018 assertions across 14 suites** (3,992 at 1.3.0), **11,649,080 fuzz
+assertions** under `--poison` (unchanged; PNG harness peak RSS 123 MB — its
+inflate-reaching cases fail before any unfilter), and the consumer-shape leg's
+4,018 again — 0 failures throughout.
+
 ## [1.3.0] - 2026-10-28 — PNG past 16 MiB of scanlines
 
 ⛔ **Nothing frozen changed**: the 29 names, both record layouts and every

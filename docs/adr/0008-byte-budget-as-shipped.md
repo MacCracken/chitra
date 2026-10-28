@@ -65,6 +65,13 @@ What it does **not** cover, named rather than glossed:
   416,391,288 B against an N of 67,108,864. The decision stands — the budget
   is still the one bound a caller can apply from the header — but a caller
   sizing a process from N must apply the multiple.
+  ⭐ *Amended 1.3.1*: ~5× N now holds only for Adam7. Non-interlaced rows are
+  unfiltered in place inside the inflate buffer, so a non-interlaced PNG is at
+  most ~3× N plus the compressed size: the same 80.8 MB file measures
+  282,173,560 B. A 97.9 MB Adam7 RGBA16 file at 4096×4096 measures
+  433,525,296 B. The compressed-size term is dropped for a file with a single
+  IDAT chunk, which is inflated where it lies (201,405,384 B for the 80.8 MB
+  file re-chunked that way).
 - **sankoch's allocations**, which chitra does not route: ~41 KB of one-time
   table setup on the process's first PNG decode (16,384 for the CRC-32 table,
   ~25,000 for the inflate tables), plus **32 bytes per `zlib_decompress`

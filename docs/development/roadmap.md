@@ -1,6 +1,6 @@
 # chitra — Roadmap
 
-> **Last Updated**: 2026-10-28 (1.3.0)
+> **Last Updated**: 2026-10-28 (1.3.1)
 >
 > **Forward only.** What ships next, in what order, against what gates. What
 > already shipped is in [`../../CHANGELOG.md`](../../CHANGELOG.md), one entry
@@ -32,19 +32,22 @@ the ones below name only what is specific to them.
 
 Patch-sized, independent, any order.
 
-- **PNG's peak working set.** 1.3.0 decodes PNGs past 16 MiB of scanlines, and
-  the worst case grew with it: a 4096×4096 RGBA16 file holds the IDAT copy, the
-  inflated scanlines, the unfiltered scanlines and the RGBA8 output at once —
-  416,391,288 B measured for an 80.8 MB file (SECURITY.md). Two cuts would shrink
-  it with no output change:
-  - **Unfilter non-interlaced rows in place**, compacting them inside the
-    inflate buffer. The write cursor never overtakes the read cursor (row `y`
-    writes at `y*rb`, reads from `y*(rb+1)+1`), so the separate scanline buffer
-    goes: up to 134 MB. Adam7 still scatters into its own buffer.
-  - **Inflate the IDAT chunks where they lie**, through sankoch's streaming
-    decoder, instead of concatenating them first: the compressed size again.
-  Measure before and after on the 4096×4096 RGBA16 file and the 1.3.0 corpus;
-  both must stay byte-identical to ImageMagick.
+- **PNG's peak working set, what 1.3.1 left.** 1.3.1 unfilters non-interlaced
+  rows in place and inflates a single IDAT chunk where it lies (an 80.8 MB
+  4096×4096 RGBA16 file: 282,173,560 B as libpng splits it, 201,405,384 B as
+  one IDAT; 416,391,288 at 1.3.0). Two cuts remain, both with no output change:
+  - **Split IDATs inflated where they lie** — measured and declined in 1.3.1.
+    sankoch's streaming decoder gives identical bytes but inflates 44–51 %
+    slower than the one-shot call (6.99 → 10.06 s on the RGBA16 stream), and
+    allocates 312 B of contexts per decode. *Trigger*: a sankoch streaming
+    decoder near one-shot speed; then it saves the compressed size, the largest
+    term left for a libpng-written photograph (80.8 MB of the 282).
+  - **Adam7 is now the worst case** (433,525,296 B for a 97.9 MB RGBA16 file),
+    because deinterlacing needs a full scanline buffer. Deinterlacing straight
+    into the RGBA8 output would remove it, but that fuses the colour pass into
+    the deinterlace — a design question before it is a patch.
+  Measure before and after on the 1.3.0 corpus plus the Adam7 RGBA16 file; all
+  must stay byte-identical to ImageMagick.
 - **Downstream consumers green on 1.3.x.** All five — mabda, kii, jalwa,
   aethersafha, crab — pin `1.0.3`. Re-pinning needs no manifest change: crab
   picks up the `zlib` profile transitively, kii / mabda / aethersafha keep the

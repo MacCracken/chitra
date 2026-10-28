@@ -284,8 +284,8 @@ the pixels. A *malformed* IEND (e.g. non-zero length) is a hard error.
 `CHITRA_ERR_INFLATE_LIMIT`, cheaply, because sankoch's one-shot inflate stops at 16 MiB. chitra now
 calls `zlib_decompress_capped` with the exact size IHDR implies, which every sankoch from 2.7.13
 provides (the 2.8.6 floor above is higher). ⚠ **Budget memory for it**: the worst case is now a
-4096×4096 16-bit RGBA file, measured at **416,391,288 bytes** for an 80.8 MB file, not the ~100 MB of
-1.2.x — see SECURITY.md. `chitra_image_decode_budget` bounds the RGBA8 output, not that working set.
+4096×4096 16-bit RGBA Adam7 file, measured at **433,525,296 bytes** for a 97.9 MB file, not the ~100 MB
+of 1.2.x; a non-interlaced one measures 282,173,560 bytes for 80.8 MB since 1.3.1 — see SECURITY.md. `chitra_image_decode_budget` bounds the RGBA8 output, not that working set.
 A corrupt stream past 16 MiB that used to answer 35 without being read now answers what is wrong with
 it, usually `CHITRA_ERR_INFLATE`.
 

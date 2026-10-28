@@ -75,7 +75,7 @@ decode. Each maps to a `ChitraErrCode`
   Failure → `CHITRA_ERR_TRUNCATED`.
 - ✅ **Per-chunk CRC-32 validation** — every chunk (IHDR included) is verified
   with `sankoch`'s `crc32` against its trailing CRC (e.g. the IHDR check at
-  [`src/png_filter.cyr:145`](src/png_filter.cyr)); a mismatch aborts the decode
+  [`src/png_filter.cyr:154`](src/png_filter.cyr)); a mismatch aborts the decode
   rather than accepting corrupt or tampered data. Failure → `CHITRA_ERR_CRC`.
 - ✅ **Dimension caps before any multiply** — IHDR `width`/`height` are rejected
   if zero/negative or over the per-side cap `CHITRA_MAX_DIM = 65535`, *before*
@@ -86,7 +86,7 @@ decode. Each maps to a `ChitraErrCode`
 - ✅ **Decompression-bomb ratio cap** — the ratio of inflated output to
   compressed IDAT input is bounded by `CHITRA_MAX_INFLATE_RATIO = 1100`
   (constant in [`src/png_chunks.cyr:43`](src/png_chunks.cyr); checked at
-  [`src/png_filter.cyr:636`](src/png_filter.cyr)), just above DEFLATE's
+  [`src/png_filter.cyr:651`](src/png_filter.cyr)), just above DEFLATE's
   theoretical 1032:1 maximum (RFC 1951 § 3.2.5), so a zip-bomb-style input is
   rejected instead of expanded. Failure → `CHITRA_ERR_DIMENSIONS`.
   ⚠️ **Accepted risk, stated rather than quietly fixed**: this ratio bounds
@@ -125,6 +125,18 @@ decode. Each maps to a `ChitraErrCode`
   this uses `chitra_image_decode_budget`, which refuses from the header on the
   output size — the working set is at most ~5× that output plus the
   compressed size.
+  ⭐ **1.3.1 took a third back for non-interlaced files.** Their rows are now
+  unfiltered in place, compacted inside the inflate buffer, so the separate
+  scanline buffer is gone: the same 80.8 MB file spends **282,173,560 bytes**
+  (−134,217,728), and a non-interlaced PNG's working set is at most ~3× its
+  output plus the compressed size. Adam7 still needs the buffer, because
+  deinterlacing scatters every pass across the image, so it remains the worst
+  case: a 97.9 MB 4096×4096 RGBA16 Adam7 file spends **433,525,296 bytes**.
+  And a file whose image data is ONE non-empty IDAT chunk (stb_image_write,
+  lodepng) is inflated where it lies in the caller's buffer, so it does not pay
+  the compressed size either: the 80.8 MB file re-chunked that way spends
+  **201,405,384 bytes**. Split IDATs (libpng, ImageMagick) are still
+  concatenated first.
 - ✅ **Raw-buffer ceiling** — every derived buffer size is bounded by
   `CHITRA_MAX_RAW_BYTES = 268435456` (256 MB)
   ([`src/png_chunks.cyr:38`](src/png_chunks.cyr)), and every allocation is
@@ -140,12 +152,12 @@ decode. Each maps to a `ChitraErrCode`
   32-byte bit reader on every call — and chitra reported that as `CHITRA_ERR_INFLATE`, which a caller reads
   as a damaged file: a valid PNG decoded under memory pressure could be refused,
   and cached, as corrupt. It now maps to `CHITRA_ERR_OOM`
-  ([`src/png_filter.cyr:738`](src/png_filter.cyr)); every other negative return
+  ([`src/png_filter.cyr:761`](src/png_filter.cyr)); every other negative return
   is still the stream's fault. With that, the clause above is true of every
   allocating sankoch entry point chitra calls. The IHDR-derived inflated/pixel buffer sizes over the ceiling
-  fail as `CHITRA_ERR_DIMENSIONS` ([`src/png_filter.cyr:617-624`](src/png_filter.cyr));
+  fail as `CHITRA_ERR_DIMENSIONS` ([`src/png_filter.cyr:632-639`](src/png_filter.cyr));
   the IDAT-accumulator over the ceiling and any allocation that returns null
-  fail as `CHITRA_ERR_OOM` ([`src/png_filter.cyr:483`](src/png_filter.cyr)).
+  fail as `CHITRA_ERR_OOM` ([`src/png_filter.cyr:494`](src/png_filter.cyr)).
 - ✅ **Inflate exact-size second line of defense** — the inflated stream size
   must match exactly the size derived from IHDR (`height × (1 + row_bytes)`);
   any mismatch from `sankoch` aborts the decode. Failure →
@@ -157,10 +169,10 @@ decode. Each maps to a `ChitraErrCode`
   color-type-3 at depth 16). Failure → `CHITRA_ERR_UNSUPPORTED` (unknown color
   type or non-zero compression/filter method), `CHITRA_ERR_INTERLACE`
   (interlace value ∉ {0,1}), or `CHITRA_ERR_BIT_DEPTH` (illegal depth × color-type
-  combination) — see [`src/png_filter.cyr:165-185`](src/png_filter.cyr).
+  combination) — see [`src/png_filter.cyr:174-194`](src/png_filter.cyr).
 - ✅ **Per-row filter-byte validation** — every scanline's filter type is
   checked against `{0,1,2,3,4}` (spec § 9) on both the non-interlaced and the
-  Adam7 paths (`_chitra_unfilter_row`, [`src/png_filter.cyr:39`](src/png_filter.cyr)); an out-of-range
+  Adam7 paths (`_chitra_unfilter_row`, [`src/png_filter.cyr:43`](src/png_filter.cyr)); an out-of-range
   byte aborts before unfilter. Failure → `CHITRA_ERR_FILTER`.
 - ✅ **Palette-index bounds checks** — every palette pixel index, on both the
   sub-byte and the depth-8 path, is rejected if it points past the PLTE entry
@@ -176,7 +188,7 @@ decode. Each maps to a `ChitraErrCode`
   `CHITRA_ERR_BAD_CHUNK`.
   ⚠ **Since 1.1.1 the facts the chunk list has already settled are refused
   before the first allocation**, at the end of the chunk walk
-  ([`src/png_filter.cyr:666-695`](src/png_filter.cyr)): colour type 3 with no
+  ([`src/png_filter.cyr:681-710`](src/png_filter.cyr)): colour type 3 with no
   (or an empty) PLTE, a palette tRNS longer than the palette, and a colour-type
   0 / 2 tRNS that is not 2 / 6 bytes. Through 1.1.0 the colour pass refused them
   only after the IDAT concatenation, the inflate buffer, the scanlines and the
