@@ -16,15 +16,14 @@
 # PGM. So the reference-correct decode of an H>1 grayscale JPEG is provably its
 # H=1 twin's decode, established by an external encoder AND an external decoder
 # rather than by chitra agreeing with itself. Every expected value below was
-# read out of `djpeg -nosmooth`; chitra matches it over all 1536 bytes, and for
-# the grayscale cells ImageMagick agrees byte-for-byte as an independent second
-# oracle.
+# read out of `djpeg`; chitra matches it over all 1536 bytes, and ImageMagick
+# agrees byte-for-byte as an independent second oracle.
 #
-# NOTE on ImageMagick and SUBSAMPLED JPEG: it is NOT a valid second oracle for
-# the interleaved 4:2:0 fixture. ImageMagick upsamples chroma with a fancy
-# (triangle) filter where chitra and `djpeg -nosmooth` use box, so it differs
-# in 937 of 1536 bytes at up to 40/byte on that file — a filter difference, not
-# a decode bug. Use `djpeg -nosmooth` for any subsampled JPEG cell.
+# NOTE on SUBSAMPLED JPEG (1.4.0): chitra upsamples chroma with libjpeg-turbo's
+# fancy (triangle) filter, as `djpeg` and ImageMagick do by default, so both
+# are oracles for the interleaved 4:2:0 fixture too. Through 1.3.x chitra used
+# box and matched only `djpeg -nosmooth`; the grey cells are unaffected (one
+# component, nothing to upsample). ADR 0012.
 #
 # REGENERATION. The source images are generated (not downloaded) so the corpus
 # is reproducible; the pattern varies in BOTH axes and gives each 8x8 block a
@@ -3040,7 +3039,7 @@ fn test_ni_gray_control() {
         assert_eq(chitra_image_height(img), 16, "1x1 control: height 16");
         assert_eq(chitra_image_channels(img), 4, "1x1 control: 4 channels");
         assert_eq(chitra_image_source_color_type(img), 257, "1x1 control: src ctype 0x101");
-        # The six 8x8 block corners, read out of `djpeg -nosmooth`. They are
+        # The six 8x8 block corners, read out of `djpeg`. They are
         # pairwise DISTINCT (31 / 100 / 171 / 76 / 145 / 216), so a block written
         # into the wrong grid cell — in EITHER axis — moves at least one of them.
         _ni_px(img, 0, 0, 31, 31, 31, "control px(0,0) = 31");
@@ -3180,8 +3179,9 @@ fn test_ni_router_dispatch() {
 # ================================================================
 fn test_ni_interleaved_control() {
     # 3-component 4:2:0 in ONE scan — the layout 0.6.0 does not touch. Expected
-    # values from `djpeg -nosmooth` (NOT ImageMagick: see the header note on
-    # fancy vs box chroma upsampling).
+    # values from `djpeg` (fancy upsampling since 1.4.0 — the header note);
+    # through 1.3.x they were box's: px(8,0) 98,22,131, px(16,8) 188,110,38,
+    # sum 223,824. ImageMagick agrees on the new values.
     var lo = 0;
     var b = fx_jpeg_ni_il3(&lo);
     var err = 0;
@@ -3193,10 +3193,10 @@ fn test_ni_interleaved_control() {
         assert_eq(chitra_image_height(img), 16, "interleaved control: height 16");
         assert_eq(chitra_image_source_color_type(img), 259, "interleaved control: src ctype 0x103");
         _ni_px(img, 0, 0, 13, 23, 199, "interleaved px(0,0)");
-        _ni_px(img, 8, 0, 98, 22, 131, "interleaved px(8,0)");
-        _ni_px(img, 16, 8, 188, 110, 38, "interleaved px(16,8)");
+        _ni_px(img, 8, 0, 88, 23, 151, "interleaved px(8,0)");
+        _ni_px(img, 16, 8, 184, 105, 75, "interleaved px(16,8)");
         _ni_px(img, 23, 15, 221, 144, 52, "interleaved px(23,15)");
-        assert_eq(_ni_sum(img), 223824, "interleaved control: whole-image byte sum");
+        assert_eq(_ni_sum(img), 223852, "interleaved control: whole-image byte sum");
     }
     return 0;
 }

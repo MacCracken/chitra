@@ -1,16 +1,18 @@
 # chitra — Roadmap
 
-> **Last Updated**: 2026-10-28 (1.3.1)
+> **Last Updated**: 2026-11-14 (1.4.0)
 >
 > **Forward only.** What ships next, in what order, against what gates. What
 > already shipped is in [`../../CHANGELOG.md`](../../CHANGELOG.md), one entry
 > per release; volatile state (version, sizes, counts) is in
 > [`state.md`](state.md). Neither is repeated here.
 >
-> **Where things stand**: the public surface is frozen at 1.0.0 — the 29 names
-> in [`public-surface.md`](public-surface.md) plus both record layouts, gated by
-> `scripts/check-surface.sh`. PNG, JPEG (JFIF baseline, full T.81 § A.2 scan
-> model), BMP and GIF (first frame) are feature-complete for their scope.
+> **Where things stand**: the public surface is frozen at 1.0.0 — 31 names
+> since 1.4.0 (29 at the freeze) in [`public-surface.md`](public-surface.md)
+> plus both record layouts, gated by `scripts/check-surface.sh`. PNG, JPEG
+> (baseline and progressive, the full T.81 § A.2 scan model, CMYK samples
+> through their own entry), BMP and GIF (first frame) are feature-complete for
+> their scope.
 
 ## How a release is sized
 
@@ -28,41 +30,41 @@
 Every release runs the closeout pass in [`CLAUDE.md`](../../CLAUDE.md#closeout-pass-before-every-minormajor-bump);
 the ones below name only what is specific to them.
 
-## 1.3.x — maintenance
+## 1.4.x — maintenance
 
 Patch-sized, independent, any order.
 
-- **PNG's peak working set, what 1.3.1 left.** 1.3.1 unfilters non-interlaced
-  rows in place and inflates a single IDAT chunk where it lies (an 80.8 MB
-  4096×4096 RGBA16 file: 282,173,560 B as libpng splits it, 201,405,384 B as
-  one IDAT; 416,391,288 at 1.3.0). Two cuts remain, both with no output change:
-  - **Split IDATs inflated where they lie** — measured and declined in 1.3.1.
-    sankoch's streaming decoder gives identical bytes but inflates 44–51 %
-    slower than the one-shot call (6.99 → 10.06 s on the RGBA16 stream), and
-    allocates 312 B of contexts per decode. *Trigger*: a sankoch streaming
-    decoder near one-shot speed; then it saves the compressed size, the largest
-    term left for a libpng-written photograph (80.8 MB of the 282).
-  - **Adam7 is now the worst case** (433,525,296 B for a 97.9 MB RGBA16 file),
+- **PNG's peak working set, what 1.3.1 left.** Two cuts remain, both with no
+  output change:
+  - **Split IDATs inflated where they lie** — measured and declined in 1.3.1:
+    sankoch's streaming decoder inflates 44–51 % slower than the one-shot call.
+    *Trigger*: a sankoch streaming decoder near one-shot speed.
+  - **Adam7 is the worst case** (433,525,296 B for a 97.9 MB RGBA16 file),
     because deinterlacing needs a full scanline buffer. Deinterlacing straight
-    into the RGBA8 output would remove it, but that fuses the colour pass into
-    the deinterlace — a design question before it is a patch.
-  Measure before and after on the 1.3.0 corpus plus the Adam7 RGBA16 file; all
-  must stay byte-identical to ImageMagick.
-- **Downstream consumers green on 1.3.x.** All five — mabda, kii, jalwa,
-  aethersafha, crab — pin `1.0.3`. Re-pinning needs no manifest change: crab
-  picks up the `zlib` profile transitively, kii / mabda / aethersafha keep the
-  stdlib `sankoch` they declare, jalwa keeps its own `[deps.sankoch]`. ⚠ Four
-  things to check while re-pinning: kii's error mapping (a second IHDR now
-  arrives as `PNG_ERR_HEADER`, a sankoch OOM as `PNG_ERR_IDAT_TOO_LARGE`, and its
-  `PNG_ERR_INFLATE_LIMIT` arm is dead from 1.3.0); the
-  sankoch floor for the three stdlib-leaf consumers (cyrius ≥ 6.7.11, or their own
-  `[deps.sankoch]` ≥ 2.8.6) — ⚠ **all three are below it today**: mabda pins
-  cyrius 6.7.5 (stdlib sankoch 2.8.2), kii 6.7.9 (2.8.3), aethersafha 6.6.11
-  (2.8.0); mabda's `gpu_texture_load_png` build, the one that matters most and
-  is unverified from here; and the memory a consumer now needs for a large PNG
-  (above). Every sankoch they link has `zlib_decompress_capped`, which 1.3.0
-  calls. The 1.2.0 rename touches none of them: every name any of the five calls
-  is frozen.
+    into the RGBA8 output would remove it — a design question before a patch.
+  1.4.0 makes this bite harder: under a budget a PNG may now be far larger than
+  4096², and the working set scales with it (~4× the output for Adam7 16-bit).
+- **PNG decode speed is now mostly sankoch's inflate.** 1.4.0 cut chitra's own
+  share (unfilter, colour pass); on a 3840×2160 photo-like PNG the inflate is
+  1,258 of 1,350 ms (~10 MB/s of compressed input). Measure against sankoch's
+  own benchmarks before filing anything there — "narrow deps, not upstream
+  blame" applies to speed as much as to size.
+- **JPEG speed, what 1.4.0 left.** 4:4:4 512² is ~5.4× Rust's `image`
+  (zune-jpeg). The IDCT is ~45 % of what remains and is codegen-bound (no
+  inlining, one memory op per local); skipping the IDCT entirely for a block
+  whose AC terms are all zero (a flat fill of its DC) is the next measurable cut. The progressive driver
+  calls a function per block per scan and was not tuned.
+- **Downstream consumers green on 1.4.x.** mabda, kii, jalwa, aethersafha and
+  crab pin `1.0.3`; selah is the first on 1.4.x. Re-pinning needs no manifest
+  change, but four things are checked while doing it: kii's error mapping (a
+  second IHDR arrives as `PNG_ERR_HEADER`, a sankoch OOM as
+  `PNG_ERR_IDAT_TOO_LARGE`, its `PNG_ERR_INFLATE_LIMIT` arm is dead from 1.3.0,
+  and a progressive JPEG now decodes where its `JPEG_PROGRESSIVE` arm used to
+  fire); the sankoch floor for the three stdlib-leaf consumers (cyrius ≥ 6.7.11,
+  where 1.4.0's bundle is verified to compile and decode — mabda pins 6.7.5,
+  kii 6.7.9, aethersafha 6.6.11); mabda's `gpu_texture_load_png` build; and the
+  output changes 1.4.0 made on purpose (subsampled JPEG, 16-bpp and 32-bpp
+  `BI_RGB` BMP), which any consumer pinning golden pixels will see.
 
 ## 1.x — candidates, not scheduled
 
@@ -71,7 +73,8 @@ sequenced. Recorded so the next cut starts from a list rather than from memory.
 
 - **SOF1 extended-sequential JPEG, 8-bit Huffman.** It differs from baseline
   only by allowing 16-bit quant tables (Pq=1) and four DC/AC table pairs, and
-  libjpeg decodes it; `cjpeg` emits it at very low quality. It refuses with
+  libjpeg decodes it; `cjpeg` emits it at very low quality. 1.4.0 already
+  stores 16-bit tables (for progressive), so the DQT half of this is done. It refuses with
   `CHITRA_ERR_JPEG_MODE` (22) — reliably only since 1.1.1, which stopped
   reporting its 16-bit quant tables as malformed first. It looks cheap — but a sweep finding is a
   hypothesis: measure against `djpeg -nosmooth` before deciding. Amends ADR 0004.
@@ -80,12 +83,6 @@ sequenced. Recorded so the next cut starts from a list rather than from memory.
   Needs a design for disposal methods and the frame record before any code.
 - **APNG** — the same shape and the same answer as multi-frame GIF; today APNG
   decodes to its default image.
-- **Progressive JPEG (SOF2)** — the one non-baseline mode with a real-world
-  consumer case, and the one deferral that is genuinely open. A decode-model
-  question ([ADR 0004](../adr/0004-jpeg-decode-model.md)), not a surface one:
-  it needs coefficient buffering across scans, which baseline never does.
-  Revisit only when a consumer demonstrably needs it.
-
 ## Needs a major
 
 Nothing here is planned. Listed so none of it is attempted as a minor.
@@ -164,6 +161,20 @@ nowhere else in the tree. Each changed how the next cut was done.
   confirmation of the repair — measure the repair against the reference, and
   against the poisoned fuzzers, before it lands.
 
+- **A reference decoder's option is not ground truth** (1.4.0). chitra matched
+  `djpeg -nosmooth` exactly for years and was further from the encoded pixels
+  than `djpeg`'s default, by ~30 % mean error at 4:2:0; only measuring against
+  the SOURCE showed it. Pick the oracle for what it is measured against, not
+  for agreeing with the current output.
+- **Where guards overlap, a real file cannot witness any one of them** (1.4.0).
+  Every progression edit to a real progressive file was refused — by a later
+  scan's check, or by a table cjpeg only defines for the scan that uses it —
+  so seven of nine guards could be deleted with every real-file cell still
+  green. A synthetic file per rule, in which only that rule can fire, is what
+  made each one observable. And a bound on work per unit of structure (14 scans
+  per coefficient) still needs a bound on the structure (256 scans).
+
+
 ## Out of scope (durable scope guards)
 
 Boundaries on what chitra is. Not deferrals — nothing above will pull from this
@@ -178,27 +189,29 @@ list.
   declined than bounded. A consumer that holds one can extract the inner stream
   and call the inner decoder directly, keeping the recursion decision on its own
   side.
-- **Non-baseline JPEG other than progressive and SOF1** (both under *1.x
-  candidates*). Each rejects loud with a distinct `CHITRA_ERR_JPEG_*` code
+- **Non-baseline JPEG other than SOF1** (under *1.x candidates*; progressive
+  decodes since 1.4.0). Each rejects loud with a distinct `CHITRA_ERR_JPEG_*` code
   rather than half-decoding ([ADR 0004](../adr/0004-jpeg-decode-model.md)).
   Reclassified from "deferred" to permanent by the 0.6.1 sweep:
   - **Arithmetic-coded JPEG** (SOF9/10/11 + DAC) — a second entropy coder for
     a mode almost nothing produces.
   - **Hierarchical / lossless / differential SOF frames** (SOF3/5/6/7/13/14/15)
     — a different codec that happens to share a container.
-  - **4-component CMYK / YCCK** — decoding it to RGBA requires a colour-space
-    guess chitra's own rules forbid it from making
-    ([ADR 0009](../adr/0009-jpeg-colour-transform.md)).
+  - **CMYK / YCCK through the RGBA entries** — RGB from CMYK is a
+    colour-space guess chitra's own rules forbid
+    ([ADR 0009](../adr/0009-jpeg-colour-transform.md)). The SAMPLES decode
+    since 1.4.0 through `chitra_jpeg_decode_cmyk`
+    ([ADR 0014](../adr/0014-cmyk-samples-not-colours.md)); the conversion is
+    the consumer's.
   - **12-bit sample precision** — a validity rejection wearing a capability
     label.
   - **DNL-deferred height** (SOF0 with `Y = 0`). Spec-legal per T.81 § B.2.2,
     and refused: it would make the geometry that drives every allocation depend
     on a value read *after* the data.
-- **Interpolated (fancy) chroma upsampling.** chitra uses box, and
-  `djpeg -nosmooth` is the oracle it matches; ImageMagick differs by up to 40
-  per byte on subsampled files for that reason alone. Not a drop-in either: the
-  exact-fit plane property depends on box never reading `x+1`
-  ([architecture/004](../architecture/004-jpeg-decode-pipeline.md)).
+- **Box chroma upsampling as an option.** 1.4.0 upsamples with
+  libjpeg-turbo's fancy filters and holds itself to `djpeg`
+  ([ADR 0012](../adr/0012-interpolated-chroma-upsampling.md)); `-nosmooth`
+  output would be a new entry point, and no consumer asks for it.
 - **Colour management, in every format.** gAMA / sRGB / iCCP / cHRM / sBIT on
   PNG; V4/V5 colour space, CIEXYZ endpoints, gamma, rendering intent and
   embedded ICC on BMP; APP2 ICC on JPEG — all **skipped**, samples emitted

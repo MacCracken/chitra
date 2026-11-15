@@ -1,0 +1,658 @@
+# @internal — progressive JPEG (SOF2, ITU-T T.81 Annex G), 1.4.0 — ADR 0013.
+# jpeg_prog.cyr — the progressive scan model on top of the baseline machinery:
+# the marker walk (jpeg_markers.cyr) marks a SOF2 frame, _chitra_jpeg_parse_sos
+# (jpeg.cyr) validates each scan's Ss/Se/Ah/Al, and _chitra_jpeg_decode_scans
+# hands a progressive frame here after the amplification gates have run.
+#
+# THE DECODE MODEL (ADR 0004's open question, answered). A baseline scan codes
+# every coefficient of a block at once, so chitra goes straight from entropy
+# decode to IDCT to plane. A progressive scan codes a BAND of zig-zag positions
+# (spectral selection, Ss..Se) to a BIT POSITION (successive approximation,
+# Ah -> Al), and subsequent scans refine what earlier ones left. So each component
+# keeps a whole-image coefficient buffer — 16 bits per coefficient, natural
+# order, as libjpeg's JCOEF — every scan updates it, and the IDCT runs once,
+# after the last scan, into the same planes the baseline path fills. The
+# upsampling and colour pass that follow are the baseline ones, unchanged.
+#
+# Four scan kinds, each exactly libjpeg-turbo's jdphuff.c:
+#   DC first   (Ss = 0, Ah = 0)  diff -> pred += diff -> coef[0] = pred << Al
+#   DC refine  (Ss = 0, Ah > 0)  one bit per block, OR-ed in at bit Al
+#   AC first   (Ss > 0, Ah = 0)  run/size symbols, values << Al, and EOBRUN:
+#                                one symbol ends this block and the next N-1
+#   AC refine  (Ss > 0, Ah > 0)  new coefficients of magnitude 1 << Al, and a
+#                                correction bit for every coefficient already
+#                                non-zero that the run passes over
+#
+# ⛔ THE WORK BOUND IS THE PROGRESSION ITSELF. An AC scan can cover every
+# block of a component with a handful of bytes (EOBRUN reaches 32,767), so a
+# scan's cost is not proportional to its entropy span, and a file that repeats
+# scans could make the decode arbitrarily slow while staying small. libjpeg
+# only WARNS on a bogus progression and decodes on. chitra REFUSES it
+# (CHITRA_ERR_JPEG_SOS): for every component and every coefficient, the first
+# scan must be Ah = 0 on a coefficient never coded, and every next one must be
+# Ah = the previous Al — with Al = Ah - 1 (checked at the scan header) and
+# Al <= 13. So a coefficient is visited by at most 14 scans, and the total work
+# of any accepted file is at most ~14 x 64 coefficient visits per block: a
+# constant multiple of one baseline decode of the same image, however the scans
+# are arranged. An AC scan also needs its component's DC coded first.
+#
+# Malformed entropy data is refused, where libjpeg warns and guesses: a run or
+# a ZRL that leaves the band, a size category above 10 (AC) or 11 (DC), a
+# refinement symbol whose size is not 1, and a new refinement coefficient with
+# no zero position left in the band to land on. Each is a stream no conforming
+# encoder writes, and decoding it means choosing what the file meant.
+
+# ================================================================
+# Per-decode progressive state — ONE allocation, through the decode context.
+#   +0     coef[4]          ptr  coefficient buffer per frame component
+#                                (i16, natural order, 128 B per block)
+#   +32    bw[4]            blocks per row  (the INTERLEAVED grid: mcu_cols*Hi,
+#   +64    bh[4]            block rows       mcu_rows*Vi — a non-interleaved
+#                                            scan addresses its top-left corner)
+#   +96    bits[4][64]      i64  the bit position each coefficient has been
+#                                coded down to; -1 = never coded
+#   +2144  q[4][64]         i64  the component's quantization table, latched at
+#                                its first scan, natural order, as libjpeg
+#                                latches it (a DQT between scans redefines the
+#                                table only for components that have
+#                                had no scan)
+# ================================================================
+var _CHITRA_PS_COEF = 0;
+var _CHITRA_PS_BW   = 32;
+var _CHITRA_PS_BH   = 64;
+var _CHITRA_PS_BITS = 96;
+var _CHITRA_PS_Q    = 2144;
+var _CHITRA_PS_SIZE = 4192;
+
+# The most scans a progressive file may carry (1.4.0). ~13x the largest real
+# encoder's output; see _chitra_jpeg_decode_scans for why a ceiling exists at
+# all when the progression rules already bound the coefficient work.
+var _CHITRA_MAX_PROG_SCANS = 256;
+
+# Sign-extend a 16-bit coefficient read with load16.
+fn _chitra_jpeg_i16(v): i64 {
+    if (v >= 32768) { return v - 65536; }
+    return v;
+}
+
+# DC first scan, one block. Returns the new predictor; on a corrupt symbol sets
+# *err_out and returns 0.
+fn _chitra_jpeg_prog_dc_first(reader, dct, pred, blk, al, err_out): i64 {
+    var t = _chitra_jpeg_decode(reader, dct);
+    if (t < 0) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY)); return 0; }
+    if (t > 11) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY)); return 0; }
+    var diff = 0;
+    if (t > 0) { diff = _chitra_jpeg_extend(_chitra_jpeg_br_bits(reader, t), t); }
+    var dc = pred + diff;
+    store16(blk, (dc * (1 << al)) & 65535);
+    return dc;
+}
+
+# DC refinement scan, one block: one bit, OR-ed in at bit Al.
+fn _chitra_jpeg_prog_dc_refine(reader, blk, al): i64 {
+    if (_chitra_jpeg_br_bit(reader) == 1) { store16(blk, load16(blk) | (1 << al)); }
+    return 0;
+}
+
+# AC first scan, one block. *eob holds the running EOBRUN. Returns 0, or -1
+# with *err_out set.
+fn _chitra_jpeg_prog_ac_first(reader, act, blk, ss, se, al, eob, err_out): i64 {
+    var eobrun = load64(eob);
+    if (eobrun > 0) {
+        store64(eob, eobrun - 1);
+        return 0;
+    }
+    var zzt = _chitra_jpeg_zigzag_table();
+    var k = ss;
+    var rs = 0;
+    var r = 0;
+    var s = 0;
+    var v = 0;
+    var bad = 0;
+    var done = 0;
+    while (done == 0) {
+        if (k > se) { done = 1; }
+        if (done == 0) {
+            rs = _chitra_jpeg_decode(reader, act);
+            if (rs < 0) { bad = 1; done = 1; }
+        }
+        if (done == 0) {
+            r = (rs >> 4) & 15;
+            s = rs & 15;
+            if (s != 0) {
+                if (s > 10) { bad = 1; done = 1; }
+                if (done == 0) {
+                    k = k + r;
+                    if (k > se) { bad = 1; done = 1; }
+                }
+                if (done == 0) {
+                    v = _chitra_jpeg_extend(_chitra_jpeg_br_bits(reader, s), s);
+                    store16(blk + load64(zzt + k * 8) * 2, (v * (1 << al)) & 65535);
+                    k = k + 1;
+                }
+            } else {
+                if (r == 15) {
+                    k = k + 16;                     # ZRL: sixteen zeros
+                    if (k > se + 1) { bad = 1; done = 1; }
+                } else {
+                    # EOBn: this block and the next (2^r + bits) - 1 end here.
+                    eobrun = 1 << r;
+                    if (r > 0) { eobrun = eobrun + _chitra_jpeg_br_bits(reader, r); }
+                    store64(eob, eobrun - 1);
+                    done = 1;
+                }
+            }
+        }
+    }
+    if (bad == 1) {
+        store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY));
+        return 0 - 1;
+    }
+    return 0;
+}
+
+# A correction bit for the already-non-zero coefficient at natural position
+# `pos`: if set, its magnitude grows by 1 << Al unless that bit is already
+# there (T.81 § G.1.2.3; libjpeg's decode_mcu_AC_refine).
+fn _chitra_jpeg_prog_correct(reader, blk, pos, p1): i64 {
+    if (_chitra_jpeg_br_bit(reader) == 0) { return 0; }
+    var c = _chitra_jpeg_i16(load16(blk + pos * 2));
+    if ((c & p1) != 0) { return 0; }
+    if (c >= 0) { c = c + p1; } else { c = c - p1; }
+    store16(blk + pos * 2, c & 65535);
+    return 0;
+}
+
+# AC refinement scan, one block. Returns 0, or -1 with *err_out set.
+fn _chitra_jpeg_prog_ac_refine(reader, act, blk, ss, se, al, eob, err_out): i64 {
+    var zzt = _chitra_jpeg_zigzag_table();
+    var p1 = 1 << al;
+    var eobrun = load64(eob);
+    var k = ss;
+    var rs = 0;
+    var r = 0;
+    var s = 0;
+    var pos = 0;
+    var bad = 0;
+    var ended = 0;
+    var adv = 0;
+    if (eobrun == 0) {
+        while (ended == 0) {
+            if (k > se) { ended = 1; }
+            if (ended == 0) {
+                rs = _chitra_jpeg_decode(reader, act);
+                if (rs < 0) { bad = 1; ended = 1; }
+            }
+            if (ended == 0) {
+                r = (rs >> 4) & 15;
+                s = rs & 15;
+                if (s != 0) {
+                    # A newly non-zero coefficient is always magnitude 1 at
+                    # this bit position; its sign is the next bit.
+                    if (s != 1) { bad = 1; ended = 1; }
+                    if (ended == 0) {
+                        if (_chitra_jpeg_br_bit(reader) == 1) { s = p1; } else { s = 0 - p1; }
+                    }
+                } else {
+                    if (r != 15) {
+                        eobrun = 1 << r;
+                        if (r > 0) { eobrun = eobrun + _chitra_jpeg_br_bits(reader, r); }
+                        ended = 2;                  # the rest of the band is EOB's
+                    }
+                    # r == 15: ZRL — skip sixteen zero coefficients, s = 0
+                }
+            }
+            if (ended == 0) {
+                # Walk the band: every non-zero coefficient passed gets a
+                # correction bit; stop on the (r+1)-th zero, which is where the
+                # new coefficient goes (or, for ZRL, the last zero skipped).
+                adv = 1;
+                while (adv == 1) {
+                    if (k > se) { adv = 0; }
+                    if (adv == 1) {
+                        pos = load64(zzt + k * 8);
+                        if (load16(blk + pos * 2) != 0) {
+                            _chitra_jpeg_prog_correct(reader, blk, pos, p1);
+                            k = k + 1;
+                        } else {
+                            r = r - 1;
+                            if (r < 0) { adv = 0; } else { k = k + 1; }
+                        }
+                    }
+                }
+                if (s != 0) {
+                    if (k > se) { bad = 1; ended = 1; }
+                    if (ended == 0) { store16(blk + load64(zzt + k * 8) * 2, s & 65535); }
+                }
+                if (ended == 0) { k = k + 1; }
+            }
+        }
+    }
+    if (bad == 1) {
+        store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY));
+        return 0 - 1;
+    }
+    if (eobrun > 0) {
+        # Inside an end-of-band run: no new coefficients, but every non-zero
+        # one from k to the band's end still takes its correction bit.
+        while (k <= se) {
+            pos = load64(zzt + k * 8);
+            if (load16(blk + pos * 2) != 0) { _chitra_jpeg_prog_correct(reader, blk, pos, p1); }
+            k = k + 1;
+        }
+        eobrun = eobrun - 1;
+    }
+    store64(eob, eobrun);
+    return 0;
+}
+
+# ================================================================
+# One progressive scan: validate its progression against every component it
+# names, allocate and latch at a component's first scan, then decode every
+# block the scan covers into the coefficient buffers. Returns 1, or 0 with
+# *err_out set. *unclean_out as for a baseline scan.
+# ================================================================
+fn _chitra_jpeg_prog_scan(frame, src, entropy_start, espan, ps, unclean_out, err_out): i64 {
+    store64(unclean_out, 0);
+    var ctx = _chitra_jpeg_frame_ctx(frame);
+    var w = _chitra_jpeg_frame_width(frame);
+    var h = _chitra_jpeg_frame_height(frame);
+    var max_h = _chitra_jpeg_frame_max_h(frame);
+    var max_v = _chitra_jpeg_frame_max_v(frame);
+    var mcu_cols = (w + 8 * max_h - 1) / (8 * max_h);
+    var mcu_rows = (h + 8 * max_v - 1) / (8 * max_v);
+    var ns = _chitra_jpeg_frame_scan_ns(frame);
+    var spec = load64(frame + _CHITRA_JF_SPEC);
+    var ss = spec & 255;
+    var se = (spec >> 8) & 255;
+    var ah = (spec >> 16) & 255;
+    var al = (spec >> 24) & 255;
+
+    # Geometry: the § A.2 rule the baseline driver uses (Ns == 1 walks the
+    # component's own block grid, one block per MCU).
+    var s_cols = mcu_cols;
+    var s_rows = mcu_rows;
+    var fi = 0;
+    var xi = 0;
+    var yi = 0;
+    if (ns == 1) {
+        fi = _chitra_jpeg_scan_comp(frame, 0);
+        xi = (w * _chitra_jpeg_frame_comp_h(frame, fi) + max_h - 1) / max_h;
+        yi = (h * _chitra_jpeg_frame_comp_v(frame, fi) + max_v - 1) / max_v;
+        s_cols = (xi + 7) / 8;
+        s_rows = (yi + 7) / 8;
+    }
+
+    # ---- progression + tables, for every component, before any decoding ----
+    var ci = 0;
+    var k = 0;
+    var bits = 0;
+    var prev = 0;
+    var rc = 0;
+    var td = 0;
+    var ta = 0;
+    while (ci < ns) {
+        fi = _chitra_jpeg_scan_comp(frame, ci);
+        bits = ps + _CHITRA_PS_BITS + fi * 512;
+        if (ss > 0) {
+            if (load64(bits) < 0) { rc = CHITRA_ERR_JPEG_SOS; }    # AC before this component's DC
+        }
+        k = ss;
+        while (k <= se) {
+            prev = load64(bits + k * 8);
+            if (ah == 0) {
+                if (prev >= 0) { rc = CHITRA_ERR_JPEG_SOS; }       # a first scan, repeated
+            } else {
+                if (prev != ah) { rc = CHITRA_ERR_JPEG_SOS; }      # refines a bit it was not at
+            }
+            k = k + 1;
+        }
+        td = _chitra_jpeg_scan_td(frame, ci);
+        ta = _chitra_jpeg_scan_ta(frame, ci);
+        if (ss == 0) {
+            if (ah == 0) {
+                if ((_chitra_jpeg_frame_huff_present(frame) & (1 << td)) == 0) { rc = CHITRA_ERR_JPEG_SOS; }
+            }
+        } else {
+            if ((_chitra_jpeg_frame_huff_present(frame) & (1 << (4 + ta))) == 0) { rc = CHITRA_ERR_JPEG_SOS; }
+        }
+        ci = ci + 1;
+    }
+    if (rc != 0) { store64(err_out, chitra_err(rc)); return 0; }
+
+    # ---- first scan of a component: its buffer, and its latched table ----
+    var tq = 0;
+    var bw = 0;
+    var bh = 0;
+    var buf = 0;
+    var zzt = _chitra_jpeg_zigzag_table();
+    var q = 0;
+    var qv = 0;
+    ci = 0;
+    while (ci < ns) {
+        fi = _chitra_jpeg_scan_comp(frame, ci);
+        if (load64(ps + _CHITRA_PS_COEF + fi * 8) == 0) {
+            tq = _chitra_jpeg_frame_comp_tq(frame, fi);
+            if ((_chitra_jpeg_frame_quant_present(frame) & (1 << tq)) == 0) {
+                store64(err_out, chitra_err(CHITRA_ERR_JPEG_SOF));
+                return 0;
+            }
+            bw = mcu_cols * _chitra_jpeg_frame_comp_h(frame, fi);
+            bh = mcu_rows * _chitra_jpeg_frame_comp_v(frame, fi);
+            if (bw * bh * 128 > _chitra_lim_raw(ctx)) {
+                store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
+                return 0;
+            }
+            buf = _chitra_alloc(ctx, bw * bh * 128);
+            if (buf == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
+            store64(ps + _CHITRA_PS_COEF + fi * 8, buf);
+            store64(ps + _CHITRA_PS_BW + fi * 8, bw);
+            store64(ps + _CHITRA_PS_BH + fi * 8, bh);
+            # libjpeg's DEQUANTIZE multiplies by an ISLOW_MULT_TYPE, a 16-bit
+            # signed value at 8-bit precision; a 16-bit table entry above 32767
+            # (which libjpeg's own encoder never writes) is taken the same way.
+            q = load64(frame + _CHITRA_JF_QUANT) + tq * 512;
+            k = 0;
+            while (k < 64) {
+                qv = load64(q + k * 8);
+                store64(ps + _CHITRA_PS_Q + fi * 512 + load64(zzt + k * 8) * 8, ((qv + 32768) & 65535) - 32768);
+                k = k + 1;
+            }
+        }
+        bits = ps + _CHITRA_PS_BITS + fi * 512;
+        k = ss;
+        while (k <= se) {
+            store64(bits + k * 8, al);
+            k = k + 1;
+        }
+        ci = ci + 1;
+    }
+
+    # ---- the blocks ----
+    var preds[32];
+    var dctabs[32];
+    var actabs[32];
+    var comph[32];
+    var compv[32];
+    var scanfi[32];
+    ci = 0;
+    while (ci < ns) {
+        fi = _chitra_jpeg_scan_comp(frame, ci);
+        store64(&scanfi + ci * 8, fi);
+        store64(&preds + ci * 8, 0);
+        store64(&dctabs + ci * 8, _chitra_jpeg_frame_huff(frame, 0, _chitra_jpeg_scan_td(frame, ci)));
+        store64(&actabs + ci * 8, _chitra_jpeg_frame_huff(frame, 1, _chitra_jpeg_scan_ta(frame, ci)));
+        if (ns == 1) {
+            store64(&comph + ci * 8, 1);
+            store64(&compv + ci * 8, 1);
+        } else {
+            store64(&comph + ci * 8, _chitra_jpeg_frame_comp_h(frame, fi));
+            store64(&compv + ci * 8, _chitra_jpeg_frame_comp_v(frame, fi));
+        }
+        ci = ci + 1;
+    }
+    var kind = 0;                                       # 0 DC first, 1 DC refine, 2 AC first, 3 AC refine
+    if (ss == 0) {
+        if (ah != 0) { kind = 1; }
+    } else {
+        kind = 2;
+        if (ah != 0) { kind = 3; }
+    }
+    var reader[72];
+    _chitra_jpeg_br_init(&reader, src + entropy_start, espan);
+    var ri = _chitra_jpeg_frame_restart_interval(frame);
+    var eob = 0;
+    var berr = 0;
+    var mcu_count = s_cols * s_rows;
+    var mi = 0;
+    var mx = 0;
+    var my = 0;
+    var by = 0;
+    var bx = 0;
+    var ch2 = 0;
+    var cv2 = 0;
+    var bxp = 0;
+    var byp = 0;
+    var blk = 0;
+    var pr = 0;
+    var done = 0;
+    var r = 0;
+    while (done == 0) {
+        if (mi >= mcu_count) { done = 1; }
+        if (done == 0) {
+            if (ri > 0) {
+                if (mi > 0) {
+                    if ((mi % ri) == 0) {
+                        if (_chitra_jpeg_br_restart(&reader) != 0) {
+                            store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY));
+                            done = 1;
+                        }
+                        if (done == 0) {
+                            r = 0;
+                            while (r < ns) {
+                                store64(&preds + r * 8, 0);
+                                r = r + 1;
+                            }
+                            eob = 0;
+                        }
+                    }
+                }
+            }
+        }
+        if (done == 0) {
+            mx = mi % s_cols;
+            my = mi / s_cols;
+            ci = 0;
+            while (ci < ns) {
+                fi = load64(&scanfi + ci * 8);
+                ch2 = load64(&comph + ci * 8);
+                cv2 = load64(&compv + ci * 8);
+                buf = load64(ps + _CHITRA_PS_COEF + fi * 8);
+                bw = load64(ps + _CHITRA_PS_BW + fi * 8);
+                by = 0;
+                while (by < cv2) {
+                    bx = 0;
+                    while (bx < ch2) {
+                        bxp = mx * ch2 + bx;
+                        byp = my * cv2 + by;
+                        blk = buf + (byp * bw + bxp) * 128;
+                        if (kind == 0) {
+                            pr = _chitra_jpeg_prog_dc_first(&reader, load64(&dctabs + ci * 8),
+                              load64(&preds + ci * 8), blk, al, &berr);
+                            store64(&preds + ci * 8, pr);
+                        }
+                        if (kind == 1) { _chitra_jpeg_prog_dc_refine(&reader, blk, al); }
+                        if (kind == 2) {
+                            _chitra_jpeg_prog_ac_first(&reader, load64(&actabs + ci * 8), blk, ss, se, al, &eob, &berr);
+                        }
+                        if (kind == 3) {
+                            _chitra_jpeg_prog_ac_refine(&reader, load64(&actabs + ci * 8), blk, ss, se, al,
+                              &eob, &berr);
+                        }
+                        if (berr != 0) {
+                            store64(err_out, berr);
+                            done = 1;
+                            bx = ch2;
+                            by = cv2;
+                            ci = ns;
+                        }
+                        bx = bx + 1;
+                    }
+                    by = by + 1;
+                }
+                ci = ci + 1;
+            }
+            mi = mi + 1;
+        }
+    }
+    # Did this scan close cleanly? The baseline scan's three tests, unchanged:
+    # fabricated bits, a restart marker out of sequence, unconsumed entropy.
+    # An EOBRUN still running when the scan's blocks are exhausted is a fourth:
+    # the stream promised end-of-band for blocks that do not exist.
+    var unclean = _chitra_jpeg_br_eod(&reader);
+    if (_chitra_jpeg_br_damaged(&reader) == 1) { unclean = 1; }
+    if (load64(err_out) == 0) {
+        if (_chitra_jpeg_br_tail_clean(&reader) == 0) { unclean = 1; }
+        if (eob != 0) { unclean = 1; }
+    }
+    store64(unclean_out, unclean);
+    if (load64(err_out) != 0) { return 0; }
+    return 1;
+}
+
+# ================================================================
+# _chitra_jpeg_decode_progressive — the progressive driver. Called by
+# _chitra_jpeg_decode_scans after GATE 0 and the structural GATE 2, so no
+# buffer below is paid for by a file whose entropy bytes cannot fund it.
+#
+# Scans run until EOI. A file that ENDS before EOI (truncated between or inside
+# scans) still decodes, with seen_iend = 0, as long as every component has had
+# its DC scan — the partial-progressive image libjpeg also produces ("Premature
+# end of JPEG file"). A component with no DC at all is refused, as baseline
+# refuses an omitted component: zero coefficients are a plausible-looking
+# wrong image, not a partial one.
+# ================================================================
+fn _chitra_jpeg_decode_progressive(frame, src, len, err_out): i64 {
+    store64(err_out, 0);
+    var ctx = _chitra_jpeg_frame_ctx(frame);
+    var ncomp = _chitra_jpeg_frame_num_components(frame);
+    var w = _chitra_jpeg_frame_width(frame);
+    var h = _chitra_jpeg_frame_height(frame);
+    var ps = _chitra_alloc(ctx, _CHITRA_PS_SIZE);
+    if (ps == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
+    var i = 0;
+    while (i < _CHITRA_PS_SIZE / 8) {
+        store64(ps + i * 8, 0);
+        i = i + 1;
+    }
+    i = 0;
+    while (i < 256) {
+        store64(ps + _CHITRA_PS_BITS + i * 8, 0 - 1);
+        i = i + 1;
+    }
+
+    var sos_off = _chitra_jpeg_frame_sos_offset(frame);
+    var entropy_start = 0;
+    var espan = 0;
+    var endmark = 0;
+    var total_espan = 0;
+    var any_unclean = 0;
+    var unclean = 0;
+    var saw_eoi = 0;
+    var nscans = 0;
+    var done = 0;
+    while (done == 0) {
+        # The scan ceiling's backstop: the pre-pass counted the same scan
+        # headers, so this cannot fire while the two walks agree (an
+        # equivalent mutant, kept as the bound of record — GATE 2's shape).
+        nscans = nscans + 1;
+        if (nscans > _CHITRA_MAX_PROG_SCANS) {
+            store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
+            return 0;
+        }
+        entropy_start = _chitra_jpeg_parse_sos(frame, src, len, sos_off, err_out);
+        if (load64(err_out) != 0) {
+            # A later scan header cut short by the end of the input is the
+            # same truncation as a cut between scans (below): what decoded so
+            # far is the image. The FIRST header has no scans before it.
+            if (nscans == 1) { return 0; }
+            if (chitra_err_code(load64(err_out)) != CHITRA_ERR_TRUNCATED) { return 0; }
+            store64(err_out, 0);
+            done = 1;
+        }
+        if (done == 0) {
+            espan = _chitra_jpeg_entropy_span(src, len, entropy_start, &endmark);
+            total_espan = total_espan + espan;
+            unclean = 0;
+            if (_chitra_jpeg_prog_scan(frame, src, entropy_start, espan, ps, &unclean, err_out) == 0) {
+                return 0;
+            }
+            if (unclean == 1) { any_unclean = 1; }
+            sos_off = _chitra_jpeg_resume_to_next_scan(frame, src, len, entropy_start + espan, err_out);
+            if (load64(err_out) != 0) {
+                # The input ended between scans: what decoded so far is the image.
+                if (chitra_err_code(load64(err_out)) != CHITRA_ERR_TRUNCATED) { return 0; }
+                store64(err_out, 0);
+                sos_off = 0;
+            } else {
+                if (sos_off == 0) { saw_eoi = 1; }
+            }
+            if (sos_off == 0) { done = 1; }
+        }
+    }
+
+    # GATE 2's backstop, as in the baseline driver: the summed spans of the
+    # scans actually decoded.
+    if (w * h * 4 > total_espan * CHITRA_MAX_JPEG_RATIO) {
+        store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
+        return 0;
+    }
+
+    # ---- dequantize + IDCT every block into the planes ----
+    var planes[32];
+    var comppw[32];
+    var zz = _chitra_alloc(ctx, 512);
+    if (zz == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
+    i = 0;
+    while (i < 64) {
+        store64(zz + i * 8, 0);
+        i = i + 1;
+    }
+    var ci = 0;
+    var buf = 0;
+    var bw = 0;
+    var bh = 0;
+    var pw = 0;
+    var plane = 0;
+    var q = 0;
+    var bx = 0;
+    var by = 0;
+    var blk = 0;
+    var n = 0;
+    while (ci < CHITRA_MAX_COMPONENTS) {
+        store64(&planes + ci * 8, 0);
+        store64(&comppw + ci * 8, 0);
+        ci = ci + 1;
+    }
+    ci = 0;
+    while (ci < ncomp) {
+        if (load64(ps + _CHITRA_PS_BITS + ci * 512) < 0) {
+            store64(err_out, chitra_err(CHITRA_ERR_JPEG_SOS));
+            return 0;
+        }
+        buf = load64(ps + _CHITRA_PS_COEF + ci * 8);
+        bw = load64(ps + _CHITRA_PS_BW + ci * 8);
+        bh = load64(ps + _CHITRA_PS_BH + ci * 8);
+        pw = bw * 8;
+        if (pw * bh * 8 > _chitra_lim_raw(ctx)) {
+            store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
+            return 0;
+        }
+        plane = _chitra_alloc(ctx, pw * bh * 8);
+        if (plane == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
+        store64(&planes + ci * 8, plane);
+        store64(&comppw + ci * 8, pw);
+        q = ps + _CHITRA_PS_Q + ci * 512;
+        by = 0;
+        while (by < bh) {
+            bx = 0;
+            while (bx < bw) {
+                blk = buf + (by * bw + bx) * 128;
+                n = 0;
+                while (n < 64) {
+                    store64(zz + n * 8, _chitra_jpeg_i16(load16(blk + n * 2)) * load64(q + n * 8));
+                    n = n + 1;
+                }
+                _chitra_jpeg_idct_nat(zz, plane + by * 8 * pw + bx * 8, pw);
+                bx = bx + 1;
+            }
+            by = by + 1;
+        }
+        ci = ci + 1;
+    }
+
+    var closed = 1;
+    if (any_unclean == 1) { closed = 0; }
+    if (saw_eoi == 0) { closed = 0; }
+    return _chitra_jpeg_build_image(frame, &planes, &comppw, closed, err_out);
+}

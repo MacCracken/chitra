@@ -22,13 +22,18 @@
 #   +272  valptr[0..16]    (17 i64) — huffval index of first symbol of length L
 #   +408  count            (1 i64)  — number of symbols (Σ BITS)
 #   +416  huffval[0..255]  (256 i64)— symbol values, in DHT order
+#   +2464 look[0..511]     (512 u16)— 9-bit lookahead (1.4.0): for every 9-bit
+#                                     prefix whose code is at most 9 bits long,
+#                                     (length << 8) | symbol; 0 = longer code
+#                                     (or none), resolved bit-serially
 # ================================================================
 var _CHITRA_HT_MINCODE = 0;
 var _CHITRA_HT_MAXCODE = 136;    # 17*8
 var _CHITRA_HT_VALPTR  = 272;    # 34*8
 var _CHITRA_HT_COUNT   = 408;    # 51*8
 var _CHITRA_HT_HUFFVAL = 416;    # 52*8
-var _CHITRA_HT_SIZE    = 2464;   # (52 + 256) * 8
+var _CHITRA_HT_LOOK    = 2464;   # (52 + 256) * 8
+var _CHITRA_HT_SIZE    = 3488;   # + 512 * 2
 
 fn _chitra_jpeg_huff_mincode(t, L): i64 { return load64(t + _CHITRA_HT_MINCODE + L * 8); }
 fn _chitra_jpeg_huff_maxcode(t, L): i64 { return load64(t + _CHITRA_HT_MAXCODE + L * 8); }
@@ -82,7 +87,52 @@ fn _chitra_jpeg_huff_build(table, bits): i64 {
             }
         }
     }
-    return rc;
+    if (rc != 0) { return rc; }
+    _chitra_jpeg_huff_build_look(table);
+    return 0;
+}
+
+# The 9-bit lookahead (1.4.0, decode-throughput issue). T.81 F.2.2.3's DECODE
+# walks one bit per step against maxcode[L]; libjpeg (jdhuff.c HUFF_LOOKAHEAD)
+# and every fast decoder resolve most codes with one table lookup instead.
+# Each code of length L <= 9 owns the 2^(9-L) prefixes that begin with it; a
+# prefix no such code owns stays 0 and DECODE falls back to the bit-serial
+# walk. Only indices inside the table's symbol list are entered, so a lookup
+# can never return a symbol the serial walk would refuse (idx >= count).
+fn _chitra_jpeg_huff_build_look(table): i64 {
+    var look = table + _CHITRA_HT_LOOK;
+    var i = 0;
+    while (i < 512) {
+        store16(look + i * 2, 0);
+        i = i + 1;
+    }
+    var count = load64(table + _CHITRA_HT_COUNT);
+    var L = 1;
+    var c = 0;
+    var cmax = 0;
+    var idx = 0;
+    var sym = 0;
+    var p = 0;
+    var pend = 0;
+    while (L <= 9) {
+        cmax = load64(table + _CHITRA_HT_MAXCODE + L * 8);
+        c = load64(table + _CHITRA_HT_MINCODE + L * 8);
+        while (c <= cmax) {
+            idx = load64(table + _CHITRA_HT_VALPTR + L * 8) + c - load64(table + _CHITRA_HT_MINCODE + L * 8);
+            if (idx < count) {
+                sym = load64(table + _CHITRA_HT_HUFFVAL + idx * 8) & 255;
+                p = c << (9 - L);
+                pend = (c + 1) << (9 - L);
+                while (p < pend) {
+                    store16(look + p * 2, (L << 8) | sym);
+                    p = p + 1;
+                }
+            }
+            c = c + 1;
+        }
+        L = L + 1;
+    }
+    return 0;
 }
 
 # ================================================================
@@ -90,8 +140,25 @@ fn _chitra_jpeg_huff_build(table, bits): i64 {
 # pull over the entropy-coded segment after SOS. A 0xFF in the stream is either
 # followed by 0x00 (a stuffing byte to discard, the 0xFF is real data) or by a
 # marker code (RSTn / EOI / ...), at which point the reader stops and records
-# the marker; subsequent bit reads pad with zeros. The 72-byte record:
-#   +0 base  +8 pos  +16 end  +24 buf (current byte)  +32 cnt (bits left in buf)
+# the marker; subsequent bit reads pad with zeros.
+#
+# 1.4.0 — a WORD buffer, not a byte one. `buf` accumulates whole data bytes
+# (up to 56 bits, refilled by _chitra_jpeg_br_fill when fewer than ~32 remain)
+# and `cnt` counts the unconsumed bits at its low end. Through 1.3.x it held
+# one byte and every bit was a function call. Three facts the old byte reader
+# gave for free are kept by construction, and each is pinned by a test:
+#   - BITS ARE FABRICATED ONLY ON DEMAND. The refill stops silently at the end
+#     of the span or at a marker; _CHITRA_BR_EOD is set only when a consumer
+#     asks for more bits than `cnt` holds — the B-5 fabrication point.
+#   - A RESTART sees exactly the bytes the old reader saw: whole unconsumed
+#     data bytes are `cnt >= 8`, i.e. the byte at the old reader's `pos`
+#     would have been data, so the resync refuses as before.
+#   - THE TAIL CHECK likewise: `cnt >= 8` after the last MCU is a data byte
+#     no MCU used; fewer is the last byte's padding, as before.
+# The refill stops AT a marker (the 0xFF run and its code are never put in the
+# buffer), so prefetching can never consume a marker the old reader would have
+# stopped in front of. The 72-byte record:
+#   +0 base  +8 pos  +16 end  +24 buf (bit accumulator)  +32 cnt (bits in buf)
 #   +40 marker (the marker byte after a 0xFF, or 0)
 #   +48 eod — set when the reader needs a byte its span does not contain, which
 #             is what distinguishes "ran out of scan" from a real EOI (0.7.0)
@@ -149,6 +216,9 @@ fn _chitra_jpeg_br_damaged(reader): i64 { return load64(reader + _CHITRA_BR_DAMA
 # Returns 0 on success (including "the span is exhausted" — see below), -1 if
 # something other than a restart marker sits where one must be.
 fn _chitra_jpeg_br_restart(reader): i64 {
+    # A whole unconsumed data byte in the word buffer is the 1.3.x reader's
+    # "the byte at pos is data, not 0xFF": refuse, exactly as it did.
+    if (load64(reader + _CHITRA_BR_CNT) >= 8) { return 0 - 1; }
     store64(reader + _CHITRA_BR_CNT, 0);
     var base = load64(reader + _CHITRA_BR_BASE);
     var pos = load64(reader + _CHITRA_BR_POS);
@@ -205,6 +275,8 @@ fn _chitra_jpeg_br_restart(reader): i64 {
 # reports it as "N extraneous bytes before marker". A trailing RSTn is tolerated
 # because libjpeg is silent about one: it is a marker, not data.
 fn _chitra_jpeg_br_tail_clean(reader): i64 {
+    # A whole data byte still in the word buffer is entropy data no MCU used.
+    if (load64(reader + _CHITRA_BR_CNT) >= 8) { return 0; }
     var base = load64(reader + _CHITRA_BR_BASE);
     var i = load64(reader + _CHITRA_BR_POS);
     var end = load64(reader + _CHITRA_BR_END);
@@ -249,58 +321,68 @@ fn _chitra_jpeg_br_tail_clean(reader): i64 {
     return clean;
 }
 
-# Load one data byte (8 bits) into the buffer. Only called when CNT == 0. On a
-# stuffing pair (FF 00) the 0xFF is loaded and the 0x00 discarded. On a marker
-# (FF xx, xx != 0) or end-of-data, the marker is recorded (xx, or EOI for a
-# trailing lone FF) and CNT is left 0 so callers pad with zero bits.
-fn _chitra_jpeg_br_load_byte(reader): i64 {
+# Refill the word buffer with whole data bytes until it holds more than 48
+# bits, the span ends, or a marker is reached. On a stuffing pair (FF 00) the
+# 0xFF is data and the 0x00 is discarded; a run of 0xFF fill bytes (§ B.1.1.2)
+# collapses to the marker it precedes. On a marker (FF xx, xx != 0), or a
+# trailing 0xFF run with nothing after it (an EOI synthesized, not read), the
+# marker is latched and `pos` left on the LAST 0xFF, which is where the restart
+# resync expects it. NOTHING HERE SETS _CHITRA_BR_EOD: running out is only
+# fabrication once a consumer asks for a bit that is not there.
+fn _chitra_jpeg_br_fill(reader): i64 {
     if (load64(reader + _CHITRA_BR_MARKER) != 0) { return 0; }
     var base = load64(reader + _CHITRA_BR_BASE);
     var pos = load64(reader + _CHITRA_BR_POS);
     var end = load64(reader + _CHITRA_BR_END);
+    var buf = load64(reader + _CHITRA_BR_BUF);
+    var cnt = load64(reader + _CHITRA_BR_CNT);
     var b = 0;
-    var b2 = 0;
-    if (pos >= end) {
-        store64(reader + _CHITRA_BR_EOD, 1);
-        return 0;
-    }
-    b = load8(base + pos);
-    pos = pos + 1;
-    if (b == 0xFF) {
-        # T.81 § B.1.1.2: a marker may be preceded by ANY number of 0xFF fill
-        # bytes. Collapse the run so "FF FF D0" resolves to RST0 instead of a
-        # bogus marker 0xFF — which made _chitra_jpeg_br_restart reject a perfectly
-        # well-formed restart stream. `b` stays 0xFF (every byte in the run is
-        # the same value), and pos-1 still points at the LAST 0xFF, which is
-        # exactly where the restart resync expects to find it.
-        var fill = 1;
-        while (fill == 1) {
-            fill = 0;
-            if (pos < end) {
-                if (load8(base + pos) == 0xFF) {
-                    pos = pos + 1;
-                    fill = 1;
+    var q = 0;
+    var go = 1;
+    var fill = 0;
+    while (go == 1) {
+        if (cnt > 48) { go = 0; }
+        if (go == 1) {
+            if (pos >= end) { go = 0; }
+        }
+        if (go == 1) {
+            b = load8(base + pos);
+            if (b != 0xFF) {
+                buf = (buf << 8) | b;
+                cnt = cnt + 8;
+                pos = pos + 1;
+            } else {
+                q = pos + 1;
+                fill = 1;
+                while (fill == 1) {
+                    fill = 0;
+                    if (q < end) {
+                        if (load8(base + q) == 0xFF) {
+                            q = q + 1;
+                            fill = 1;
+                        }
+                    }
+                }
+                if (q >= end) {
+                    store64(reader + _CHITRA_BR_MARKER, 0xD9);
+                    pos = q - 1;
+                    go = 0;
+                } else {
+                    if (load8(base + q) == 0x00) {
+                        buf = (buf << 8) | 0xFF;
+                        cnt = cnt + 8;
+                        pos = q + 1;
+                    } else {
+                        store64(reader + _CHITRA_BR_MARKER, load8(base + q));
+                        pos = q - 1;
+                        go = 0;
+                    }
                 }
             }
         }
-        if (pos >= end) {
-            # A trailing 0xFF run with nothing after it. The EOI is synthesized,
-            # not read — so this is end-of-data, not a clean close.
-            store64(reader + _CHITRA_BR_MARKER, 0xD9);
-            store64(reader + _CHITRA_BR_EOD, 1);
-            store64(reader + _CHITRA_BR_POS, pos - 1);
-            return 0;
-        }
-        b2 = load8(base + pos);
-        if (b2 == 0x00) { pos = pos + 1; }     # stuffing — discard, keep 0xFF
-        if (b2 != 0x00) {
-            store64(reader + _CHITRA_BR_MARKER, b2);
-            store64(reader + _CHITRA_BR_POS, pos - 1);  # leave pos at the 0xFF for resync
-            return 0;
-        }
     }
-    store64(reader + _CHITRA_BR_BUF, b);
-    store64(reader + _CHITRA_BR_CNT, 8);
+    store64(reader + _CHITRA_BR_BUF, buf);
+    store64(reader + _CHITRA_BR_CNT, cnt);
     store64(reader + _CHITRA_BR_POS, pos);
     return 0;
 }
@@ -309,19 +391,18 @@ fn _chitra_jpeg_br_load_byte(reader): i64 {
 fn _chitra_jpeg_br_bit(reader): i64 {
     var cnt = load64(reader + _CHITRA_BR_CNT);
     if (cnt == 0) {
-        _chitra_jpeg_br_load_byte(reader);
+        _chitra_jpeg_br_fill(reader);
         cnt = load64(reader + _CHITRA_BR_CNT);
     }
     # ⛔⛔ B-5 (1.0.3) — THE FABRICATION POINT, AND THEREFORE THE ONLY HONEST
     # PLACE TO SET _CHITRA_BR_EOD. Reaching here means a bit was asked for and the scan
     # could not supply it, so the zero returned below is invented. That is
-    # precisely what _CHITRA_BR_EOD is defined to mean twenty lines above: "set the
-    # moment the reader needs a byte the input does not contain."
+    # precisely what _CHITRA_BR_EOD is defined to mean: "set the moment the
+    # reader needs a byte the input does not contain."
     #
-    # `_chitra_jpeg_br_load_byte` already set it for a span that simply ran out. What
-    # it did NOT set it for was a LATCHED MARKER — and the only markers inside
-    # a scan's span are RSTn, because _chitra_jpeg_entropy_span ends the span at the
-    # first marker that is neither stuffing nor a restart. So an RSTn the
+    # A LATCHED MARKER is the case 1.0.2 missed: the only markers inside a
+    # scan's span are RSTn, because _chitra_jpeg_entropy_span ends the span at
+    # the first marker that is neither stuffing nor a restart. So an RSTn the
     # decoder never asked for (no DRI, DRI=0, or the wrong interval) latched,
     # every subsequent MCU was fabricated from zero bits, and `seen_iend` still
     # came back 1 — a positive assertion of a clean close over an image whose
@@ -331,6 +412,9 @@ fn _chitra_jpeg_br_bit(reader): i64 {
     # also latches, and `_chitra_jpeg_br_restart` then consumes it and clears
     # _CHITRA_BR_MARKER. Nothing is fabricated on that path and it must keep reporting
     # a clean close. Fabrication, not latching, is the event worth recording.
+    # The same rule governs every multi-bit read below: _chitra_jpeg_br_bits,
+    # _chitra_jpeg_decode and _chitra_jpeg_decode_block set _CHITRA_BR_EOD exactly
+    # when they consume more bits than the buffer holds after a refill.
     if (cnt == 0) {
         store64(reader + _CHITRA_BR_EOD, 1);
         return 0;
@@ -340,15 +424,24 @@ fn _chitra_jpeg_br_bit(reader): i64 {
     return (load64(reader + _CHITRA_BR_BUF) >> cnt) & 1;
 }
 
-# RECEIVE: read n bits as an unsigned value (T.81 § F.2.2.4).
+# RECEIVE: read n bits (n <= 16) as an unsigned value (T.81 § F.2.2.4). Bits
+# the scan does not have read as 0 and set _CHITRA_BR_EOD, as above.
 fn _chitra_jpeg_br_bits(reader, n): i64 {
-    var v = 0;
-    var i = 0;
-    while (i < n) {
-        v = (v << 1) | _chitra_jpeg_br_bit(reader);
-        i = i + 1;
+    if (n == 0) { return 0; }
+    var cnt = load64(reader + _CHITRA_BR_CNT);
+    if (cnt < n) {
+        _chitra_jpeg_br_fill(reader);
+        cnt = load64(reader + _CHITRA_BR_CNT);
     }
-    return v;
+    var buf = load64(reader + _CHITRA_BR_BUF);
+    var mask = (1 << n) - 1;
+    if (n > cnt) {
+        store64(reader + _CHITRA_BR_EOD, 1);
+        store64(reader + _CHITRA_BR_CNT, 0);
+        return (buf << (n - cnt)) & mask;
+    }
+    store64(reader + _CHITRA_BR_CNT, cnt - n);
+    return (buf >> (cnt - n)) & mask;
 }
 
 # EXTEND a value received with n bits to its signed coefficient (T.81 § F.2.2.1,
@@ -361,24 +454,67 @@ fn _chitra_jpeg_extend(v, n): i64 {
     return v;
 }
 
-# DECODE a single Huffman-coded symbol (T.81 § F.2.2.3, figure F.16). Walks the
-# maxcode table, extending the code one bit per length until it fits. Returns
+# DECODE a single Huffman-coded symbol (T.81 § F.2.2.3, figure F.16). Returns
 # the symbol (0..255), or -1 on an undecodable code (no length matched, or an
 # index outside the table's symbol list — incomplete-table defense).
+#
+# 1.4.0: a 9-bit lookahead resolves every code of 9 bits or fewer in one
+# lookup (_chitra_jpeg_huff_build_look). A longer code continues from L = 10
+# against maxcode[L] while the buffer holds 16 real bits; within 16 bits of the
+# end of the scan the walk is the original one-bit-at-a-time DECODE, so the
+# fabrication point stays exactly where it was.
 fn _chitra_jpeg_decode(reader, table): i64 {
-    var code = _chitra_jpeg_br_bit(reader);
-    var L = 1;
-    var maxc = _chitra_jpeg_huff_maxcode(table, 1);
-    var done = 0;
+    var cnt = load64(reader + _CHITRA_BR_CNT);
+    if (cnt < 16) {
+        _chitra_jpeg_br_fill(reader);
+        cnt = load64(reader + _CHITRA_BR_CNT);
+    }
+    var buf = load64(reader + _CHITRA_BR_BUF);
+    var p = 0;
+    if (cnt >= 9) { p = (buf >> (cnt - 9)) & 511; } else { p = (buf << (9 - cnt)) & 511; }
+    var e = load16(table + _CHITRA_HT_LOOK + p * 2);
+    var L = 0;
+    if (e != 0) {
+        L = e >> 8;
+        if (L > cnt) {
+            store64(reader + _CHITRA_BR_EOD, 1);
+            store64(reader + _CHITRA_BR_CNT, 0);
+        } else {
+            store64(reader + _CHITRA_BR_CNT, cnt - L);
+        }
+        return e & 255;
+    }
+    var code = 0;
     var bad = 0;
-    while (done == 0) {
-        if (code <= maxc) { done = 1; }
-        if (done == 0) {
-            L = L + 1;
-            if (L > 16) { done = 1; bad = 1; }
+    var done = 0;
+    if (cnt >= 16) {
+        # No code of 9 bits or fewer owns this prefix, so the walk resumes at
+        # L = 10 with all the bits it needs already in the buffer.
+        L = 10;
+        code = (buf >> (cnt - 10)) & 1023;
+        while (done == 0) {
+            if (code <= load64(table + _CHITRA_HT_MAXCODE + L * 8)) { done = 1; }
             if (done == 0) {
-                code = (code << 1) | _chitra_jpeg_br_bit(reader);
-                maxc = _chitra_jpeg_huff_maxcode(table, L);
+                L = L + 1;
+                if (L > 16) { done = 1; bad = 1; }
+                if (done == 0) { code = (buf >> (cnt - L)) & ((1 << L) - 1); }
+            }
+        }
+        if (bad == 0) { store64(reader + _CHITRA_BR_CNT, cnt - L); }
+        if (bad == 1) { store64(reader + _CHITRA_BR_CNT, cnt - 16); }
+    } else {
+        code = _chitra_jpeg_br_bit(reader);
+        L = 1;
+        var maxc = _chitra_jpeg_huff_maxcode(table, 1);
+        while (done == 0) {
+            if (code <= maxc) { done = 1; }
+            if (done == 0) {
+                L = L + 1;
+                if (L > 16) { done = 1; bad = 1; }
+                if (done == 0) {
+                    code = (code << 1) | _chitra_jpeg_br_bit(reader);
+                    maxc = _chitra_jpeg_huff_maxcode(table, L);
+                }
             }
         }
     }
@@ -398,12 +534,35 @@ fn _chitra_jpeg_decode(reader, table): i64 {
 # de-zig-zag is done at dequant). DC is differential against `pred`; AC uses
 # run/size (RRRR/SSSS) coding with ZRL (16-zero run) and EOB (T.81 § F.2.2.2).
 # Returns the new DC predictor value; on a corrupt stream sets *err_out to a
-# CHITRA_ERR_JPEG_ENTROPY ChitraErr and returns 0.
+# CHITRA_ERR_JPEG_ENTROPY ChitraErr and returns 0. The decoder itself calls
+# _chitra_jpeg_decode_coefs with a quant table; this form is the unit-level
+# view of the same entropy decode.
 fn _chitra_jpeg_decode_block(reader, dct, act, pred, zz_out, err_out): i64 {
-    store64(err_out, 0);
     var i = 0;
-    while (i < 64) { store64(zz_out + i * 8, 0); i = i + 1; }
+    while (i < 64) {
+        store64(zz_out + i * 8, 0);
+        i = i + 1;
+    }
+    return _chitra_jpeg_decode_coefs(reader, dct, act, pred, 0, zz_out, err_out);
+}
 
+# The entropy decode of one block (T.81 § F.2.2), writing into `coef`:
+#   quant == 0  raw coefficients in ZIG-ZAG order (_chitra_jpeg_decode_block);
+#   quant != 0  coefficients DEQUANTIZED by `quant` (64 i64, zig-zag order)
+#               and placed in NATURAL order, ready for _chitra_jpeg_idct_nat.
+# Only non-zero coefficients are written: `coef` must be all-zero on entry,
+# which _chitra_jpeg_idct_nat restores after reading it.
+#
+# 1.4.0: the AC loop keeps the bit buffer in locals and decodes each symbol by
+# the lookahead table, refilling when fewer than 32 bits remain — enough for a
+# 16-bit code and its 11-bit value, so a value read can only run short where
+# the scan itself has ended (and then it fabricates, setting _CHITRA_BR_EOD).
+# The stored DC coefficient is the predictor wrapped to 16 bits, as libjpeg's
+# JCOEF stores it; valid files never come near the wrap, and it bounds every
+# product the IDCT forms from a hostile DC that drifts block after block.
+fn _chitra_jpeg_decode_coefs(reader, dct, act, pred, quant, coef, err_out): i64 {
+    store64(err_out, 0);
+    var zzt = _chitra_jpeg_zigzag_table();
     var t = _chitra_jpeg_decode(reader, dct);
     if (t < 0) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY)); return 0; }
     # DC magnitude category: 0..11 for 8-bit baseline (T.81 Table F.1).
@@ -411,52 +570,102 @@ fn _chitra_jpeg_decode_block(reader, dct, act, pred, zz_out, err_out): i64 {
     var diff = 0;
     if (t > 0) { diff = _chitra_jpeg_extend(_chitra_jpeg_br_bits(reader, t), t); }
     var dc = pred + diff;
-    store64(zz_out + 0, dc);
+    var dcq = ((dc + 32768) & 65535) - 32768;
+    if (quant == 0) { store64(coef, dcq); } else { store64(coef, dcq * load64(quant)); }
 
+    var look = act + _CHITRA_HT_LOOK;
+    var buf = load64(reader + _CHITRA_BR_BUF);
+    var cnt = load64(reader + _CHITRA_BR_CNT);
+    var eod = 0;
     var k = 1;
     var rs = 0;
     var r = 0;
     var s = 0;
+    var p = 0;
+    var e = 0;
+    var L = 0;
+    var v = 0;
+    var bad = 0;
     var done = 0;
     while (done == 0) {
         if (k > 63) { done = 1; }
         if (done == 0) {
-            rs = _chitra_jpeg_decode(reader, act);
-            if (rs < 0) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY)); done = 1; }
-            if (done == 0) {
-                r = (rs >> 4) & 15;
-                s = rs & 15;
-                # AC magnitude category: 0..10 for 8-bit baseline (T.81 Table F.2);
-                # s==0 is EOB (r==0) or ZRL (r==15). s in 11..15 is out of spec.
-                if (s > 10) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY)); done = 1; }
+            if (cnt < 32) {
+                store64(reader + _CHITRA_BR_BUF, buf);
+                store64(reader + _CHITRA_BR_CNT, cnt);
+                _chitra_jpeg_br_fill(reader);
+                buf = load64(reader + _CHITRA_BR_BUF);
+                cnt = load64(reader + _CHITRA_BR_CNT);
             }
-            if (done == 0) {
-                if (s == 0) {
-                    if (r == 15) {
-                        # ZRL: a run of 16 zeros, filling k..k+15. Legal only
-                        # while that run ends inside the block. Overrunning it
-                        # is exactly as corrupt as the r-run overrun rejected
-                        # below, and used to slip out of the loop as a CLEAN
-                        # decode — a corrupt stream reported as success.
-                        k = k + 16;
-                        if (k > 64) {
-                            store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY));
-                            done = 1;
-                        }
-                    }
-                    if (r != 15) { done = 1; }     # EOB: remaining coeffs are zero
+            if (cnt >= 9) { p = (buf >> (cnt - 9)) & 511; } else { p = (buf << (9 - cnt)) & 511; }
+            e = load16(look + p * 2);
+            if (e != 0) {
+                L = e >> 8;
+                rs = e & 255;
+                if (L > cnt) {
+                    eod = 1;
+                    cnt = 0;
+                } else {
+                    cnt = cnt - L;
                 }
-                if (s != 0) {
-                    k = k + r;
-                    if (k > 63) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY)); done = 1; }
-                    if (done == 0) {
-                        store64(zz_out + k * 8, _chitra_jpeg_extend(_chitra_jpeg_br_bits(reader, s), s));
-                        k = k + 1;
+            } else {
+                store64(reader + _CHITRA_BR_BUF, buf);
+                store64(reader + _CHITRA_BR_CNT, cnt);
+                rs = _chitra_jpeg_decode(reader, act);
+                buf = load64(reader + _CHITRA_BR_BUF);
+                cnt = load64(reader + _CHITRA_BR_CNT);
+            }
+            if (rs < 0) { bad = 1; done = 1; }
+        }
+        if (done == 0) {
+            r = (rs >> 4) & 15;
+            s = rs & 15;
+            # AC magnitude category: 0..10 for 8-bit baseline (T.81 Table F.2);
+            # s==0 is EOB (r==0) or ZRL (r==15). s in 11..15 is out of spec.
+            if (s > 10) { bad = 1; done = 1; }
+        }
+        if (done == 0) {
+            if (s == 0) {
+                if (r == 15) {
+                    # ZRL: a run of 16 zeros, filling k..k+15. Legal only
+                    # while that run ends inside the block. Overrunning it
+                    # is exactly as corrupt as the r-run overrun rejected
+                    # below, and used to slip out of the loop as a CLEAN
+                    # decode — a corrupt stream reported as success.
+                    k = k + 16;
+                    if (k > 64) { bad = 1; done = 1; }
+                }
+                if (r != 15) { done = 1; }     # EOB: remaining coeffs are zero
+            }
+            if (s != 0) {
+                k = k + r;
+                if (k > 63) { bad = 1; done = 1; }
+                if (done == 0) {
+                    if (s > cnt) {
+                        v = (buf << (s - cnt)) & ((1 << s) - 1);
+                        eod = 1;
+                        cnt = 0;
+                    } else {
+                        v = (buf >> (cnt - s)) & ((1 << s) - 1);
+                        cnt = cnt - s;
                     }
+                    if (v < (1 << (s - 1))) { v = v - (1 << s) + 1; }
+                    if (quant == 0) {
+                        store64(coef + k * 8, v);
+                    } else {
+                        store64(coef + load64(zzt + k * 8) * 8, v * load64(quant + k * 8));
+                    }
+                    k = k + 1;
                 }
             }
         }
     }
-    if (load64(err_out) != 0) { return 0; }
+    store64(reader + _CHITRA_BR_BUF, buf);
+    store64(reader + _CHITRA_BR_CNT, cnt);
+    if (eod == 1) { store64(reader + _CHITRA_BR_EOD, 1); }
+    if (bad == 1) {
+        store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY));
+        return 0;
+    }
     return dc;
 }

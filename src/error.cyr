@@ -31,10 +31,13 @@ enum ChitraErrCode {
     #          YCCK) or does not recognise (> 2), and only where the transform
     #          DECIDES the colour space: a 3-component frame with no JFIF APP0,
     #          judged at the first SOS (1.1.1). A grey or JFIF frame ignores the
-    #          byte; a 4-component frame is CHITRA_ERR_JPEG_COMPONENTS at SOF0.
+    #          byte; a 4-component frame is CHITRA_ERR_JPEG_COMPONENTS at SOF0
+    #          on the RGBA entries, and on chitra_jpeg_decode_cmyk (1.4.0) an
+    #          Adobe transform other than 0 (CMYK) or 2 (YCCK) is declined here.
     #          Guessing YCbCr for it is the defect ADR 0009 exists to prevent.
-    # It does NOT cover the non-baseline JPEG modes — progressive, arithmetic,
-    # 12-bit, hierarchical and CMYK each carry their own code (19..23) — and as
+    # It does NOT cover the non-baseline JPEG modes — arithmetic, 12-bit,
+    # hierarchical and a refused component count each carry their own code
+    # (20..23; 19, progressive, is unreachable since 1.4.0) — and as
     # of 0.8.0 it no longer covers any JPEG scan geometry, which now decodes.
     CHITRA_ERR_UNSUPPORTED = 4;
     CHITRA_ERR_INFLATE    = 5;   # sankoch zlib_decompress reported failure
@@ -52,11 +55,15 @@ enum ChitraErrCode {
     CHITRA_ERR_JPEG_DHT         = 16;  # malformed DHT / Huffman-table build failure
     CHITRA_ERR_JPEG_SOS         = 17;  # malformed SOS scan header (selectors / table refs)
     CHITRA_ERR_JPEG_ENTROPY     = 18;  # corrupt entropy stream (undecodable code / bit overrun / bad RSTn)
-    CHITRA_ERR_JPEG_PROGRESSIVE = 19;  # progressive DCT (SOF2): open, a roadmap "1.x candidate"
+    # 19: progressive DCT (SOF2) — UNREACHABLE since 1.4.0, which decodes it;
+    # kept because the enum's values are frozen.
+    CHITRA_ERR_JPEG_PROGRESSIVE = 19;
     CHITRA_ERR_JPEG_ARITHMETIC  = 20;  # arithmetic coding (SOF9/10/11, DAC): permanent, roadmap Out of scope
     CHITRA_ERR_JPEG_PRECISION   = 21;  # sample precision != 8 (12-bit): permanent, roadmap Out of scope
     CHITRA_ERR_JPEG_MODE        = 22;  # hierarchical/lossless/differential SOF: permanent; SOF1: 1.x candidate
-    CHITRA_ERR_JPEG_COMPONENTS  = 23;  # 4-component CMYK / YCCK: permanent, roadmap Out of scope
+    # 23: a component count this entry does not take — 4 (CMYK / YCCK) on an
+    # RGBA entry, anything but 4 on chitra_jpeg_decode_cmyk (1.4.0).
+    CHITRA_ERR_JPEG_COMPONENTS  = 23;
     # ---- BMP (0.4.0 BI_RGB; + RLE 0.5.1; + BITFIELDS/16 bpp/V4-V5 0.5.2) ----
     CHITRA_ERR_BMP_HEADER       = 24;  # malformed file header or DIB header (size/planes/offsets)
     CHITRA_ERR_BMP_DEPTH        = 25;  # bpp not in {1,4,8,16,24,32}

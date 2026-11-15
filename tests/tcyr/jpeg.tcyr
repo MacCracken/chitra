@@ -299,13 +299,19 @@ fn test_scan_dqt() {
 # ================================================================
 # Non-baseline modes are rejected with distinct codes
 # ================================================================
+# SOF2 is a frame header chitra PARSES since 1.4.0 (progressive decode —
+# tests/tcyr/jpeg_progressive.tcyr). Through 1.3.x these four bytes refused as
+# CHITRA_ERR_JPEG_PROGRESSIVE (19), which is now unreachable and stays defined
+# because the enum's values are frozen. A bare SOF2 marker is a frame header
+# with nothing after it: truncation.
 fn test_reject_progressive() {
     var lo = 0;
     var b = fx_jpeg4(&lo, 0xFF, 0xD8, 0xFF, 0xC2);   # SOF2
     var err = 0;
     var f = _chitra_jpeg_scan_markers(b, lo, &err);
-    assert_eq(f, 0, "progressive rejected (null frame)");
-    assert_eq(chitra_err_code(err), CHITRA_ERR_JPEG_PROGRESSIVE, "progressive err code");
+    assert_eq(f, 0, "bare SOF2: no frame");
+    assert_eq(chitra_err_code(err), CHITRA_ERR_TRUNCATED,
+      "bare SOF2 is a truncated header, not a refused mode (1.4.0)");
     return 0;
 }
 
@@ -661,6 +667,15 @@ fn test_descale() {
     assert_eq(_chitra_jpeg_descale(2048, 11), 1, "descale(2048,11)=1");
     assert_eq(_chitra_jpeg_descale(0 - 2048, 11), 0 - 1, "descale(-2048,11)=-1");
     assert_eq(_chitra_jpeg_descale(0, 18), 0, "descale(0,18)=0");
+    # Ties round UP, as libjpeg's RIGHT_SHIFT(x + half, n) does (1.4.0).
+    # Through 1.3.x they rounded away from zero, so -1024/2048 = -0.5 gave -1
+    # and chitra differed from djpeg by 1 LSB wherever an IDCT intermediate
+    # landed on a negative half (13 of a 180-file corpus). ⚠ Checked to fail
+    # against 1.3.1.
+    assert_eq(_chitra_jpeg_descale(0 - 1024, 11), 0, "descale(-1024,11) = 0: -0.5 ties up");
+    assert_eq(_chitra_jpeg_descale(1024, 11), 1, "descale(1024,11) = 1: +0.5 ties up");
+    assert_eq(_chitra_jpeg_descale(0 - 3072, 11), 0 - 1, "descale(-3072,11) = -1: -1.5 ties up");
+    assert_eq(_chitra_jpeg_descale(0 - 1025, 11), 0 - 1, "descale(-1025,11) = -1: below the tie");
     return 0;
 }
 
@@ -3581,8 +3596,13 @@ fn test_dqt16_reports_the_frame_mode() {
     _expect_scan_code(fx_jpeg_dqt16_then(&lo, 0xC1), lo, CHITRA_ERR_JPEG_MODE,
       "jpeg-3: 16-bit DQT + SOF1 -> JPEG_MODE (cjpeg -quality 5), not JPEG_DQT");
     var l2 = 0;
-    _expect_scan_code(fx_jpeg_dqt16_then(&l2, 0xC2), l2, CHITRA_ERR_JPEG_PROGRESSIVE,
-      "jpeg-3: 16-bit DQT + SOF2 -> JPEG_PROGRESSIVE");
+    # 1.4.0: a 16-bit table is LEGAL in a progressive frame (libjpeg writes
+    # one there at low quality), so the walk gets past the frame header and
+    # stops where this fixture does — truncation — rather than refusing the
+    # table or the mode. Real 16-bit-table progressive files decode
+    # byte-identically to djpeg in tests/tcyr/jpeg_progressive.tcyr.
+    _expect_scan_code(fx_jpeg_dqt16_then(&l2, 0xC2), l2, CHITRA_ERR_TRUNCATED,
+      "jpeg-3: 16-bit DQT + SOF2 -> parsed; this fixture then ends (TRUNCATED), not JPEG_DQT");
     var l3 = 0;
     _expect_scan_code(fx_jpeg_dqt16_then(&l3, 0xC9), l3, CHITRA_ERR_JPEG_ARITHMETIC,
       "jpeg-3: 16-bit DQT + SOF9 -> JPEG_ARITHMETIC");

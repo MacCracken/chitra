@@ -39,8 +39,10 @@ The realistic threats:
   - Malformed Huffman tables (over-subscribed codes) or out-of-range
     DC/AC magnitude categories and run lengths.
   - Chroma-upsample out-of-bounds on mismatched component dimensions.
-  - Non-baseline modes (progressive, arithmetic, 12-bit, hierarchical / lossless,
-    CMYK) used as an attack surface — chitra rejects all of these outright.
+  - Non-baseline modes (arithmetic, 12-bit, hierarchical / lossless, SOF1) used
+    as an attack surface — chitra rejects all of these outright. Progressive
+    (SOF2) decodes since 1.4.0, behind its own work bound (below); 4-component
+    files decode only through `chitra_jpeg_decode_cmyk`, as samples.
 - **Pathologically large output** — a small input declaring extreme dimensions,
   producing an output frame that exhausts the consumer's memory.
 
@@ -67,7 +69,7 @@ decode. Each maps to a `ChitraErrCode`
 
 - ✅ **PNG signature check** — the 8-byte magic is length-validated and matched
   before any chunk is read (`chitra_png_check_signature`,
-  [`src/png_chunks.cyr:197`](src/png_chunks.cyr)). Failure →
+  [`src/png_chunks.cyr:314`](src/png_chunks.cyr)). Failure →
   `CHITRA_ERR_SIGNATURE`.
 - ✅ **Self-validating bounds-checked cursor** — every read goes through a
   cursor that rejects negative lengths and reads past the end of the input
@@ -75,7 +77,7 @@ decode. Each maps to a `ChitraErrCode`
   Failure → `CHITRA_ERR_TRUNCATED`.
 - ✅ **Per-chunk CRC-32 validation** — every chunk (IHDR included) is verified
   with `sankoch`'s `crc32` against its trailing CRC (e.g. the IHDR check at
-  [`src/png_filter.cyr:154`](src/png_filter.cyr)); a mismatch aborts the decode
+  [`src/png_filter.cyr:184`](src/png_filter.cyr)); a mismatch aborts the decode
   rather than accepting corrupt or tampered data. Failure → `CHITRA_ERR_CRC`.
 - ✅ **Dimension caps before any multiply** — IHDR `width`/`height` are rejected
   if zero/negative or over the per-side cap `CHITRA_MAX_DIM = 65535`, *before*
@@ -86,7 +88,7 @@ decode. Each maps to a `ChitraErrCode`
 - ✅ **Decompression-bomb ratio cap** — the ratio of inflated output to
   compressed IDAT input is bounded by `CHITRA_MAX_INFLATE_RATIO = 1100`
   (constant in [`src/png_chunks.cyr:43`](src/png_chunks.cyr); checked at
-  [`src/png_filter.cyr:651`](src/png_filter.cyr)), just above DEFLATE's
+  [`src/png_filter.cyr:687`](src/png_filter.cyr)), just above DEFLATE's
   theoretical 1032:1 maximum (RFC 1951 § 3.2.5), so a zip-bomb-style input is
   rejected instead of expanded. Failure → `CHITRA_ERR_DIMENSIONS`.
   ⚠️ **Accepted risk, stated rather than quietly fixed**: this ratio bounds
@@ -152,12 +154,12 @@ decode. Each maps to a `ChitraErrCode`
   32-byte bit reader on every call — and chitra reported that as `CHITRA_ERR_INFLATE`, which a caller reads
   as a damaged file: a valid PNG decoded under memory pressure could be refused,
   and cached, as corrupt. It now maps to `CHITRA_ERR_OOM`
-  ([`src/png_filter.cyr:761`](src/png_filter.cyr)); every other negative return
+  ([`src/png_filter.cyr:798`](src/png_filter.cyr)); every other negative return
   is still the stream's fault. With that, the clause above is true of every
   allocating sankoch entry point chitra calls. The IHDR-derived inflated/pixel buffer sizes over the ceiling
-  fail as `CHITRA_ERR_DIMENSIONS` ([`src/png_filter.cyr:632-639`](src/png_filter.cyr));
+  fail as `CHITRA_ERR_DIMENSIONS` ([`src/png_filter.cyr:668-675`](src/png_filter.cyr));
   the IDAT-accumulator over the ceiling and any allocation that returns null
-  fail as `CHITRA_ERR_OOM` ([`src/png_filter.cyr:494`](src/png_filter.cyr)).
+  fail as `CHITRA_ERR_OOM` ([`src/png_filter.cyr:530`](src/png_filter.cyr)).
 - ✅ **Inflate exact-size second line of defense** — the inflated stream size
   must match exactly the size derived from IHDR (`height × (1 + row_bytes)`);
   any mismatch from `sankoch` aborts the decode. Failure →
@@ -169,7 +171,7 @@ decode. Each maps to a `ChitraErrCode`
   color-type-3 at depth 16). Failure → `CHITRA_ERR_UNSUPPORTED` (unknown color
   type or non-zero compression/filter method), `CHITRA_ERR_INTERLACE`
   (interlace value ∉ {0,1}), or `CHITRA_ERR_BIT_DEPTH` (illegal depth × color-type
-  combination) — see [`src/png_filter.cyr:174-194`](src/png_filter.cyr).
+  combination) — see [`src/png_filter.cyr:204-224`](src/png_filter.cyr).
 - ✅ **Per-row filter-byte validation** — every scanline's filter type is
   checked against `{0,1,2,3,4}` (spec § 9) on both the non-interlaced and the
   Adam7 paths (`_chitra_unfilter_row`, [`src/png_filter.cyr:43`](src/png_filter.cyr)); an out-of-range
@@ -178,7 +180,7 @@ decode. Each maps to a `ChitraErrCode`
   sub-byte and the depth-8 path, is rejected if it points past the PLTE entry
   count, and per-entry tRNS reads are bounded by the tRNS array length
   ([`src/png_color.cyr:197`](src/png_color.cyr),
-  [`src/png_color.cyr:335`](src/png_color.cyr)). Palette images with a
+  [`src/png_color.cyr:327`](src/png_color.cyr)). Palette images with a
   missing/short PLTE are rejected. Failure → `CHITRA_ERR_BAD_CHUNK`.
 - ✅ **PLTE / tRNS structural guards** — PLTE is rejected if duplicated, if it
   appears after IDAT, if its length exceeds 768 bytes, or if it is not a
@@ -188,7 +190,7 @@ decode. Each maps to a `ChitraErrCode`
   `CHITRA_ERR_BAD_CHUNK`.
   ⚠ **Since 1.1.1 the facts the chunk list has already settled are refused
   before the first allocation**, at the end of the chunk walk
-  ([`src/png_filter.cyr:681-710`](src/png_filter.cyr)): colour type 3 with no
+  ([`src/png_filter.cyr:718-747`](src/png_filter.cyr)): colour type 3 with no
   (or an empty) PLTE, a palette tRNS longer than the palette, and a colour-type
   0 / 2 tRNS that is not 2 / 6 bytes. Through 1.1.0 the colour pass refused them
   only after the IDAT concatenation, the inflate buffer, the scanlines and the
@@ -286,11 +288,11 @@ conformance, resource and defence-in-depth rather than exploit fixes:
   What replaced the gate as the bound is the **per-component coverage
   bitmask** — a component may be decoded exactly once, so a file gets at most
   `Nf` scans and every scan must name something new (refused in
-  `_chitra_jpeg_parse_sos`, [`src/jpeg.cyr:180`](src/jpeg.cyr), set at `:186`; the
-  driver `_chitra_jpeg_decode_scans` at `:963` reads the mask at `:1055`). That is what makes the scan walk
+  `_chitra_jpeg_parse_sos`, [`src/jpeg.cyr:188`](src/jpeg.cyr), set at `:195`; the
+  driver `_chitra_jpeg_decode_scans` at `:1256` reads the mask at `:1370`). That is what makes the scan walk
   terminate; no scan counter and no resume tripwire were added, because neither
   could fire before coverage does. **Within** one scan the components must
-  follow frame order (T.81 § B.2.3, refused at `:170` since 1.1.1 — libjpeg
+  follow frame order (T.81 § B.2.3, refused at `:173` since 1.1.1 — libjpeg
   enforces it and cjpeg will not write anything else; chitra had accepted all
   five permutations of a 4:4:4 scan). The order of the *scans* stays free. The measured reason it was not relaxed
   earlier still stands as the reason it needed its own cut: a naive relaxation
@@ -313,7 +315,7 @@ conformance, resource and defence-in-depth rather than exploit fixes:
   for a single scan. The sum is byte-structural, so an allocation-free pre-pass
   (`_chitra_jpeg_structural_espan`) now computes it from the scan headers and the
   segment lengths alone and GATE 2 refuses **before any plane exists**
-  ([`src/jpeg.cyr:1010-1016`](src/jpeg.cyr)); the post-decode GATE 2 stays as
+  ([`src/jpeg.cyr:1303-1309`](src/jpeg.cyr)); the post-decode GATE 2 stays as
   the exact backstop. Padding no longer buys the planes back: each of those
   files now refuses for the 22,160-byte per-frame table cost.
 - ✅ **The refusal path is cheap (0.6.1).** A JPEG refused for good reason cost
@@ -335,10 +337,31 @@ conformance, resource and defence-in-depth rather than exploit fixes:
 - ✅ **A caller can bound one decode (0.6.1).** `chitra_image_decode_budget`
   refuses before beginning any decode whose RGBA8 output would exceed
   `max_bytes`, at a cost of 16 bytes (128 for BMP). It bounds the **output**,
-  not the peak, and it does not cover sankoch's allocations or the cumulative
-  total across calls — all stated on the function and in
-  [ADR 0008](docs/adr/0008-byte-budget-as-shipped.md), because a memory
-  guarantee that is not exact is not a guarantee.
+  not the peak, and it does not cover sankoch's allocations — all stated on the
+  function and in [ADR 0008](docs/adr/0008-byte-budget-as-shipped.md), because
+  a memory guarantee that is not exact is not a guarantee.
+  ⚠ **Since 1.4.0 the budget also governs size** ([ADR 0015](docs/adr/0015-the-decode-context.md)):
+  under it the fixed 4096×4096 pixel cap and 256 MB raw cap give way to
+  `max_bytes / 4` pixels and ~`2 × max_bytes` single buffers, so the worst-case
+  working set is a multiple of the budget rather than of 16.7 MP — about 4× the
+  output for an Adam7 16-bit PNG. **A budget is now a real bound only if the
+  caller sets it to what it can spend.** `CHITRA_MAX_DIM` and every
+  amplification ratio still apply under any budget, so a small file still
+  cannot buy a large decode.
+- ✅ **A caller can bound a process (1.4.0).** `chitra_image_decode_budget_via`
+  and `chitra_jpeg_decode_cmyk` take a stdlib `Allocator`: every working buffer
+  is returned to it before the call returns (all of them on a refusal), and
+  `chitra_image_free` returns the image. Measured by a counting allocator in
+  the suites and in the JPEG fuzzer on hostile input: two blocks live after a
+  decode, none after the free, none after a refusal. What still leaks per
+  decode is the 16-byte `ChitraErr` of a refusal.
+- ✅ **Progressive JPEG has a work bound, not just a size bound (1.4.0).** An
+  AC scan can cover every block in a few bytes, so a progressive file's cost is
+  not proportional to its entropy. chitra refuses a bogus progression (libjpeg
+  only warns): a coefficient's first scan only once, each refinement exactly one
+  bit below the last, `Al ≤ 13` — at most 14 scans per coefficient — and at most
+  **256 scans per file**, counted before any buffer is allocated
+  (`CHITRA_ERR_DIMENSIONS`). [ADR 0013](docs/adr/0013-progressive-jpeg.md).
 - ✅ **A 3-component JPEG is not assumed to be YCbCr (0.6.1).** The Adobe APP14
   colour transform is read, then the SOF0 component ids, then the JFIF default.
   Guessing produced a silent whole-image colour error on real `cjpeg -rgb`
@@ -359,7 +382,7 @@ conformance, resource and defence-in-depth rather than exploit fixes:
   rather than 4.
 - ✅ **The ΣHj·Vj ≤ 10 cap is conditioned, not relaxed (0.6.0)** — T.81 § B.2.3
   conditions it on `Ns > 1`, and it bounds an interleaved MCU. As of **0.8.0 it lives at the scan
-  header** ([`src/jpeg.cyr:213`](src/jpeg.cyr)), summed over the *scan's* own
+  header** ([`src/jpeg.cyr:222`](src/jpeg.cyr)), summed over the *scan's* own
   components rather than the frame's — which is where § B.2.3 puts it, and
   which is required for correctness: applied frame-wide it rejected files
   libjpeg writes, since `cjpeg -sample 4x4,1x1,1x1 -scans` is legal, sums to
@@ -372,7 +395,7 @@ conformance, resource and defence-in-depth rather than exploit fixes:
   BMP finding.
 
 > Note on two narrow codes: `CHITRA_ERR_INTERLACE` and `CHITRA_ERR_BIT_DEPTH`
-> ([`src/error.cyr:43-44`](src/error.cyr)) are validity rejections, not
+> ([`src/error.cyr:46-47`](src/error.cyr)) are validity rejections, not
 > capability limits — chitra decodes Adam7 and every spec-legal bit depth, so
 > they fire only on genuinely illegal values (an interlace method outside
 > {0,1}, or a bit-depth × color-type pair outside § 11.2.2 Table 11.1, e.g.
@@ -438,7 +461,8 @@ turn it away, so the header parser *is* the entire perimeter:
   erased exactly the condition it tests. A guard that cannot fire is worse
   than no guard, because it also documents a protection you do not have.
   **1.1.1 corrected the widening of channels wider than 8 bits.** Bit
-  replication (which still governs every sub-8-bit field) degenerated there to
+  replication (which governed every sub-8-bit field until 1.4.0 made those
+  round — [ADR 0011](docs/adr/0011-bmp-samples-mean-what-the-format-says.md)) degenerated there to
   truncation, off by one on about a quarter of samples. chitra now uses
   ImageMagick's mapping — the field placed at the top of a 16-bit sample,
   `x16 = v << (16 − w)` (or `v >> (w − 16)` above 16 bits), then
@@ -592,11 +616,12 @@ For threat-modeling clarity, chitra has no:
 
 This minimal-surface posture is durable; expanding it (e.g. adding a file or
 network entry point) requires explicit justification and a re-audit. The
-allocator is intentionally a bump allocator with no per-block free
-(`chitra_image_free` is a documented no-op — see
+default allocator is the stdlib bump allocator with no per-block free
+(`chitra_image_free` is a no-op for its images — see
 [`docs/architecture/003-bump-allocator-no-free.md`](docs/architecture/003-bump-allocator-no-free.md)),
-which keeps lifetime reasoning simple but means a caller decoding many images in
-one process should arena-scope its decodes.
+which keeps lifetime reasoning simple. A caller decoding many images in one
+process passes its own `Allocator` to `chitra_image_decode_budget_via` (1.4.0)
+and frees each image with `chitra_image_free`.
 
 ## Reporting vulnerabilities
 

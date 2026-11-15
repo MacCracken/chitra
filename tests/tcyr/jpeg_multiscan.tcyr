@@ -7,7 +7,7 @@ include "lib/assert.cyr"
 #
 # THE ORACLE. At each sampling ratio the SAME image is encoded three ways:
 # interleaved (one scan, all components), fully non-interleaved (three Ns=1
-# scans), and partially interleaved (Ns=1 then Ns=2). `djpeg -nosmooth` decodes
+# scans), and partially interleaved (Ns=1 then Ns=2). `djpeg` decodes
 # all three to identical bytes, and chitra already decoded the interleaved one
 # correctly — so the multi-scan variants are held to the interleaved twin's
 # exact byte sum. That is an external encoder and an external decoder agreeing,
@@ -9334,21 +9334,21 @@ fn test_ms_420_all_three_encodings_agree() {
     # grid. Getting the stride right but the grid wrong — or the reverse —
     # produces a plausible wrong image, not a crash.
     var lo = 0;
-    _ms_decodes_to(fx_ms_il_420(&lo), lo, 223824, "4:2:0 interleaved (control)");
+    _ms_decodes_to(fx_ms_il_420(&lo), lo, 223852, "4:2:0 interleaved (control)");
     var l2 = 0;
-    _ms_decodes_to(fx_ms_seq_420(&l2), l2, 223824, "4:2:0 three Ns=1 scans");
+    _ms_decodes_to(fx_ms_seq_420(&l2), l2, 223852, "4:2:0 three Ns=1 scans");
     var l3 = 0;
-    _ms_decodes_to(fx_ms_part_420(&l3), l3, 223824, "4:2:0 partially interleaved");
+    _ms_decodes_to(fx_ms_part_420(&l3), l3, 223852, "4:2:0 partially interleaved");
     return 0;
 }
 
 fn test_ms_422_all_three_encodings_agree() {
     var lo = 0;
-    _ms_decodes_to(fx_ms_il_422(&lo), lo, 223818, "4:2:2 interleaved (control)");
+    _ms_decodes_to(fx_ms_il_422(&lo), lo, 223809, "4:2:2 interleaved (control)");
     var l2 = 0;
-    _ms_decodes_to(fx_ms_seq_422(&l2), l2, 223818, "4:2:2 three Ns=1 scans");
+    _ms_decodes_to(fx_ms_seq_422(&l2), l2, 223809, "4:2:2 three Ns=1 scans");
     var l3 = 0;
-    _ms_decodes_to(fx_ms_part_422(&l3), l3, 223818, "4:2:2 partially interleaved");
+    _ms_decodes_to(fx_ms_part_422(&l3), l3, 223809, "4:2:2 partially interleaved");
     return 0;
 }
 
@@ -9369,7 +9369,7 @@ fn test_ms_sigma_hv_18_is_legal_when_no_scan_interleaves_it() {
     # files, while the same factors interleaved are refused by cjpeg itself
     # ("Sampling factors too large for interleaved scan"). Through 0.7.3 chitra
     # rejected both with CHITRA_ERR_JPEG_SOF. Both are byte-identical to
-    # djpeg -nosmooth.
+    # djpeg (4x4 is not a fancy ratio, so -nosmooth agrees).
     var lo = 0;
     _ms_decodes_to(fx_ms_hv18_seq(&lo), lo, 223856, "SigmaHV=18, three Ns=1 scans");
     var l2 = 0;
@@ -9606,7 +9606,7 @@ fn test_ms_app14_between_scans_does_not_redecide_colour() {
     assert(ref != 0, "jpeg-2: the JFIF-less three-scan control decodes");
     if (ref != 0) {
         assert_eq(chitra_image_source_color_type(ref), 0x103, "jpeg-2: control is YCbCr (ids 1,2,3)");
-        assert_eq(_ms_sum(ref), 223824, "jpeg-2: control decodes to the interleaved twin's bytes");
+        assert_eq(_ms_sum(ref), 223852, "jpeg-2: control decodes to the interleaved twin's bytes");
         var at = _ms_scan_end(b, lo, _ms_find_sos(b, lo, 0));
         var seg = alloc(16);
         var sl = _ms_app14(seg, 0);
@@ -9691,8 +9691,8 @@ fn test_ms_cut_between_scans_is_truncated() {
 # (err 0).
 # ================================================================
 # The fx_ms_seq_420 image with its three Ns=1 scans in the order Cb, Y, Cr
-# (jpeg-12, 1.1.1). Byte sum 223,824 — the interleaved twin's, and identical
-# to djpeg -nosmooth. Regenerate:
+# (jpeg-12, 1.1.1). Byte sum 223,852 — the interleaved twin's, and identical
+# to djpeg (223,824 under 1.3.x's box upsampling, = djpeg -nosmooth). Regenerate:
 #   printf '1: 0 63 0 0;\n0: 0 63 0 0;\n2: 0 63 0 0;\n' > cby.scan
 #   cjpeg -quality 80 -sample 2x2,1x1,1x1 -scans cby.scan -outfile ms_cby.jpg r2.ppm
 fn fx_ms_seq_420_cb_first(len_out): i64 {
@@ -10381,7 +10381,7 @@ fn test_ms_scan_components_out_of_frame_order_rejected() {
 
 fn test_ms_scans_in_any_order_still_decode() {
     var lo = 0;
-    _ms_decodes_to(fx_ms_seq_420_cb_first(&lo), lo, 223824,
+    _ms_decodes_to(fx_ms_seq_420_cb_first(&lo), lo, 223852,
       "jpeg-12: scans Cb, Y, Cr (cjpeg -scans) still decode to the interleaved twin");
     return 0;
 }

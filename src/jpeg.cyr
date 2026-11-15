@@ -21,30 +21,33 @@
 #   R = Y                         + 1.40200*(Cr-128)
 #   G = Y - 0.34414*(Cb-128)      - 0.71414*(Cr-128)
 #   B = Y + 1.77200*(Cb-128)
-# Descale uses the IDCT's signed round-to-nearest _chitra_jpeg_descale (Cyrius `>>` is
-# logical). Source: libjpeg jdcolor.c; ITU-R BT.601. See docs/sources.md.
+# Source: libjpeg jdcolor.c; ITU-R BT.601. See docs/sources.md.
+#
+# 1.4.0: exactly jdcolor.c's table arithmetic, computed inline (x = sample - 128):
+#   R = Y + RIGHT_SHIFT(FIX(1.40200) * x_cr + ONE_HALF, 16)
+#   G = Y + RIGHT_SHIFT(-FIX(0.34414) * x_cb - FIX(0.71414) * x_cr + ONE_HALF, 16)
+#   B = Y + RIGHT_SHIFT(FIX(1.77200) * x_cb + ONE_HALF, 16)
+# RIGHT_SHIFT is a floor (arithmetic) shift, done here by biasing positive as
+# _chitra_jpeg_descale does. Through 1.3.x the green term was computed as
+# Y - round(0.34414 * x_cb + 0.71414 * x_cr) with ties away from zero, which
+# differs from libjpeg's floor(-... + 1/2) on an exact tie. No call per pixel,
+# and no lookup table: a global table here would cost every consumer 64 KB of
+# binary for what three multiplies already compute.
 # ================================================================
-var _CHITRA_JCC_CR_R = 91881;    # FIX(1.40200)
-var _CHITRA_JCC_CB_B = 116130;   # FIX(1.77200)
-var _CHITRA_JCC_CB_G = 22554;    # FIX(0.34414)
-var _CHITRA_JCC_CR_G = 46802;    # FIX(0.71414)
-
 fn _chitra_jpeg_clamp8(v): i64 {
     if (v < 0) { return 0; }
     if (v > 255) { return 255; }
     return v;
 }
 
-# Convert one YCbCr triple to RGB, writing 3 bytes (R, G, B) at dst.
+# Convert one YCbCr triple to RGB, writing 3 bytes (R, G, B) at dst. The
+# decoder's colour loop inlines the same three lines.
 fn _chitra_jpeg_ycc_to_rgb(y, cb, cr, dst): i64 {
-    var crr = cr - 128;
-    var cbb = cb - 128;
-    var r = y + _chitra_jpeg_descale(_CHITRA_JCC_CR_R * crr, 16);
-    var g = y - _chitra_jpeg_descale(_CHITRA_JCC_CB_G * cbb + _CHITRA_JCC_CR_G * crr, 16);
-    var b = y + _chitra_jpeg_descale(_CHITRA_JCC_CB_B * cbb, 16);
-    store8(dst + 0, _chitra_jpeg_clamp8(r));
-    store8(dst + 1, _chitra_jpeg_clamp8(g));
-    store8(dst + 2, _chitra_jpeg_clamp8(b));
+    var xb = cb - 128;
+    var xr = cr - 128;
+    store8(dst + 0, _chitra_jpeg_clamp8(y + _chitra_jpeg_descale(91881 * xr, 16)));
+    store8(dst + 1, _chitra_jpeg_clamp8(y + _chitra_jpeg_descale(0 - 22554 * xb - 46802 * xr, 16)));
+    store8(dst + 2, _chitra_jpeg_clamp8(y + _chitra_jpeg_descale(116130 * xb, 16)));
     return 0;
 }
 
@@ -177,9 +180,15 @@ fn _chitra_jpeg_parse_sos(frame, src, len, sos_off, err_out): i64 {
                     # COVERAGE. A component may be decoded exactly once across
                     # the whole file: twice is a contradiction about the same
                     # samples, and it is also what bounds the driver's loop.
-                    if ((load64(frame + _CHITRA_JF_COVERED) & (1 << found)) != 0) {
-                        rc = CHITRA_ERR_JPEG_SOS;
-                        done = 1;
+                    # Coverage-once is BASELINE's rule (0.8.0): a sequential
+                    # component is coded by exactly one scan. A progressive one
+                    # is coded by many — its bound is the per-coefficient
+                    # progression the progressive driver checks (1.4.0).
+                    if (_chitra_jpeg_frame_prog(frame) == 0) {
+                        if ((load64(frame + _CHITRA_JF_COVERED) & (1 << found)) != 0) {
+                            rc = CHITRA_ERR_JPEG_SOS;
+                            done = 1;
+                        }
                     }
                 }
                 if (done == 0) {
@@ -216,6 +225,34 @@ fn _chitra_jpeg_parse_sos(frame, src, len, sos_off, err_out): i64 {
         }
     }
     store64(frame + _CHITRA_JF_SCAN_NS, ns);
+    if (_chitra_jpeg_frame_prog(frame) == 1) {
+        # Progressive scan parameters (T.81 § G.1.1.1.1; libjpeg's
+        # start_pass_phuff_decoder, whose refusals are fatal there too):
+        #   - a DC scan is exactly Ss = Se = 0, and may interleave;
+        #   - an AC scan is 1 <= Ss <= Se <= 63 and names ONE component;
+        #   - Ah and Al are at most 13, and a refinement (Ah > 0) refines by
+        #     exactly one bit, Al = Ah - 1.
+        # Whether THIS component's coefficients are at the bit position Ah
+        # says is the per-coefficient progression check in the driver.
+        var ah = (ahal >> 4) & 15;
+        var al = ahal & 15;
+        var pbad = 0;
+        if (ss == 0) {
+            if (se != 0) { pbad = 1; }
+        } else {
+            if (ns != 1) { pbad = 1; }
+            if (se < ss) { pbad = 1; }
+            if (se > 63) { pbad = 1; }
+        }
+        if (ah > 13) { pbad = 1; }
+        if (al > 13) { pbad = 1; }
+        if (ah != 0) {
+            if (al != ah - 1) { pbad = 1; }
+        }
+        if (pbad == 1) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_SOS)); return 0; }
+        store64(frame + _CHITRA_JF_SPEC, ss | (se << 8) | (ah << 16) | (al << 24));
+        return _chitra_cur_pos(&cur);
+    }
     if (ss != 0) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_SOS)); return 0; }
     if (se != 63) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_SOS)); return 0; }
     if (ahal != 0) { store64(err_out, chitra_err(CHITRA_ERR_JPEG_SOS)); return 0; }
@@ -339,6 +376,12 @@ fn _chitra_jpeg_structural_espan(frame, src, len, scans_out): i64 {
     store64(scans_out, 0);
     var ncomp = _chitra_jpeg_frame_num_components(frame);
     var full = (1 << ncomp) - 1;
+    # Progressive (1.4.0): a component recurs scan after scan, so the walk
+    # neither refuses a repeat across scans nor stops at first coverage — it
+    # runs to EOI (or wherever the decode would refuse), as the progressive
+    # driver does. Within ONE scan a repeat is still malformed in both modes.
+    var prog = _chitra_jpeg_frame_prog(frame);
+    var smask = 0;
     var cur[24];
     _chitra_cur_init(&cur, src, len);
     _chitra_cur_skip(&cur, _chitra_jpeg_frame_sos_offset(frame));
@@ -376,6 +419,7 @@ fn _chitra_jpeg_structural_espan(frame, src, len, scans_out): i64 {
             if (_chitra_cur_can_read(&cur, 2 * ns + 3) == 0) { done = 1; }
         }
         i = 0;
+        smask = 0;
         if (done == 1) { i = ns; }                  # ns is unvalidated here
         while (i < ns) {
             if (done == 0) {
@@ -389,11 +433,18 @@ fn _chitra_jpeg_structural_espan(frame, src, len, scans_out): i64 {
                 }
                 if (fi < 0) { done = 1; }
                 if (done == 0) {
-                    # Covers both a repeat inside this scan and a component an
-                    # earlier scan already decoded — the decode refuses both.
-                    if ((mask & (1 << fi)) != 0) { done = 1; }
+                    # Covers both a repeat inside this scan and (baseline) a
+                    # component an earlier scan already decoded — the decode
+                    # refuses both.
+                    if ((smask & (1 << fi)) != 0) { done = 1; }
+                    if (prog == 0) {
+                        if ((mask & (1 << fi)) != 0) { done = 1; }
+                    }
                 }
-                if (done == 0) { mask = mask | (1 << fi); }
+                if (done == 0) {
+                    mask = mask | (1 << fi);
+                    smask = smask | (1 << fi);
+                }
             }
             i = i + 1;
         }
@@ -404,7 +455,9 @@ fn _chitra_jpeg_structural_espan(frame, src, len, scans_out): i64 {
             total = total + span;
             scans = scans + 1;
             _chitra_cur_skip(&cur, span);
-            if (mask == full) { done = 1; }
+            if (prog == 0) {
+                if (mask == full) { done = 1; }
+            }
         }
         # ---- the walk to the next SOS, by length only ----
         walking = 0;
@@ -427,6 +480,7 @@ fn _chitra_jpeg_structural_espan(frame, src, len, scans_out): i64 {
                 act = _chitra_jpeg_marker_action(m);
                 if (act >= 13) { walking = 0; done = 1; }
                 if (act == 1) { walking = 0; done = 1; }
+                if (act == 10) { walking = 0; done = 1; }
                 if (act == 2) { walking = 0; }      # next scan header follows
             }
             if (walking == 1) {
@@ -458,7 +512,7 @@ fn _chitra_jpeg_structural_espan(frame, src, len, scans_out): i64 {
 # Returns the ChitraImage ptr, or 0 with *err_out set.
 # ================================================================
 fn _chitra_jpeg_decode_one_scan(frame, src, len, entropy_start, espan, planes, comppw,
-  zz, out, unclean_out, err_out): i64 {
+  zz, unclean_out, err_out): i64 {
     var ncomp = _chitra_jpeg_frame_num_components(frame);
     var w = _chitra_jpeg_frame_width(frame);
     var h = _chitra_jpeg_frame_height(frame);
@@ -599,7 +653,10 @@ fn _chitra_jpeg_decode_one_scan(frame, src, len, entropy_start, espan, planes, c
                 # keeps in both layouts.
                 cpw = s_cols * chh * 8;
                 cph = s_rows * cvv * 8;
-                if (cpw * cph > CHITRA_MAX_RAW_BYTES) { rc = CHITRA_ERR_DIMENSIONS; done = 1; }
+                if (cpw * cph > _chitra_lim_raw(_chitra_jpeg_frame_ctx(frame))) {
+                    rc = CHITRA_ERR_DIMENSIONS;
+                    done = 1;
+                }
             }
             if (done == 0) {
                 # GATE 1 — amplification, per scan, against THIS scan's entropy
@@ -622,7 +679,7 @@ fn _chitra_jpeg_decode_one_scan(frame, src, len, entropy_start, espan, planes, c
                 # previous scan's samples.
                 pl = load64(planes + fi * 8);
                 if (pl == 0) {
-                    pl = alloc(cpw * cph);
+                    pl = _chitra_alloc(_chitra_jpeg_frame_ctx(frame), cpw * cph);
                     if (pl == 0) { rc = CHITRA_ERR_OOM; done = 1; }
                 }
             }
@@ -720,7 +777,7 @@ fn _chitra_jpeg_decode_one_scan(frame, src, len, entropy_start, espan, planes, c
                     bx = 0;
                     while (bx < ch2) {
                         pr = load64(&preds + comp * 8);
-                        pr = _chitra_jpeg_decode_block(&reader, dctab, actab, pr, zz, &berr);
+                        pr = _chitra_jpeg_decode_coefs(&reader, dctab, actab, pr, quant, zz, &berr);
                         store64(&preds + comp * 8, pr);
                         if (load64(&berr) != 0) {
                             store64(err_out, load64(&berr));
@@ -731,18 +788,9 @@ fn _chitra_jpeg_decode_one_scan(frame, src, len, entropy_start, espan, planes, c
                             mi = mcu_count;
                         }
                         if (done == 0) {
-                            _chitra_jpeg_idct_block(zz, quant, out);
                             px = (mcu_x * ch2 + bx) * 8;
                             py = (mcu_y * cv2 + by) * 8;
-                            r = 0;
-                            while (r < 8) {
-                                c = 0;
-                                while (c < 8) {
-                                    store8(plane + (py + r) * cpw2 + (px + c), load64(out + (r * 8 + c) * 8));
-                                    c = c + 1;
-                                }
-                                r = r + 1;
-                            }
+                            _chitra_jpeg_idct_nat(zz, plane + py * cpw2 + px, cpw2);
                             bx = bx + 1;
                         }
                     }
@@ -774,6 +822,141 @@ fn _chitra_jpeg_decode_one_scan(frame, src, len, entropy_start, espan, planes, c
     return 1;
 }
 
+# ================================================================
+# Chroma upsampling (1.4.0): libjpeg-turbo's "fancy" triangle filters, the
+# default of `djpeg` and of every decoder that reads JPEG for display.
+#
+# Through 1.3.x chitra upsampled by BOX replication and matched
+# `djpeg -nosmooth`. Box puts each chroma sample at the corner of the block
+# it covers; JFIF sites chroma at the block's CENTRE, and the triangle filter
+# reconstructs that siting. Measured against the SOURCE pixels a JPEG was
+# encoded from (selah's fixtures, box-chroma-upsampling issue), box left
+# ~30 % more mean error at 4:2:0 (2.345 vs 1.808) and a worst pixel 78
+# levels off instead of 54 — the whole gap, since the 4:4:4 and grey
+# controls were equal. ADR 0012.
+#
+# Returns a pointer to w samples of component plane `plane` (stride `pw`,
+# sampling hi x vi of max_h x max_v) upsampled to output row y of a w x h
+# image: the plane row itself for a full-resolution component, else `dst`,
+# which it fills.
+# Exactly libjpeg-turbo's jdsample.c selection and arithmetic:
+#
+#   ratio 1x1                 copy
+#   ratio 2x1, dsw > 2        h2v1_fancy: 3/4 nearer + 1/4 further sample,
+#                             biases +1 (left output) / +2 (right output), >> 2
+#   ratio 1x2                 h1v2_fancy: same weights vertically,
+#                             biases +1 (upper) / +2 (lower), >> 2
+#   ratio 2x2, dsw > 2        h2v2_fancy: 9/16 3/16 3/16 1/16 via column sums
+#                             3*near + far, biases +8 (left) / +7 (right), >> 4
+#   anything else             box (libjpeg's int_upsample / h2v1 / h2v2 plain)
+#
+# dsw / dsh are the component's REAL sample dimensions, § A.1.1's
+# ceil(X*Hi/Hmax) x ceil(Y*Vi/Vmax) — libjpeg's downsampled_width/height. The
+# neighbour of an edge sample is the edge sample itself: the first and last
+# columns reuse themselves, and the rows above the first and below the last
+# real row are that row (libjpeg's context-row wraparound / bottom pointers).
+#
+# ⚠ architecture/004's exact-fit property still holds, and is why the clamps
+# are not optional: a neighbour index is clamped into [0, dsw) x [0, dsh),
+# which every scan writes in full (each plane is ceil(dsw/8)*8 wide or more,
+# and coverage-once means every component's every block was decoded before
+# this runs). The filter never reads the plane's padding margin, so the
+# read-of-uninitialised class the box-only rule guarded against stays closed.
+# ================================================================
+fn _chitra_jpeg_upsample_row(plane, pw, hi, vi, max_h, max_v, w, h, y, dst): i64 {
+    var x = 0;
+    var row = 0;
+    if (hi == max_h) {
+        if (vi == max_v) { return plane + y * pw; }    # full resolution: the plane row itself
+    }
+    var dsw = (w * hi + max_h - 1) / max_h;
+    var dsh = (h * vi + max_v - 1) / max_v;
+    var mode = 0;                    # 0 box, 1 h2v1, 2 h1v2, 3 h2v2
+    if (hi * 2 == max_h) {
+        if (dsw > 2) {
+            if (vi == max_v) { mode = 1; }
+            if (vi * 2 == max_v) { mode = 3; }
+        }
+    }
+    if (hi == max_h) {
+        if (vi * 2 == max_v) { mode = 2; }
+    }
+    var c = 0;
+    var near = 0;
+    var far = 0;
+    var bias = 0;
+    var nb = 0;
+    var r = 0;
+    if (mode == 0) {
+        row = plane + (y * vi / max_v) * pw;
+        while (x < w) {
+            store8(dst + x, load8(row + (x * hi / max_h)));
+            x = x + 1;
+        }
+        return dst;
+    }
+    # Modes 1 and 3 walk INPUT columns: each input sample (or column sum)
+    # yields the output pair 2c, 2c+1, with its left and right neighbours
+    # carried from the previous step instead of recomputed.
+    var n2 = 0;
+    var cur = 0;
+    var prv = 0;
+    var nxt = 0;
+    if (mode == 1) {
+        row = plane + y * pw;
+        cur = load8(row);
+        prv = cur;
+        c = 0;
+        while (c < dsw) {
+            nxt = cur;
+            if (c + 1 < dsw) { nxt = load8(row + c + 1); }
+            n2 = c * 2;
+            if (n2 < w) { store8(dst + n2, (3 * cur + prv + 1) >> 2); }
+            if (n2 + 1 < w) { store8(dst + n2 + 1, (3 * cur + nxt + 2) >> 2); }
+            prv = cur;
+            cur = nxt;
+            c = c + 1;
+        }
+        return dst;
+    }
+    # Vertical neighbour row for modes 2 and 3: the row above for an upper
+    # output row, the row below for a lower one, clamped to the real rows.
+    r = y >> 1;
+    if ((y & 1) == 0) {
+        nb = r - 1;
+        if (nb < 0) { nb = 0; }
+        bias = 1;
+    } else {
+        nb = r + 1;
+        if (nb > dsh - 1) { nb = dsh - 1; }
+        bias = 2;
+    }
+    near = plane + r * pw;
+    far = plane + nb * pw;
+    if (mode == 2) {
+        while (x < w) {
+            store8(dst + x, (3 * load8(near + x) + load8(far + x) + bias) >> 2);
+            x = x + 1;
+        }
+        return dst;
+    }
+    # mode 3 — h2v2: column sums 3*near + far, then the same 3:1 horizontally.
+    cur = 3 * load8(near) + load8(far);
+    prv = cur;
+    c = 0;
+    while (c < dsw) {
+        nxt = cur;
+        if (c + 1 < dsw) { nxt = 3 * load8(near + c + 1) + load8(far + c + 1); }
+        n2 = c * 2;
+        if (n2 < w) { store8(dst + n2, (3 * cur + prv + 8) >> 4); }
+        if (n2 + 1 < w) { store8(dst + n2 + 1, (3 * cur + nxt + 7) >> 4); }
+        prv = cur;
+        cur = nxt;
+        c = c + 1;
+    }
+    return dst;
+}
+
 fn _chitra_jpeg_build_image(frame, planes, comppw, closed, err_out): i64 {
     var ncomp = _chitra_jpeg_frame_num_components(frame);
     var w = _chitra_jpeg_frame_width(frame);
@@ -781,13 +964,14 @@ fn _chitra_jpeg_build_image(frame, planes, comppw, closed, err_out): i64 {
     var max_h = _chitra_jpeg_frame_max_h(frame);
     var max_v = _chitra_jpeg_frame_max_v(frame);
 
-    # ---- box upsample + color convert -> RGBA8 ----
-    if (w * h * 4 > CHITRA_MAX_RAW_BYTES) { store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS)); return 0; }
-    var rgba = alloc(w * h * 4);
+    # ---- upsample (_chitra_jpeg_upsample_row) + color convert -> RGBA8 ----
+    var ctx = _chitra_jpeg_frame_ctx(frame);
+    if (w * h * 4 > _chitra_lim_raw(ctx)) { store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS)); return 0; }
+    var rgba = _chitra_alloc(ctx, w * h * 4);
     if (rgba == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
     # Upsample ratios come from the FRAME. comph/compv hold blocks-per-MCU for
     # the scan just decoded — a different quantity that merely coincides for a
-    # single interleaved scan. H_i/H_max is what the box upsampler needs.
+    # single interleaved scan. H_i/H_max is what the upsampler needs.
     var p0 = load64(planes + 0);
     var h0 = _chitra_jpeg_frame_comp_h(frame, 0);
     var v0 = _chitra_jpeg_frame_comp_v(frame, 0);
@@ -872,35 +1056,137 @@ fn _chitra_jpeg_build_image(frame, planes, comppw, closed, err_out): i64 {
         h2 = _chitra_jpeg_frame_comp_h(frame, 2);
         v2 = _chitra_jpeg_frame_comp_v(frame, 2);
         pw2 = load64(comppw + 16);
+        # One upsampled row per component, refilled per output row. w is
+        # bounded by CHITRA_MAX_DIM through the SOF0 parse, and w*h*4 by the
+        # check above, so 3*w cannot overflow.
+        var rows = _chitra_alloc(ctx, w * 3);
+        if (rows == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
+        var r0 = rows;
+        var r1 = rows + w;
+        var r2 = rows + w * 2;
+        var a0 = 0;
+        var a1 = 0;
+        var a2 = 0;
+        var cbias = 288230376151711744 + 32768;  # 2^58 + ONE_HALF: floor shift, see _chitra_jpeg_descale
+        var cbias16 = 288230376151711744 >> 16;
+        var xb = 0;
+        var xr = 0;
+        var rr = 0;
+        var gg = 0;
+        var bb = 0;
+        var cmask = 0 - 256;                     # every bit above the low byte
         y = 0;
         while (y < h) {
+            a0 = _chitra_jpeg_upsample_row(p0, pw0, h0, v0, max_h, max_v, w, h, y, r0);
+            a1 = _chitra_jpeg_upsample_row(p1, pw1, h1, v1, max_h, max_v, w, h, y, r1);
+            a2 = _chitra_jpeg_upsample_row(p2, pw2, h2, v2, max_h, max_v, w, h, y, r2);
             x = 0;
-            while (x < w) {
-                yy = load8(p0 + (y * v0 / max_v) * pw0 + (x * h0 / max_h));
-                cb = load8(p1 + (y * v1 / max_v) * pw1 + (x * h1 / max_h));
-                cr = load8(p2 + (y * v2 / max_v) * pw2 + (x * h2 / max_h));
-                o = (y * w + x) * 4;
-                # For RGB components the samples ARE the output — the transform
-                # to apply is the identity, not BT.601.
-                if (is_rgb == 1) {
-                    store8(rgba + o + 0, yy);
-                    store8(rgba + o + 1, cb);
-                    store8(rgba + o + 2, cr);
+            o = rgba + y * w * 4;
+            if (is_rgb == 1) {
+                # RGB components: the samples ARE the output — the transform to
+                # apply is the identity, not BT.601.
+                while (x < w) {
+                    store32(o, load8(a0 + x) | (load8(a1 + x) << 8) | (load8(a2 + x) << 16) | 4278190080);
+                    o = o + 4;
+                    x = x + 1;
                 }
-                if (is_rgb == 0) { _chitra_jpeg_ycc_to_rgb(yy, cb, cr, rgba + o); }
-                store8(rgba + o + 3, 255);
-                x = x + 1;
+            } else {
+                while (x < w) {
+                    yy = load8(a0 + x);
+                    cb = load8(a1 + x);
+                    cr = load8(a2 + x);
+                    xb = cb - 128;
+                    xr = cr - 128;
+                    # One test per channel: a value outside 0..255 has a bit
+                    # above the low byte set (negative ones all of them).
+                    rr = yy + ((91881 * xr + cbias) >> 16) - cbias16;
+                    if ((rr & cmask) != 0) { if (rr < 0) { rr = 0; } else { rr = 255; } }
+                    gg = yy + ((cbias - 22554 * xb - 46802 * xr) >> 16) - cbias16;
+                    if ((gg & cmask) != 0) { if (gg < 0) { gg = 0; } else { gg = 255; } }
+                    bb = yy + ((116130 * xb + cbias) >> 16) - cbias16;
+                    if ((bb & cmask) != 0) { if (bb < 0) { bb = 0; } else { bb = 255; } }
+                    store32(o, rr | (gg << 8) | (bb << 16) | 4278190080);
+                    o = o + 4;
+                    x = x + 1;
+                }
             }
             y = y + 1;
         }
     }
 
-    var img = alloc(CHITRA_IMAGE_SIZE);
-    if (img == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
-    store64(img + _CHITRA_IMAGE_WIDTH_OFFSET, w);
-    store64(img + _CHITRA_IMAGE_HEIGHT_OFFSET, h);
-    store64(img + _CHITRA_IMAGE_PIXELS_OFFSET, rgba);
-    store64(img + _CHITRA_IMAGE_CHANNELS_OFFSET, 4);
+    # ---- four components: CMYK samples, YCCK transformed to CMYK (1.4.0) ----
+    # chitra_jpeg_decode_cmyk only (the frame walk refuses 4 components on
+    # every RGBA entry). Each plane is upsampled exactly as a YCbCr one is —
+    # libjpeg treats every component alike — and then:
+    #   CMYK (no APP14, or Adobe transform 0): the samples, as stored;
+    #   YCCK (Adobe transform 2): Y/Cb/Cr through the BT.601 arithmetic above,
+    #     each result inverted — C = 255 - R, M = 255 - G, Y = 255 - B — and K
+    #     passed through: libjpeg's ycck_cmyk_convert, bit for bit.
+    # Nothing here converts to RGB: what the C, M, Y, K values MEAN (an ICC
+    # profile, or an uncalibrated formula) is the caller's decision.
+    var adobe4 = _chitra_jpeg_frame_adobe_transform(frame);
+    if (ncomp == 4) {
+        p1 = load64(planes + 8);
+        p2 = load64(planes + 16);
+        var p3 = load64(planes + 24);
+        h1 = _chitra_jpeg_frame_comp_h(frame, 1);
+        v1 = _chitra_jpeg_frame_comp_v(frame, 1);
+        pw1 = load64(comppw + 8);
+        h2 = _chitra_jpeg_frame_comp_h(frame, 2);
+        v2 = _chitra_jpeg_frame_comp_v(frame, 2);
+        pw2 = load64(comppw + 16);
+        var h3 = _chitra_jpeg_frame_comp_h(frame, 3);
+        var v3 = _chitra_jpeg_frame_comp_v(frame, 3);
+        var pw3 = load64(comppw + 24);
+        var rows4 = _chitra_alloc(ctx, w * 4);
+        if (rows4 == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
+        var q0 = 0;
+        var q1 = 0;
+        var q2 = 0;
+        var q3 = 0;
+        var kb = 288230376151711744 + 32768;     # 2^58 + ONE_HALF, as the YCbCr loop
+        var kb16 = 288230376151711744 >> 16;
+        var kx = 0;
+        var kr = 0;
+        var kg = 0;
+        var kbb = 0;
+        var kxb = 0;
+        var kxr = 0;
+        var kk = 0;
+        y = 0;
+        while (y < h) {
+            q0 = _chitra_jpeg_upsample_row(p0, pw0, h0, v0, max_h, max_v, w, h, y, rows4);
+            q1 = _chitra_jpeg_upsample_row(p1, pw1, h1, v1, max_h, max_v, w, h, y, rows4 + w);
+            q2 = _chitra_jpeg_upsample_row(p2, pw2, h2, v2, max_h, max_v, w, h, y, rows4 + w * 2);
+            q3 = _chitra_jpeg_upsample_row(p3, pw3, h3, v3, max_h, max_v, w, h, y, rows4 + w * 3);
+            o = rgba + y * w * 4;
+            kx = 0;
+            while (kx < w) {
+                kk = load8(q3 + kx);
+                if (adobe4 == 2) {
+                    yy = load8(q0 + kx);
+                    kxb = load8(q1 + kx) - 128;
+                    kxr = load8(q2 + kx) - 128;
+                    kr = yy + ((91881 * kxr + kb) >> 16) - kb16;
+                    if (kr < 0) { kr = 0; }
+                    if (kr > 255) { kr = 255; }
+                    kg = yy + ((kb - 22554 * kxb - 46802 * kxr) >> 16) - kb16;
+                    if (kg < 0) { kg = 0; }
+                    if (kg > 255) { kg = 255; }
+                    kbb = yy + ((116130 * kxb + kb) >> 16) - kb16;
+                    if (kbb < 0) { kbb = 0; }
+                    if (kbb > 255) { kbb = 255; }
+                    store32(o, (255 - kr) | ((255 - kg) << 8) | ((255 - kbb) << 16) | (kk << 24));
+                } else {
+                    store32(o, load8(q0 + kx) | (load8(q1 + kx) << 8) | (load8(q2 + kx) << 16) | (kk << 24));
+                }
+                o = o + 4;
+                kx = kx + 1;
+            }
+            y = y + 1;
+        }
+    }
+
     # 0.7.0 — say whether the stream actually closed, instead of claiming it
     # always did.
     #
@@ -924,8 +1210,8 @@ fn _chitra_jpeg_build_image(frame, planes, comppw, closed, err_out): i64 {
     # every scan: any scan that ran out of data, had a restart marker out of
     # sequence or left entropy bytes unconsumed (jpeg-6, 1.1.1), or a file
     # whose last scan did not end at a real EOI, means the stream did not
-    # close cleanly.
-    store64(img + _CHITRA_IMAGE_SEEN_IEND_OFFSET, closed);
+    # close cleanly. It is the record's seen_iend, set by _chitra_image_new.
+    #
     # JPEG sentinel: 0x100 | ncomp, with bit 4 set when the components are RGB
     # rather than YCbCr — so 0x101 gray, 0x103 YCbCr, 0x113 RGB. Without the
     # distinction an Adobe transform=0 file reports 0x103 and a consumer has no
@@ -933,10 +1219,17 @@ fn _chitra_jpeg_build_image(frame, planes, comppw, closed, err_out): i64 {
     # exactly the fact the 0.6.1 repair exists to establish.
     var sentinel = 256 + ncomp;
     if (is_rgb == 1) { sentinel = sentinel + 16; }
-    store64(img + _CHITRA_IMAGE_SRC_CTYPE_OFFSET, sentinel);
-    # Baseline is 8-bit by definition; 12-bit precision rejects at the SOF0 parse.
-    store64(img + _CHITRA_IMAGE_SRC_DEPTH_OFFSET, 8);
-    return img;
+    # Four components (1.4.0): 0x104 CMYK with no Adobe marker; bit 6 (0x40)
+    # set when an Adobe APP14 is present — by Adobe's convention its CMYK
+    # values are INVERTED (0 = full ink), and chitra does not undo that; bit 5
+    # (0x20) set when the file was YCCK and chitra transformed it. So 0x104,
+    # 0x144 (Adobe CMYK) or 0x164 (Adobe YCCK -> CMYK).
+    if (ncomp == 4) {
+        if (adobe4 >= 0) { sentinel = sentinel + 64; }
+        if (adobe4 == 2) { sentinel = sentinel + 32; }
+    }
+    # Baseline is 8-bit by definition; 12-bit precision rejects at the SOF parse.
+    return _chitra_image_new(ctx, w, h, rgba, closed, sentinel, 8, err_out);
 }
 
 # ================================================================
@@ -1015,6 +1308,23 @@ fn _chitra_jpeg_decode_scans(frame, src, len, err_out): i64 {
         }
     }
 
+    # Progressive (1.4.0): its own scan model from here on, behind the same
+    # two gates (jpeg_prog.cyr) and one more. The progression rules bound the
+    # COEFFICIENT work of any accepted file, but every scan also walks every
+    # block it covers, and a valid file may carry ~900 scans (64 coefficients
+    # x 14 bit positions per component), each a few bytes: on a 16.7 MP image
+    # that is seconds of CPU from tens of kilobytes. Real encoders write 6-20
+    # (cjpeg 10, mozjpeg ~12-20, Photoshop 3-5). The scan count is
+    # byte-structural, so the pre-pass's count refuses before any buffer
+    # exists; CHITRA_ERR_DIMENSIONS, as every other work-amplification cap.
+    if (_chitra_jpeg_frame_prog(frame) == 1) {
+        if (pscans > _CHITRA_MAX_PROG_SCANS) {
+            store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
+            return 0;
+        }
+        return _chitra_jpeg_decode_progressive(frame, src, len, err_out);
+    }
+
     var planes[32];      # by FRAME component index; CHITRA_MAX_COMPONENTS is 4
     var comppw[32];
     var i = 0;
@@ -1025,10 +1335,15 @@ fn _chitra_jpeg_decode_scans(frame, src, len, err_out): i64 {
     }
     # Per-decode scratch, hoisted out of the per-scan worker so a file with
     # three scans allocates it once rather than three times.
-    var zz = alloc(512);
+    var zz = _chitra_alloc(_chitra_jpeg_frame_ctx(frame), 512);
     if (zz == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
-    var out = alloc(512);
-    if (out == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
+    # The coefficient block must start all-zero (_chitra_jpeg_decode_coefs
+    # writes only non-zero coefficients; _chitra_jpeg_idct_nat re-zeroes it).
+    i = 0;
+    while (i < 64) {
+        store64(zz + i * 8, 0);
+        i = i + 1;
+    }
 
     var sos_off = _chitra_jpeg_frame_sos_offset(frame);
     var entropy_start = 0;
@@ -1048,7 +1363,7 @@ fn _chitra_jpeg_decode_scans(frame, src, len, err_out): i64 {
         last_marker = endmark;
         unclean = 0;
         if (_chitra_jpeg_decode_one_scan(frame, src, len, entropy_start, espan,
-            &planes, &comppw, zz, out, &unclean, err_out) == 0) {
+            &planes, &comppw, zz, &unclean, err_out) == 0) {
             return 0;
         }
         if (unclean == 1) { any_unclean = 1; }
@@ -1102,8 +1417,13 @@ fn _chitra_jpeg_decode_scans(frame, src, len, err_out): i64 {
 # ================================================================
 # @public
 fn chitra_jpeg_decode(src, len, err_out): i64 {
+    return _chitra_jpeg_decode_ctx(src, len, 0, err_out);
+}
+
+# The JPEG decode held to the decode context `ctx` (1.4.0; 0 = defaults).
+fn _chitra_jpeg_decode_ctx(src, len, ctx, err_out): i64 {
     store64(err_out, 0);
-    var frame = _chitra_jpeg_scan_markers(src, len, err_out);
+    var frame = _chitra_jpeg_scan_markers_ctx(src, len, ctx, err_out);
     if (frame == 0) { return 0; }
     return _chitra_jpeg_decode_scans(frame, src, len, err_out);
 }
@@ -1167,7 +1487,7 @@ fn _chitra_jpeg_declared_dims(src, len, w_out, h_out): i64 {
                 if (_chitra_cur_can_read(&cur, 1) == 0) { m = 0; }
                 if (m == 0xFF) { m = _chitra_cur_u8(&cur); }
             }
-            if (m == 0xC0) {
+            if (m == 0xC0 || m == 0xC2) {
                 # SOF0: length(2) precision(1) height(2) width(2)
                 if (_chitra_cur_can_read(&cur, 7) == 0) { done = 1; }
                 if (done == 0) {
@@ -1216,6 +1536,12 @@ fn _chitra_jpeg_declared_dims(src, len, w_out, h_out): i64 {
 # it can only be consulted, never obeyed.
 # ================================================================
 fn _chitra_declared_rgba_bytes(src, len): i64 {
+    return _chitra_declared_rgba_bytes_via(src, len, 0);
+}
+
+# The same probe, with any allocation it makes (BMP's header record — the
+# 128-byte refusal cost) taken from Allocator `a` and returned to it (1.4.0).
+fn _chitra_declared_rgba_bytes_via(src, len, a): i64 {
     var cur[24];
     var w = 0;
     var h = 0;
@@ -1232,12 +1558,22 @@ fn _chitra_declared_rgba_bytes(src, len): i64 {
         if (_chitra_jpeg_declared_dims(src, len, &w, &h) == 0) { return 0; }
     }
     if (chitra_bmp_check_signature(src, len) == 1) {
+        # The real header parser, held to NO pixel cap beyond CHITRA_MAX_DIM
+        # (1.4.0): this only reads the dimensions, and the budget decides the
+        # size question. Under the fixed 16.7 MP cap a larger BMP read as
+        # "unreadable" here, so an over-budget one was refused by the decoder
+        # as CHITRA_ERR_DIMENSIONS instead of here as CHITRA_ERR_BUDGET.
+        var probe[544];                  # _CHITRA_CTX_SIZE
+        _chitra_ctx_init(&probe, a, CHITRA_MAX_DIM * CHITRA_MAX_DIM, CHITRA_MAX_DIM * CHITRA_MAX_DIM * 4);
         var berr = 0;
-        var hdr = _chitra_bmp_parse_header(src, len, &berr);
+        var hdr = _chitra_bmp_parse_header_ctx(src, len, &probe, &berr);
+        if (hdr != 0) {
+            w = _chitra_bmp_hdr_width(hdr);
+            h = _chitra_bmp_hdr_height(hdr);
+            if (h < 0) { h = 0 - h; }    # negative height = top-down rows
+        }
+        _chitra_ctx_release(&probe, 0, 0);
         if (hdr == 0) { return 0; }
-        w = _chitra_bmp_hdr_width(hdr);
-        h = _chitra_bmp_hdr_height(hdr);
-        if (h < 0) { h = 0 - h; }        # negative height = top-down rows
     }
     if (chitra_gif_check_signature(src, len) == 1) {
         # The Logical Screen Descriptor follows the 6-byte signature, and the
@@ -1266,17 +1602,30 @@ fn _chitra_declared_rgba_bytes(src, len): i64 {
 #   copy of the header layout; 128 bytes is the right price for having no
 #   second opinion about what a BMP header says.
 #
+#   ⭐ THE BUDGET GOVERNS SIZE (1.4.0, fixed-16-mp-cap issue). Through 1.3.x the
+#   fixed caps fired first — CHITRA_MAX_PIXELS (4096 x 4096) and the 256 MB
+#   CHITRA_MAX_RAW_BYTES — so a 4097 x 4096 PNG was refused as
+#   CHITRA_ERR_DIMENSIONS under a 512 MiB budget its 67 MB output was far
+#   inside: an 8K screenshot, three 4K monitors, a tall page capture. A budgeted
+#   decode is now held to the budget's own limits: pixels up to max_bytes / 4,
+#   and single working buffers up to ~2 x max_bytes (PNG's inflated stream is
+#   up to 2 bytes per output byte at depth 16), never below the fixed caps. A
+#   side above CHITRA_MAX_DIM is still refused, and every amplification ratio
+#   (CHITRA_MAX_INFLATE_RATIO and the JPEG / BMP / GIF ones) still bounds the
+#   work per input byte, so the bomb defence never depended on the pixel cap.
+#   chitra_image_decode and the per-format entry points keep the fixed caps.
+#
 # What the budget does NOT cover, named rather than glossed:
 #   - Working buffers during a decode that IS begun. These are bounded by the
-#     format's own caps (CHITRA_MAX_PIXELS, CHITRA_MAX_RAW_BYTES and the four
-#     amplification ratios), not by `max_bytes`. Budgeting N bounds the OUTPUT
-#     at N; peak working set is a small multiple of it.
+#     limits above and the amplification ratios, not by `max_bytes` itself.
+#     Budgeting N bounds the OUTPUT at N; peak working set is a small multiple
+#     of it (about 4x for an Adam7 16-bit RGBA PNG, the worst case).
 #   - sankoch's allocations, which chitra does not route: ~41 KB of one-time
-#     table setup on the process's first PNG decode, plus 32 bytes per
-#     zlib_decompress call thereafter. Neither is chitra's to predict.
-#   - The cumulative total across calls. The bump allocator never frees
-#     (architecture/003), so this bounds ONE decode, not a process. A caller
-#     decoding untrusted input in a loop still needs its own accounting.
+#     table setup on the process's first PNG decode. Not chitra's to predict.
+#   - The cumulative total across calls. chitra_image_decode_budget allocates
+#     from the global bump allocator, which never frees (architecture/003), so
+#     this bounds ONE decode, not a process. A long-running caller uses
+#     chitra_image_decode_budget_via, below.
 #
 # A file whose header cannot be read is NOT refused here — it is handed to the
 # router, which reports the real reason. Refusing it would make this function
@@ -1287,16 +1636,137 @@ fn _chitra_declared_rgba_bytes(src, len): i64 {
 # ================================================================
 # @public
 fn chitra_image_decode_budget(src, len, max_bytes, err_out): i64 {
+    return chitra_image_decode_budget_via(0, src, len, max_bytes, err_out);
+}
+
+# A decode context for a budget of `max_bytes` of output from Allocator `a`
+# (1.4.0): pixels up to max_bytes / 4 and single working buffers up to ~2 x
+# max_bytes (PNG's inflated stream is up to 2 bytes per output byte at depth
+# 16), never below the fixed caps. Above 2^36 bytes the budget exceeds any
+# output a CHITRA_MAX_DIM x CHITRA_MAX_DIM image can declare (17.2 GB), so it
+# is clamped there before it is doubled, which keeps every product in range.
+fn _chitra_budget_ctx_init(ctx, a, max_bytes): i64 {
+    var mb = max_bytes;
+    if (mb > 68719476736) { mb = 68719476736; }
+    var mp = mb / 4;
+    if (mp < CHITRA_MAX_PIXELS) { mp = CHITRA_MAX_PIXELS; }
+    var mr = mb * 2 + mb / 32 + 1048576;
+    if (mr < CHITRA_MAX_RAW_BYTES) { mr = CHITRA_MAX_RAW_BYTES; }
+    _chitra_ctx_init(ctx, a, mp, mr);
+    return ctx;
+}
+
+# ================================================================
+# chitra_image_decode_budget_via — chitra_image_decode_budget, with every
+# allocation of the decode taken from the caller's Allocator `a` (1.4.0,
+# every-decode-leaks issue).
+#
+# `a` is a stdlib Allocator (lib/alloc.cyr: allocator_new, alloc_via /
+# free_via) — a free-list, an arena reset per request, anything that follows
+# the vtable contract — or 0 for the global bump allocator, which makes this
+# exactly chitra_image_decode_budget.
+#
+#   - Every working buffer (the inflated PNG stream, JPEG planes and tables,
+#     BMP / GIF index planes, LZW dictionaries) is returned to `a` before this
+#     returns, so a decode's peak is its output plus ONE decode's working set,
+#     and nothing but the result outlives the call.
+#   - On success the image record and its pixels are the caller's: release
+#     both with ONE call to chitra_image_free(img), after the last use of the
+#     pixels. On a refusal everything the decode allocated is already back.
+#   - The ChitraErr on a refusal is still 16 bytes of the GLOBAL allocator
+#     (chitra_err has no allocator and no free; error records are not per
+#     decode state), and sankoch's one-time tables are its own.
+#   - Blocks from `a` are zeroed before use — the decoders were written against
+#     the global allocator's zeroed memory.
+#
+# Thread-safe in the same sense every decode is: the limits and the
+# allocator live in a context on this call's stack, not in a global, so
+# concurrent decodes with different budgets or allocators do not interact
+# (`a` itself must tolerate whatever concurrency the caller gives it).
+# ================================================================
+# @public
+fn chitra_image_decode_budget_via(a, src, len, max_bytes, err_out): i64 {
     store64(err_out, 0);
     if (max_bytes <= 0) {
         store64(err_out, chitra_err(CHITRA_ERR_BUDGET));
         return 0;
     }
-    if (_chitra_declared_rgba_bytes(src, len) > max_bytes) {
+    if (_chitra_declared_rgba_bytes_via(src, len, a) > max_bytes) {
         store64(err_out, chitra_err(CHITRA_ERR_BUDGET));
         return 0;
     }
-    return chitra_image_decode(src, len, err_out);
+    var ctx[544];                        # _CHITRA_CTX_SIZE
+    _chitra_budget_ctx_init(&ctx, a, max_bytes);
+    var img = _chitra_image_decode_ctx(src, len, &ctx, err_out);
+    if (img == 0) {
+        _chitra_ctx_release(&ctx, 0, 0);
+        return 0;
+    }
+    _chitra_ctx_release(&ctx, img, chitra_image_pixels(img));
+    return img;
+}
+
+# ================================================================
+# chitra_jpeg_decode_cmyk — a 4-component JPEG's samples, without a colour
+# guess (1.4.0, cmyk-ycck-jpeg-refused issue; ADR 0014).
+#
+# ADR 0009 refuses to turn CMYK into RGB because that needs a colour-space
+# choice the file does not make, and chitra_jpeg_decode still refuses these
+# files. But the samples themselves are fully determined by the JPEG and its
+# Adobe APP14: this returns them, in a ChitraImage whose 4 bytes per pixel are
+# C, M, Y, K (not R, G, B, A):
+#   - Adobe transform 0, or no APP14: the samples as stored;
+#   - Adobe transform 2 (YCCK): converted to CMYK exactly as libjpeg does;
+#   - any other transform: CHITRA_ERR_UNSUPPORTED (it names no 4-component
+#     space; libjpeg's fallback to YCCK is a guess);
+#   - a 1- or 3-component file: CHITRA_ERR_JPEG_COMPONENTS — it is not CMYK,
+#     and chitra_image_decode is the entry for it.
+# chitra_image_source_color_type says which: 0x104 (no Adobe marker — values
+# as the writer chose), 0x144 (Adobe CMYK), 0x164 (Adobe YCCK, converted).
+# By Adobe's convention an Adobe file's CMYK is INVERTED (255 = no ink), and
+# chitra returns it as stored; a consumer that wants an uncalibrated RGB
+# preview of an Adobe file computes R = C * K / 255 on these values, and the
+# accurate conversion is the file's ICC profile (APP2), which chitra does not
+# read. Baseline and progressive, any sampling.
+#
+# Born with the long-running-consumer shape, because it has no 1.3.x callers
+# to keep compatible: `a` is a stdlib Allocator (0 = the global one), and
+# `max_bytes` is a budget on the w * h * 4 output with
+# chitra_image_decode_budget_via's contract — refused cheaply as
+# CHITRA_ERR_BUDGET when over it, size limits derived from it, every working
+# buffer returned before this returns, and the result released with
+# chitra_image_free.
+# ================================================================
+# @public
+fn chitra_jpeg_decode_cmyk(a, src, len, max_bytes, err_out): i64 {
+    store64(err_out, 0);
+    if (max_bytes <= 0) {
+        store64(err_out, chitra_err(CHITRA_ERR_BUDGET));
+        return 0;
+    }
+    if (chitra_jpeg_check_signature(src, len) == 0) {
+        store64(err_out, chitra_err(CHITRA_ERR_SIGNATURE));
+        return 0;
+    }
+    var w = 0;
+    var h = 0;
+    if (_chitra_jpeg_declared_dims(src, len, &w, &h) == 1) {
+        if (w * h * 4 > max_bytes) {
+            store64(err_out, chitra_err(CHITRA_ERR_BUDGET));
+            return 0;
+        }
+    }
+    var ctx[544];                        # _CHITRA_CTX_SIZE
+    _chitra_budget_ctx_init(&ctx, a, max_bytes);
+    var img = 0;
+    var frame = _chitra_jpeg_scan_markers_mode(src, len, &ctx, 1, err_out);
+    if (frame != 0) { img = _chitra_jpeg_decode_scans(frame, src, len, err_out); }
+    if (img == 0) {
+        _chitra_ctx_release(&ctx, 0, 0);
+        return 0;
+    }
+    _chitra_ctx_release(&ctx, img, chitra_image_pixels(img));
+    return img;
 }
 
 # ================================================================
@@ -1309,18 +1779,23 @@ fn chitra_image_decode_budget(src, len, max_bytes, err_out): i64 {
 # ================================================================
 # @public
 fn chitra_image_decode(src, len, err_out): i64 {
+    return _chitra_image_decode_ctx(src, len, 0, err_out);
+}
+
+# The router, held to the decode context `ctx` (1.4.0; 0 = defaults).
+fn _chitra_image_decode_ctx(src, len, ctx, err_out): i64 {
     store64(err_out, 0);
     if (chitra_png_check_signature(src, len) == 1) {
-        return chitra_png_decode(src, len, err_out);
+        return _chitra_png_decode_ctx(src, len, ctx, err_out);
     }
     if (chitra_jpeg_check_signature(src, len) == 1) {
-        return chitra_jpeg_decode(src, len, err_out);
+        return _chitra_jpeg_decode_ctx(src, len, ctx, err_out);
     }
     if (chitra_bmp_check_signature(src, len) == 1) {
-        return chitra_bmp_decode(src, len, err_out);
+        return _chitra_bmp_decode_ctx(src, len, ctx, err_out);
     }
     if (chitra_gif_check_signature(src, len) == 1) {
-        return chitra_gif_decode(src, len, err_out);
+        return _chitra_gif_decode_ctx(src, len, ctx, err_out);
     }
     store64(err_out, chitra_err(CHITRA_ERR_SIGNATURE));
     return 0;

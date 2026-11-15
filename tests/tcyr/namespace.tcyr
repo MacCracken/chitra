@@ -25,7 +25,8 @@
 # 127 of the 128 are here. `_jpeg_zz_tbl` is not: it was an ARRAY, and redeclaring it as a scalar is
 # a hard compile error ("redeclared with a different type"), which is loud and was never the hazard.
 # Fixtures (7x5, one per format) were made with ImageMagick and cjpeg; the expected sums are
-# ImageMagick's for PNG / BMP / GIF and `djpeg -nosmooth`'s for the JPEG.
+# ImageMagick's for PNG / BMP / GIF and `djpeg`'s for the JPEG (fancy upsampling since 1.4.0;
+# box gave 20,483).
 include "src/lib.cyr"
 include "lib/assert.cyr"
 
@@ -1430,7 +1431,7 @@ fn _ns_decode(bytes, len, name, want_sum): i64 {
 fn test_consumer_globals_do_not_reach_the_decoders() {
     var l = 0;
     _ns_decode(fx_ns_png(&l), l, "PNG decodes beside the consumer's globals", 15332);
-    _ns_decode(fx_ns_jpg(&l), l, "JPEG (4:2:0, restart interval) decodes beside them", 20483);
+    _ns_decode(fx_ns_jpg(&l), l, "JPEG (4:2:0, restart interval) decodes beside them", 20471);
     _ns_decode(fx_ns_bmp(&l), l, "BMP (RLE8) decodes beside them", 20849);
     _ns_decode(fx_ns_gif(&l), l, "GIF (interlaced) decodes beside them", 20754);
     return 0;

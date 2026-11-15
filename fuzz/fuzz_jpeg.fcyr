@@ -1999,6 +1999,386 @@ enum FuzzEpoch {
     FUZZ_EPOCH = 1024;
 }
 
+# ================================================================
+# 12. Progressive JPEG (SOF2, 1.4.0). Two real progressive files, mutated
+# anywhere from the FIRST scan header on — so the hostile bytes land in scan
+# headers (Ss / Se / Ah / Al, the progression rules), the DHT segments between
+# scans, and the entropy of all four scan kinds — and every case also decodes
+# through a counting Allocator (chitra_image_decode_budget_via), so a refusal
+# deep in a progressive decode must still return every block, and a success
+# must leave exactly the record and its pixels live.
+#   fixture 0: `cjpeg -progressive -quality 85` of the 17x11 two-axis source:
+#              4:2:0, cjpeg's default 10-scan script, DHT before every scan.
+#   fixture 1: `cjpeg -scans s2.scan -sample 1x1 -restart 1`: four levels of
+#              DC successive approximation, AC refinements to Al 4, RSTn in
+#              every scan — the restart + EOBRUN + refinement paths together.
+# Both decode byte-identically to djpeg (tests/tcyr/jpeg_progressive.tcyr).
+# ⚠ NO-OP PROOF (fuzz_jpeg_progressive_reach): over the first 4,000 cases the
+# outcomes are counted, and the mode must both DECODE a share of its cases and
+# REFUSE others as a progression error and as an entropy error — a mode whose
+# mutations all die at the marker walk would pass every contract and test
+# nothing.
+# ================================================================
+fn _fx_jpeg_prog420_bytes(len_out): i64 {
+    var b = alloc(797);
+    var o = 0;
+    o = _fx_hex(b, o, "ffd8ffe000104a46494600010100000100010000ffdb004300050304040403050404040505050607");
+    o = _fx_hex(b, o, "0c08070707070f0b");
+    o = _fx_hex(b, o, "0b090c110f1212110f111113161c1713141a1511111821181a1d1d1f1f1f13172224221e241c1e1f");
+    o = _fx_hex(b, o, "1effdb0043010505");
+    o = _fx_hex(b, o, "050706070e08080e1e1411141e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e");
+    o = _fx_hex(b, o, "1e1e1e1e1e1e1e1e");
+    o = _fx_hex(b, o, "1e1e1e1e1e1e1e1e1e1e1e1e1e1effc2001108000b001103012200021101031101ffc40018000002");
+    o = _fx_hex(b, o, "0300000000000000");
+    o = _fx_hex(b, o, "0000000000000005010204ffc400160101010100000000000000000000000000020305ffda000c03");
+    o = _fx_hex(b, o, "0100021003100000");
+    o = _fx_hex(b, o, "01a4ae74c2d3117ddfffc4001e100001030403000000000000000000000003000204010513141521");
+    o = _fx_hex(b, o, "22ffda0008010100");
+    o = _fx_hex(b, o, "0105020c7d2b7f4c0f1086426367aaecc85fffc40020110001020505000000000000000000000001");
+    o = _fx_hex(b, o, "0002030411131521");
+    o = _fx_hex(b, o, "315291a1ffda0008010301013f018e2d0735dad001defe158999e617ffc4001f1100010303050000");
+    o = _fx_hex(b, o, "0000000000000000");
+    o = _fx_hex(b, o, "0002000111031213152151a1f0ffda0008010201013f013bb23b9bc906f3d7a56a35795fffc40023");
+    o = _fx_hex(b, o, "1000020004050500");
+    o = _fx_hex(b, o, "000000000000000000010200031121122231419223333461a2ffda0008010100063f026b7566644a");
+    o = _fx_hex(b, o, "1bdf78a2cd50a4d2");
+    o = _fx_hex(b, o, "9ae51b8fa8ed98c65cb32a3105b3683dc2a91644187818f226f331ffc40020100100020103050100");
+    o = _fx_hex(b, o, "0000000000000000");
+    o = _fx_hex(b, o, "010011213151a1416191c1e1f0ffda0008010100013f21c62de181d5782f3bd45af6e9b92568f505");
+    o = _fx_hex(b, o, "46ef6657e3291dc5");
+    o = _fx_hex(b, o, "d8707271086c9e2b4b77967e5bdcffda000c03010002000300000010643fffc4001b110003000203");
+    o = _fx_hex(b, o, "0000000000000000");
+    o = _fx_hex(b, o, "00000001112100314161f1ffda0008010301013f1063589c164ece200edc1cf8473fffc4001a1101");
+    o = _fx_hex(b, o, "0100020300000000");
+    o = _fx_hex(b, o, "00000000000000011121410051f0ffda0008010201013f107b6036970288c26f737a7c839fffc400");
+    o = _fx_hex(b, o, "1d10010100020105");
+    o = _fx_hex(b, o, "000000000000000000000111002141103161d1f1ffda0008010100013f1085225c00e8a0a740b369");
+    o = _fx_hex(b, o, "b5c06079d1851a48");
+    o = _fx_hex(b, o, "258377c3e0fde54c8575c96b429c36eb16770c425bcd477671d1c7ffd9");
+    store64(len_out, 797);
+    return b;
+}
+fn _fx_jpeg_progsa_bytes(len_out): i64 {
+    var b = alloc(1085);
+    var o = 0;
+    o = _fx_hex(b, o, "ffd8ffe000104a46494600010100000100010000ffdb004300080606070605080707070909080a0c");
+    o = _fx_hex(b, o, "140d0c0b0b0c1912");
+    o = _fx_hex(b, o, "130f141d1a1f1e1d1a1c1c20242e2720222c231c1c2837292c30313434341f27393d38323c2e3334");
+    o = _fx_hex(b, o, "32ffdb0043010909");
+    o = _fx_hex(b, o, "090c0b0c180d0d1832211c2132323232323232323232323232323232323232323232323232323232");
+    o = _fx_hex(b, o, "3232323232323232");
+    o = _fx_hex(b, o, "3232323232323232323232323232ffc2001108000b001103011100021101031101ffc40017000003");
+    o = _fx_hex(b, o, "0100000000000000");
+    o = _fx_hex(b, o, "00000000000000010302ffc40017010101010100000000000000000000000001000204ffdd000400");
+    o = _fx_hex(b, o, "03ffda000c030100");
+    o = _fx_hex(b, o, "021003100000034812dbffd0c552cc8e9fffda000c03010002000300000032957fffd0257fffda00");
+    o = _fx_hex(b, o, "0c03010002000300");
+    o = _fx_hex(b, o, "00002132ff00ffd06e7fffda000c0301000200030000001020ff00ffd0fc7fffc4001b1000010403");
+    o = _fx_hex(b, o, "0000000000000000");
+    o = _fx_hex(b, o, "000000000001021112104151ffda0008010100013f048ab4d143ffd0c4af4fffc4001d1100020202");
+    o = _fx_hex(b, o, "0301000000000000");
+    o = _fx_hex(b, o, "0000000000010221111203135181ffda0008010201013f02ddcde1de08ad65476af0ffd0e5aa43a8");
+    o = _fx_hex(b, o, "267c3fffc4002011");
+    o = _fx_hex(b, o, "0001020505000000000000000000000000010203111222f02331414251ffda0008010301013f0247");
+    o = _fx_hex(b, o, "583934e599b159ff");
+    o = _fx_hex(b, o, "d08bd5a445bd339286f87fffc4001c10000202020300000000000000000000000001113171c12161");
+    o = _fx_hex(b, o, "91ffda0008010100");
+    o = _fx_hex(b, o, "013f43590f84558c4fffd04dc49a5a3b9e9fffc4001e100100020201050000000000000000000001");
+    o = _fx_hex(b, o, "0011213161105171");
+    o = _fx_hex(b, o, "91a1ffda0008010100013f32bd91d834bae38fb3cd3fffd0da1505b730ca0e82bdba2bffc4001e10");
+    o = _fx_hex(b, o, "0100020201050000");
+    o = _fx_hex(b, o, "000000000000000001001121315181c1d1f0f1ffda0008010100013f21d3ef4ce73b7a1da62a0545");
+    o = _fx_hex(b, o, "66ce2fc1ccf613ff");
+    o = _fx_hex(b, o, "d0a145a2d8431b8424200e2d27d24fffc4001d100100030100020300000000000000000001112131");
+    o = _fx_hex(b, o, "004171c1e1f0ffda");
+    o = _fx_hex(b, o, "0008010100013f10ae00d181a683a3279e290dc4ae4b05c838969d87a3f53bffd0d631d515a542b5");
+    o = _fx_hex(b, o, "97d128115043ddae");
+    o = _fx_hex(b, o, "f7e37e7bffc4001f110001040105010000000000000000000001001121314151618191f0e1ffda00");
+    o = _fx_hex(b, o, "08010201013f2134");
+    o = _fx_hex(b, o, "0b213da78337e27ccb71ee57ffd010fa1030d9f98a51a3a0bfffc4001f1101000301000105010000");
+    o = _fx_hex(b, o, "0000000000000111");
+    o = _fx_hex(b, o, "213100514171a1d1f0f1ffda0008010201013f10f3ec282ac065f95b0c59792159436746dc8a2521");
+    o = _fx_hex(b, o, "cf6fe49cffd08844");
+    o = _fx_hex(b, o, "926a769dbf4e90cc02da9a35f08aefd7ebefffc4001e110100020104030000000000000000000001");
+    o = _fx_hex(b, o, "001131102161f0b1");
+    o = _fx_hex(b, o, "d1f1ffda0008010301013f21052e25029bbf7ce8ff00ffd0251617d46afbd54e34ffc4001f110100");
+    o = _fx_hex(b, o, "0103040300000000");
+    o = _fx_hex(b, o, "00000000000001110021413151619181f0f1ffda0008010301013f10c4a221b4cda346778c834c8c");
+    o = _fx_hex(b, o, "d4e1df24e2056da1");
+    o = _fx_hex(b, o, "98a96e57ffd0304178044e8c4617d0a205b42f940bd0eb96be715fffd9");
+    store64(len_out, 1085);
+    return b;
+}
+var _fx_jpeg_prog_cache = 0;
+var _fx_jpeg_prog_len = 0;
+var _fx_jpeg_progsa_cache = 0;
+var _fx_jpeg_progsa_len = 0;
+
+# A fresh, mutable copy of progressive fixture k (0 or 1).
+fn fx_jpeg_prog(k, len_out): i64 {
+    if (k == 1) {
+        if (_fx_jpeg_progsa_cache == 0) { _fx_jpeg_progsa_cache = _fx_jpeg_progsa_bytes(&_fx_jpeg_progsa_len); }
+        store64(len_out, _fx_jpeg_progsa_len);
+        return _fx_copy(_fx_jpeg_progsa_cache, _fx_jpeg_progsa_len);
+    }
+    if (_fx_jpeg_prog_cache == 0) { _fx_jpeg_prog_cache = _fx_jpeg_prog420_bytes(&_fx_jpeg_prog_len); }
+    store64(len_out, _fx_jpeg_prog_len);
+    return _fx_copy(_fx_jpeg_prog_cache, _fx_jpeg_prog_len);
+}
+
+# Counting Allocator: +0 live, +8 bad frees, +16 slot count, +24.. 128 slots.
+fn _fz_ta_alloc(state, size): i64 {
+    var p = alloc(size);
+    if (p == 0) { return 0; }
+    var n = load64(state + 16);
+    if (n < 128) {
+        store64(state + 24 + n * 8, p);
+        store64(state + 16, n + 1);
+    }
+    store64(state, load64(state) + 1);
+    return p;
+}
+
+fn _fz_ta_realloc(state, o, os, ns): i64 { return 0; }
+
+fn _fz_ta_free(state, ptr): i64 {
+    var n = load64(state + 16);
+    var i = 0;
+    var found = 0;
+    while (i < n) {
+        if (load64(state + 24 + i * 8) == ptr) {
+            store64(state + 24 + i * 8, 0);
+            found = 1;
+            i = n;
+        }
+        i = i + 1;
+    }
+    if (found == 0) { store64(state + 8, load64(state + 8) + 1); }
+    store64(state, load64(state) - 1);
+    return 0;
+}
+
+fn _fz_ta_reset(state): i64 { return 0; }
+
+# The _via contract on hostile bytes: every block back on a refusal; exactly
+# two live on success, none after chitra_image_free; nothing freed twice or
+# freed that was never issued.
+fn _jpeg_via_contract(buf, n, label): i64 {
+    var st = alloc(24 + 128 * 8);
+    store64(st, 0);
+    store64(st + 8, 0);
+    store64(st + 16, 0);
+    var a = allocator_new(&_fz_ta_alloc, &_fz_ta_realloc, &_fz_ta_free, &_fz_ta_reset, st);
+    var err = 0;
+    var img = chitra_image_decode_budget_via(a, buf, n, 1048576, &err);
+    if (img == 0) {
+        assert(err != 0, label);
+        assert_eq(load64(st), 0, label);
+    }
+    if (img != 0) {
+        assert_eq(load64(st), 2, label);
+        chitra_image_free(img);
+        assert_eq(load64(st), 0, label);
+    }
+    assert_eq(load64(st + 8), 0, label);
+    return 0;
+}
+
+# Mutate fixture (seed % 2) from its first SOS on; returns the outcome code
+# (0 = decoded, else the ChitraErrCode) for the reach count.
+fn fuzz_jpeg_progressive(seed, nmut): i64 {
+    _fuzz_seed(seed);
+    var lo = 0;
+    var b = fx_jpeg_prog(seed % 2, &lo);
+    var first = 0 - 1;
+    var i = 0;
+    while (i + 1 < lo) {
+        if (first < 0) {
+            if (load8(b + i) == 0xFF) {
+                if (load8(b + i + 1) == 0xDA) { first = i; }
+            }
+        }
+        i = i + 1;
+    }
+    if (first < 0) { return 0 - 1; }
+    var m = 0;
+    while (m < nmut) {
+        store8(b + first + ((_fuzz_next() * 256 + _fuzz_next()) % (lo - first)), _fuzz_next());
+        m = m + 1;
+    }
+    _jpeg_contract(b, lo, "jpeg progressive mutation");
+    _jpeg_via_contract(b, lo, "jpeg progressive mutation (via a counting Allocator)");
+    var err = 0;
+    var img = chitra_jpeg_decode(b, lo, &err);
+    if (img != 0) { return 0; }
+    return chitra_err_code(err);
+}
+
+fn fuzz_jpeg_progressive_reach(): i64 {
+    var seed = 1;
+    var dec = 0;
+    var sos = 0;
+    var ent = 0;
+    var oc = 0;
+    while (seed <= 4000) {
+        oc = fuzz_jpeg_progressive(seed * 2654435761, (seed % 3) + 1);
+        if (oc == 0) { dec = dec + 1; }
+        if (oc == CHITRA_ERR_JPEG_SOS) { sos = sos + 1; }
+        if (oc == CHITRA_ERR_JPEG_ENTROPY) { ent = ent + 1; }
+        _fuzz_epoch(seed);
+        seed = seed + 1;
+    }
+    print("fuzz_jpeg: progressive reach over 4000: decoded ", 48);
+    print_num(dec);
+    print(", JPEG_SOS ", 11);
+    print_num(sos);
+    print(", JPEG_ENTROPY ", 15);
+    print_num(ent);
+    println("");
+    assert(dec >= 400, "progressive mode decodes at least 10% of its cases (reaches the scan decoders)");
+    assert(sos >= 40, "progressive mode reaches the progression / scan-header refusals");
+    assert(ent >= 40, "progressive mode reaches the entropy refusals");
+    return 0;
+}
+
+# ================================================================
+# 13. chitra_jpeg_decode_cmyk (1.4.0). A progressive YCCK file (libjpeg,
+# Adobe transform 2, Y and K at 2x2, 33x17), mutated anywhere after SOI —
+# frame header, APP14 transform byte, scan headers, entropy — through the CMYK
+# entry with a counting Allocator. Its contract is the RGBA entries' plus the
+# Allocator one; a success must say it is CMYK (source_color_type 0x1x4).
+# NO-OP PROOF: the mode must decode some of its cases and refuse others.
+# ================================================================
+fn _fx_jpeg_cmyk_bytes(len_out): i64 {
+    var b = alloc(1704);
+    var o = 0;
+    o = _fx_hex(b, o, "ffd8ffee000e41646f626500640000000002ffdb0043000503040404030504040405050506070c08");
+    o = _fx_hex(b, o, "070707070f0b0b09");
+    o = _fx_hex(b, o, "0c110f1212110f111113161c1713141a1511111821181a1d1d1f1f1f13172224221e241c1e1f1eff");
+    o = _fx_hex(b, o, "db00430105050507");
+    o = _fx_hex(b, o, "06070e08080e1e1411141e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e");
+    o = _fx_hex(b, o, "1e1e1e1e1e1e1e1e");
+    o = _fx_hex(b, o, "1e1e1e1e1e1e1e1e1e1e1e1effc20014080011002104012200021101031101042200ffc4001b0000");
+    o = _fx_hex(b, o, "0202030100000000");
+    o = _fx_hex(b, o, "000000000000000005010603040702ffc40019010002030100000000000000000000000002030001");
+    o = _fx_hex(b, o, "0604ffda000e0401");
+    o = _fx_hex(b, o, "00021003100400000001f5118c4a97d35d732d8d4cb04b7299cba91c97ced8e3e532ca0a668f530c");
+    o = _fx_hex(b, o, "8f413132b0a101bf");
+    o = _fx_hex(b, o, "d75fc0ffc4002110000201030305000000000000000000000203010004051214341521323335ffda");
+    o = _fx_hex(b, o, "0008010100010502");
+    o = _fx_hex(b, o, "75c6f721dcdc98636972f687599a1306c871982516ec732ec75632b13f39deb5732f7cebffc4001a");
+    o = _fx_hex(b, o, "1100020203000000");
+    o = _fx_hex(b, o, "00000000000000000000110310133343ffda00080102010105024ab21ca4da7fffc4001a11000202");
+    o = _fx_hex(b, o, "0300000000000000");
+    o = _fx_hex(b, o, "000000000000010315213233ffda00080103010105024652af26de7ee7ffc4001d10000104030101");
+    o = _fx_hex(b, o, "0000000000000000");
+    o = _fx_hex(b, o, "000005010213140006243110ffda00080104000105028a9a846482b66ed508f90952c8a9a1b64857");
+    o = _fx_hex(b, o, "59ed436f906d2c1d");
+    o = _fx_hex(b, o, "e8ccddfc17f3ffc4002d100001020306030803000000000000000001020300112104122231324181");
+    o = _fx_hex(b, o, "a1b1102334717383");
+    o = _fx_hex(b, o, "9193a2b2d1ffda0008010100063f024d7ba6f1ae6294da26a6945404e79623b1fc61c58502bd6dd7");
+    o = _fx_hex(b, o, "50398850703ada0e");
+    o = _fx_hex(b, o, "b244a4233e70e5c6d28686bbb41cb8429e92ef398e69df71d13f3092c266e0c624257926b2e1fd84");
+    o = _fx_hex(b, o, "599070d02c839478");
+    o = _fx_hex(b, o, "1b2fd098b77988f715fb222cde9a7a981c7a767fffc4001d11000102070000000000000000000000");
+    o = _fx_hex(b, o, "0001001003123271");
+    o = _fx_hex(b, o, "81a1c1ffda0008010201063f0294352748e38a1d9bffc4001b110001040300000000000000000000");
+    o = _fx_hex(b, o, "0000810001101151");
+    o = _fx_hex(b, o, "c1d1ffda0008010301063f02b2af1b81c45a3fffc400291000000403050901000000000000000000");
+    o = _fx_hex(b, o, "0001111204317102");
+    o = _fx_hex(b, o, "031381c10510213234415161a3b1ffda0008010400063f022b4d7f664b317718be4ea87210dc30f0");
+    o = _fx_hex(b, o, "dded1505dc1b5264");
+    o = _fx_hex(b, o, "e5e6421d57c81da6bfb32598bc8c5f075429089e18786df68aa2f20da92272f3218eabe40e87a0b3");
+    o = _fx_hex(b, o, "5d46cbadbd0645f9");
+    o = _fx_hex(b, o, "bbffc40021100002020103050100000000000000000001211131004151f0106191b1c1a1ffda0008");
+    o = _fx_hex(b, o, "010100013f217887");
+    o = _fx_hex(b, o, "9601486616d3804fb7010809b742424ec3b8c26f9114337a32033b77c3190346053d4cfd8ce30c0b");
+    o = _fx_hex(b, o, "35e34591466037f1");
+    o = _fx_hex(b, o, "805faf6608a2ad0bdb2a6968d4c9bd0236d5824a042300dba92e16719f99c9ec72ee90abf0fb3a7f");
+    o = _fx_hex(b, o, "ffc4002011000102");
+    o = _fx_hex(b, o, "050500000000000000000000000100113151a1b1d110216171e1ffda0008010201013f2102040c20");
+    o = _fx_hex(b, o, "d99519010e2065d6");
+    o = _fx_hex(b, o, "0bee9fed82be8ae5f4ffc4001f11000102060300000000000000000000000121310010116171a191");
+    o = _fx_hex(b, o, "e1f0ffda00080103");
+    o = _fx_hex(b, o, "01013f21250c7c28837aa4028ace0f4dc8f671f55e5fffc400211000010401040301000000000000");
+    o = _fx_hex(b, o, "0000003100011141");
+    o = _fx_hex(b, o, "71102161f05181d1b1ffda0008010400013f216b40c4d997a0836978a2eb61305320036fb8395674");
+    o = _fx_hex(b, o, "fcc1de284e81ed03");
+    o = _fx_hex(b, o, "93665e820da5a28aad84c14c804dbee0e559d3710778a13a0ef3c2166fcaeb3ca8f43d3fffda000e");
+    o = _fx_hex(b, o, "0401000200030004");
+    o = _fx_hex(b, o, "00000010aa07affc2785feff00ffc4001c1001010100020301000000000000000000011121004120");
+    o = _fx_hex(b, o, "3161f0ffda000801");
+    o = _fx_hex(b, o, "0100013f10a5664d14695506152e2e0711a1e75630206892a5eb804b2cb2364e80035ea24d79e41a");
+    o = _fx_hex(b, o, "40c9698ec4a06fc1");
+    o = _fx_hex(b, o, "fafbc777e21e0a45310f4d317363eb40c2cab0bc474d43c22d6cf0c842ac041e81538ac6370e4446");
+    o = _fx_hex(b, o, "8c2aba9053c8d4fc");
+    o = _fx_hex(b, o, "48e67fffc4001c11010100020203000000000000000000000111213110510041f0ffda0008010201");
+    o = _fx_hex(b, o, "013f10c46011302c");
+    o = _fx_hex(b, o, "6822adc1e8c69f1115136589017a35936183338f0fcddf3c3fffc4001e1101000201040300000000");
+    o = _fx_hex(b, o, "0000000000000111");
+    o = _fx_hex(b, o, "213100106171415191ffda0008010301013f10c6e1284d8e8db67dacaa1c819797b15ca6083c2e23");
+    o = _fx_hex(b, o, "5d4f8ec863da7fff");
+    o = _fx_hex(b, o, "c400201000010500010501000000000000000000110121314171510061a1f0f120ffda0008010400");
+    o = _fx_hex(b, o, "013f10f2ab237ec6");
+    o = _fx_hex(b, o, "249292ba925ddad458dc52dcf51b12539c62826865afbb622932a0a7bfc75e55646fd8c492525752");
+    o = _fx_hex(b, o, "4bbb5a8b1b8a5b9e");
+    o = _fx_hex(b, o, "a3624a738c504d0cb5f76c45265414f7f8fd0a1f38afffd9");
+    store64(len_out, 1704);
+    return b;
+}
+
+var _fx_jpeg_cmyk_cache = 0;
+var _fx_jpeg_cmyk_len = 0;
+
+fn fuzz_jpeg_cmyk(seed, nmut): i64 {
+    _fuzz_seed(seed);
+    if (_fx_jpeg_cmyk_cache == 0) { _fx_jpeg_cmyk_cache = _fx_jpeg_cmyk_bytes(&_fx_jpeg_cmyk_len); }
+    var lo = _fx_jpeg_cmyk_len;
+    var b = _fx_copy(_fx_jpeg_cmyk_cache, lo);
+    var m = 0;
+    while (m < nmut) {
+        store8(b + 2 + ((_fuzz_next() * 256 + _fuzz_next()) % (lo - 2)), _fuzz_next());
+        m = m + 1;
+    }
+    var st = alloc(24 + 128 * 8);
+    store64(st, 0);
+    store64(st + 8, 0);
+    store64(st + 16, 0);
+    var a = allocator_new(&_fz_ta_alloc, &_fz_ta_realloc, &_fz_ta_free, &_fz_ta_reset, st);
+    var err = 0;
+    var img = chitra_jpeg_decode_cmyk(a, b, lo, 1048576, &err);
+    var oc = 0;
+    if (img == 0) {
+        assert(err != 0, "jpeg cmyk mutation: refusal sets err");
+        assert_eq(load64(st), 0, "jpeg cmyk mutation: a refusal returns every block");
+        if (err != 0) { oc = chitra_err_code(err); }
+    }
+    if (img != 0) {
+        assert(err == 0, "jpeg cmyk mutation: success leaves err 0");
+        assert(chitra_image_width(img) > 0, "jpeg cmyk mutation: width");
+        assert_eq(chitra_image_source_color_type(img) & 0x10F, 0x104, "jpeg cmyk mutation: CMYK sentinel");
+        assert_eq(load64(st), 2, "jpeg cmyk mutation: record + pixels live");
+        chitra_image_free(img);
+        assert_eq(load64(st), 0, "jpeg cmyk mutation: none after chitra_image_free");
+    }
+    assert_eq(load64(st + 8), 0, "jpeg cmyk mutation: nothing freed that was not issued");
+    return oc;
+}
+
+fn fuzz_jpeg_cmyk_reach(): i64 {
+    var seed = 1;
+    var dec = 0;
+    var ref = 0;
+    while (seed <= 3000) {
+        if (fuzz_jpeg_cmyk(seed * 2246822519, (seed % 3) + 1) == 0) { dec = dec + 1; } else { ref = ref + 1; }
+        _fuzz_epoch(seed);
+        seed = seed + 1;
+    }
+    assert(dec >= 300, "cmyk mode decodes at least 10% of its cases");
+    assert(ref >= 300, "cmyk mode refuses at least 10% of its cases");
+    return 0;
+}
+
 fn _fuzz_reclaim(): i64 {
     #ifdef CYRIUS_POISON
     var pz = poison_sweep();
@@ -2007,6 +2387,9 @@ fn _fuzz_reclaim(): i64 {
     alloc_reset();
     _fx_jpeg_dri_cache = 0;
     _fx_jpeg_rgb_cache = 0;
+    _fx_jpeg_prog_cache = 0;
+    _fx_jpeg_progsa_cache = 0;
+    _fx_jpeg_cmyk_cache = 0;
     return 0;
 }
 
@@ -2108,6 +2491,30 @@ fn main(): i64 {
     fuzz_jpeg_degenerate();
     _fuzz_reclaim();
     println("fuzz_jpeg: degenerate-length cases survived");
+
+    # 12. Progressive (1.4.0): the reach proof, then the bulk of the mode.
+    fuzz_jpeg_progressive_reach();
+    _fuzz_reclaim();
+    seed = 4001;
+    while (seed <= 60000) {
+        fuzz_jpeg_progressive(seed * 2654435761, (seed % 3) + 1);
+        _fuzz_epoch(seed);
+        seed = seed + 1;
+    }
+    _fuzz_reclaim();
+    println("fuzz_jpeg: 60000 progressive mutation cases survived (contract + counting Allocator)");
+
+    # 13. chitra_jpeg_decode_cmyk (1.4.0)
+    fuzz_jpeg_cmyk_reach();
+    _fuzz_reclaim();
+    seed = 3001;
+    while (seed <= 30000) {
+        fuzz_jpeg_cmyk(seed * 2246822519, (seed % 3) + 1);
+        _fuzz_epoch(seed);
+        seed = seed + 1;
+    }
+    _fuzz_reclaim();
+    println("fuzz_jpeg: 30000 CMYK-entry mutation cases survived (contract + counting Allocator)");
 
     return assert_summary();
 }

@@ -135,9 +135,29 @@ var _CHITRA_JF_DQT16            = 360;
 # else — but the 0.7.0 multi-scan work needs a per-component coverage bitmask
 # and a resume position (ADR 0006), so the slack is left deliberately generous
 # rather than shaved to fit.
-var CHITRA_JPEG_FRAME_SIZE = 384;   # 368 used, 16 B spare
+# The decode context (1.4.0, png_chunks.cyr): limits and allocator for every
+# allocation this frame's decode makes. 0 = the 1.3.x defaults.
+var _CHITRA_JF_CTX              = 368;
+# ---- progressive (SOF2, 1.4.0 — ADR 0013) ---------------------------------
+# 1 when the frame header was SOF2.
+var _CHITRA_JF_PROG             = 376;
+# The current progressive scan's spectral selection and successive
+# approximation (T.81 § B.2.3), packed one byte each: Ss | Se << 8 | Ah << 16
+# | Al << 24. Ss..Se is the band of zig-zag positions the scan codes, Ah the
+# bit position the previous scan of that band stopped at (0 = first scan), Al
+# the bit position this one stops at. Packed so the frame grows by 24 bytes,
+# not 56: the refusal-cost cells hold a refused JPEG to 512 B, frame and
+# ChitraErr together.
+var _CHITRA_JF_SPEC             = 384;
+# 1 when the caller is chitra_jpeg_decode_cmyk (1.4.0 — ADR 0014): the one
+# entry that accepts a 4-component frame, and accepts only one.
+var _CHITRA_JF_WANT4            = 392;
+# Grown 384 -> 400 in 1.4.0 for the context and the three fields above.
+var CHITRA_JPEG_FRAME_SIZE = 400;   # all 400 used
 
 fn _chitra_jpeg_frame_width(f): i64          { return load64(f + _CHITRA_JF_WIDTH); }
+fn _chitra_jpeg_frame_ctx(f): i64            { return load64(f + _CHITRA_JF_CTX); }
+fn _chitra_jpeg_frame_prog(f): i64           { return load64(f + _CHITRA_JF_PROG); }
 fn _chitra_jpeg_frame_height(f): i64         { return load64(f + _CHITRA_JF_HEIGHT); }
 fn _chitra_jpeg_frame_precision(f): i64      { return load64(f + _CHITRA_JF_PRECISION); }
 fn _chitra_jpeg_frame_num_components(f): i64 { return load64(f + _CHITRA_JF_NCOMP); }
@@ -221,7 +241,7 @@ fn _chitra_jpeg_marker_action(m): i64 {
     if (m == 0xDD) { return 7; }                          # DRI — parse restart interval
     if (m == 0xE0) { return 9; }                          # APP0 — may be the JFIF identifier
     if (m == 0xEE) { return 8; }                          # APP14 — may carry the Adobe colour transform
-    if (m == 0xC2) { return CHITRA_ERR_JPEG_PROGRESSIVE; }
+    if (m == 0xC2) { return 10; }                         # SOF2 progressive — parse (1.4.0)
     if (m == 0xC9) { return CHITRA_ERR_JPEG_ARITHMETIC; } # SOF9 ext-seq arithmetic
     if (m == 0xCA) { return CHITRA_ERR_JPEG_ARITHMETIC; } # SOF10 progressive arithmetic
     if (m == 0xCB) { return CHITRA_ERR_JPEG_ARITHMETIC; } # SOF11 lossless arithmetic
@@ -279,7 +299,7 @@ fn _chitra_jpeg_marker_action(m): i64 {
 # pays nothing.
 # ================================================================
 fn _chitra_jpeg_alloc_quant(frame): i64 {
-    var quant = alloc(CHITRA_MAX_QUANT_TABLES * 64 * 8);
+    var quant = _chitra_alloc(_chitra_jpeg_frame_ctx(frame), CHITRA_MAX_QUANT_TABLES * 64 * 8);
     if (quant == 0) { return 0; }
     store64(frame + _CHITRA_JF_QUANT, quant);
     var z = 0;
@@ -291,7 +311,7 @@ fn _chitra_jpeg_alloc_quant(frame): i64 {
 }
 
 fn _chitra_jpeg_alloc_huff(frame): i64 {
-    var huff = alloc(8 * _CHITRA_HT_SIZE);
+    var huff = _chitra_alloc(_chitra_jpeg_frame_ctx(frame), 8 * _CHITRA_HT_SIZE);
     if (huff == 0) { return 0; }
     store64(frame + _CHITRA_JF_HUFF, huff);
     # Zero the Huffman storage exactly as the quant storage above is zeroed.
@@ -299,7 +319,7 @@ fn _chitra_jpeg_alloc_huff(frame): i64 {
     # actually defined, so this is defence in depth rather than a live bug — but
     # an un-zeroed table reached through any future path would decode from
     # whatever the bump allocator last left there. 8 * _CHITRA_HT_SIZE bytes is
-    # 8 * 2464 = 19712, i.e. _CHITRA_HT_SIZE i64 slots.
+    # 8 * 3488 = 27904 (19712 before 1.4.0's lookahead), i.e. _CHITRA_HT_SIZE i64 slots.
     var z = 0;
     while (z < _CHITRA_HT_SIZE) {
         store64(huff + z * 8, 0);
@@ -372,14 +392,36 @@ fn _chitra_jpeg_parse_dqt(cur, frame): i64 {
                 # decodes from one) and recorded, and the frame header decides:
                 # SOF0 refuses it as JPEG_DQT, SOF1 / SOF2 / SOF9 / ... report
                 # their own mode code (_chitra_jpeg_scan_markers).
-                if (load64(frame + _CHITRA_JF_SEEN_SOF) == 1) { rc = CHITRA_ERR_JPEG_DQT; done = 1; }
+                #
+                # 1.4.0: a PROGRESSIVE frame may use one (libjpeg writes SOF2
+                # with 16-bit tables exactly where it writes SOF1 for
+                # sequential: any value above 255, i.e. low quality), so the
+                # table is now STORED rather than skipped, and refused after
+                # the frame header only when that header was baseline.
+                if (load64(frame + _CHITRA_JF_SEEN_SOF) == 1) {
+                    if (load64(frame + _CHITRA_JF_PROG) == 0) { rc = CHITRA_ERR_JPEG_DQT; done = 1; }
+                }
                 if (done == 0) {
                     if (remaining < 128) { rc = CHITRA_ERR_JPEG_DQT; done = 1; }
                 }
                 if (done == 0) {
-                    _chitra_cur_skip(cur, 128);
+                    if (quant == 0) {
+                        quant = _chitra_jpeg_alloc_quant(frame);
+                        if (quant == 0) { rc = CHITRA_ERR_OOM; done = 1; }
+                    }
+                }
+                if (done == 0) {
+                    k = 0;
+                    while (k < 64) {
+                        v = _chitra_cur_u16_be(cur);
+                        store64(quant + (tq * 64 + k) * 8, v);
+                        k = k + 1;
+                    }
                     remaining = remaining - 128;
                     store64(frame + _CHITRA_JF_DQT16, 1);
+                    present = load64(frame + _CHITRA_JF_QUANT_PRESENT);
+                    present = present | (1 << tq);
+                    store64(frame + _CHITRA_JF_QUANT_PRESENT, present);
                 }
             }
         }
@@ -675,7 +717,15 @@ fn _chitra_jpeg_parse_sof0(cur, frame): i64 {
     var width = _chitra_cur_u16_be(cur);
     var ncomp = _chitra_cur_u8(cur);
     if (precision != 8) { return CHITRA_ERR_JPEG_PRECISION; }
-    if (ncomp != 1 && ncomp != 3) { return CHITRA_ERR_JPEG_COMPONENTS; }
+    # 1 or 3 components for the RGBA entries; 4 (CMYK / YCCK) for
+    # chitra_jpeg_decode_cmyk and nothing else (1.4.0 — ADR 0014). A
+    # 4-component frame through the RGBA path is still refused here: turning
+    # its samples into RGB is the colour-space guess ADR 0009 forbids.
+    if (load64(frame + _CHITRA_JF_WANT4) == 1) {
+        if (ncomp != 4) { return CHITRA_ERR_JPEG_COMPONENTS; }
+    } else {
+        if (ncomp != 1 && ncomp != 3) { return CHITRA_ERR_JPEG_COMPONENTS; }
+    }
     # Y==0 (height supplied by a DNL after the scan; roadmap Out of scope) is rejected, never decoded with a 0-height
     # buffer — see docs/adr/0004 scope.
     if (width == 0 || height == 0) { return CHITRA_ERR_DIMENSIONS; }
@@ -683,7 +733,7 @@ fn _chitra_jpeg_parse_sof0(cur, frame): i64 {
     # CHITRA_MAX_DIM is 65,535, so this cannot be true. Kept so the cap stays
     # stated in one place for every format.
     if (width > CHITRA_MAX_DIM || height > CHITRA_MAX_DIM) { return CHITRA_ERR_DIMENSIONS; }
-    if (width * height > CHITRA_MAX_PIXELS) { return CHITRA_ERR_DIMENSIONS; }
+    if (width * height > _chitra_lim_pixels(_chitra_jpeg_frame_ctx(frame))) { return CHITRA_ERR_DIMENSIONS; }
     if (seglen != 8 + 3 * ncomp) { return CHITRA_ERR_JPEG_SOF; }
 
     var rc = 0;
@@ -836,6 +886,7 @@ fn _chitra_jpeg_resume_to_next_scan(frame, src, len, resume, err_out): i64 {
         if (done == 0) {
             act = _chitra_jpeg_marker_action(m);
             if (act >= 13) { rc = act; done = 1; }
+            if (act == 10) { act = 1; }                 # SOF2: a second frame header, as SOF0
             if (act == 1) {
                 # A second SOF0, after geometry has been derived and planes
                 # allocated from the first. Refuse rather than redefine.
@@ -912,6 +963,16 @@ fn _chitra_jpeg_resume_to_next_scan(frame, src, len, resume, err_out): i64 {
 # CHITRA_ERR_JPEG_COMPONENTS, the code ADR 0004 gives CMYK/YCCK.
 # ================================================================
 fn _chitra_jpeg_colour_evidence_ok(frame): i64 {
+    # Four components (1.4.0): an Adobe transform names the space — 0 CMYK,
+    # 2 YCCK — and no APP14 means CMYK (libjpeg's default_decompress_parms).
+    # Any other transform is a value Adobe defines for 3 components only;
+    # libjpeg warns and assumes YCCK, and that assumption is the guess this
+    # rule declines, as it does for 3 components above 1.
+    if (load64(frame + _CHITRA_JF_NCOMP) == 4) {
+        if (load64(frame + _CHITRA_JF_ADOBE_TRANSFORM) == 1) { return CHITRA_ERR_UNSUPPORTED; }
+        if (load64(frame + _CHITRA_JF_ADOBE_TRANSFORM) > 2) { return CHITRA_ERR_UNSUPPORTED; }
+        return 0;
+    }
     if (load64(frame + _CHITRA_JF_NCOMP) != 3) { return 0; }
     if (load64(frame + _CHITRA_JF_SAW_JFIF) != 0) { return 0; }
     if (load64(frame + _CHITRA_JF_ADOBE_TRANSFORM) > 1) { return CHITRA_ERR_UNSUPPORTED; }
@@ -928,13 +989,25 @@ fn _chitra_jpeg_colour_evidence_ok(frame): i64 {
 # terminates on the can_read(2) gate, so it cannot loop forever on bad input.
 # ================================================================
 fn _chitra_jpeg_scan_markers(src, len, err_out): i64 {
+    return _chitra_jpeg_scan_markers_ctx(src, len, 0, err_out);
+}
+
+# The same walk, held to the decode context `ctx` (1.4.0; 0 = defaults).
+fn _chitra_jpeg_scan_markers_ctx(src, len, ctx, err_out): i64 {
+    return _chitra_jpeg_scan_markers_mode(src, len, ctx, 0, err_out);
+}
+
+# want4 = 1: the CMYK entry's walk — a 4-component frame is the only one
+# accepted (1.4.0).
+fn _chitra_jpeg_scan_markers_mode(src, len, ctx, want4, err_out): i64 {
     store64(err_out, 0);
     if (chitra_jpeg_check_signature(src, len) == 0) {
         store64(err_out, chitra_err(CHITRA_ERR_SIGNATURE));
         return 0;
     }
-    var frame = alloc(CHITRA_JPEG_FRAME_SIZE);
+    var frame = _chitra_alloc(ctx, CHITRA_JPEG_FRAME_SIZE);
     if (frame == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
+    store64(frame + _CHITRA_JF_CTX, ctx);
     store64(frame + _CHITRA_JF_WIDTH, 0);
     store64(frame + _CHITRA_JF_HEIGHT, 0);
     store64(frame + _CHITRA_JF_PRECISION, 0);
@@ -951,6 +1024,9 @@ fn _chitra_jpeg_scan_markers(src, len, err_out): i64 {
     store64(frame + _CHITRA_JF_COVERED, 0);
     store64(frame + _CHITRA_JF_SAW_JFIF, 0);
     store64(frame + _CHITRA_JF_DQT16, 0);
+    store64(frame + _CHITRA_JF_PROG, 0);
+    store64(frame + _CHITRA_JF_SPEC, 63 << 8);          # Ss 0, Se 63, Ah 0, Al 0
+    store64(frame + _CHITRA_JF_WANT4, want4);
     # The quantization and Huffman stores are NOT allocated here — see
     # _chitra_jpeg_alloc_quant / _chitra_jpeg_alloc_huff. A file that never defines a table
     # never pays for one, which is what makes the refusal path cheap.
@@ -1011,6 +1087,17 @@ fn _chitra_jpeg_scan_markers(src, len, err_out): i64 {
                     if (rc != 0) { done = 1; }
                 }
             }
+            if (act == 10) {
+                # SOF2 (1.4.0): the same frame-header layout as SOF0, marked
+                # progressive BEFORE the parse so a 16-bit table ahead of it is
+                # judged legal on every path, including a refusal inside it.
+                if (load64(frame + _CHITRA_JF_SEEN_SOF) == 1) { rc = CHITRA_ERR_JPEG_SOF; done = 1; }
+                if (done == 0) {
+                    store64(frame + _CHITRA_JF_PROG, 1);
+                    rc = _chitra_jpeg_parse_sof0(&cur, frame);
+                    if (rc != 0) { done = 1; }
+                }
+            }
             if (act == 5) {
                 rc = _chitra_jpeg_parse_dqt(&cur, frame);
                 if (rc != 0) { done = 1; }
@@ -1062,10 +1149,13 @@ fn _chitra_jpeg_scan_markers(src, len, err_out): i64 {
     # the table is still the earliest defect chitra can name, and it keeps the
     # code it was refused with through 1.1.0. A non-baseline SOF never reaches
     # here as 0: its classifier code is the answer.
+    # A progressive frame explains a 16-bit table by itself (1.4.0).
     if (rc != 0) {
         if (load64(frame + _CHITRA_JF_DQT16) == 1) {
-            if (rc < CHITRA_ERR_JPEG_PROGRESSIVE || rc > CHITRA_ERR_JPEG_COMPONENTS) {
-                rc = CHITRA_ERR_JPEG_DQT;
+            if (load64(frame + _CHITRA_JF_PROG) == 0) {
+                if (rc < CHITRA_ERR_JPEG_PROGRESSIVE || rc > CHITRA_ERR_JPEG_COMPONENTS) {
+                    rc = CHITRA_ERR_JPEG_DQT;
+                }
             }
         }
     }

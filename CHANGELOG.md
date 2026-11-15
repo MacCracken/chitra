@@ -9,6 +9,152 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 _Nothing yet._
 
+## [1.4.0] - 2026-11-14 — eight consumer issues, closed
+
+A minor, not a patch: two decode entry points join the frozen surface (29 → 31
+names), `ChitraImage` grows by one appended field (56 → 64 bytes), progressive
+JPEG decodes, and the fixed 16.7 MP cap yields to a caller's budget. ⛔ **Nothing
+frozen was renamed, removed or re-laid-out.** Output changed for subsampled
+JPEGs, 16-bpp BMPs and 32-bpp `BI_RGB` BMPs — the first toward `djpeg`, the
+other two toward the format's own definition (ADRs 0011 and 0012 say why that
+is a repair, not a break). Every issue was filed by **selah**, the AGNOS
+screenshot / annotation library, measuring its Rust → Cyrius port against Rust's
+`image`; each `docs/development/issues/2026-11-14-*.md` now records its fix.
+
+### Added — progressive JPEG (SOF2) — [ADR 0013](docs/adr/0013-progressive-jpeg.md)
+
+- Spectral selection and successive approximation, all four scan kinds (DC
+  first / refine, AC first / refine with EOBRUN), restart intervals, and 16-bit
+  quantization tables under SOF2 (libjpeg writes them at low quality; still
+  refused under SOF0). A per-component 16-bit coefficient buffer, quantization
+  tables latched at a component's first scan, one IDCT at the end, then the
+  baseline upsampling and colour pass. New module `src/jpeg_prog.cyr`.
+- **Byte-identical to `djpeg` on 93 files**: cjpeg's default script at every
+  sampling and odd / 1-pixel sizes, restart intervals, quality 1 and 5,
+  `jpegtran -progressive [-optimize]`, ImageMagick's progressive writer, and
+  hand-written scripts down to four levels of successive approximation.
+- **The work bound is the progression, enforced** (libjpeg only warns): each
+  coefficient's first scan is `Ah = 0` on a coefficient never coded, every
+  refinement steps `Ah → Ah − 1` from where the last one stopped, `Al ≤ 13`,
+  AC scans name one component after its DC — so a coefficient sees at most 14
+  scans. And **at most 256 scans per file** (real encoders write 6–20), counted
+  by the allocation-free pre-pass and refused as `CHITRA_ERR_DIMENSIONS` before
+  any buffer. Each rule has a synthetic file only it refuses, mutation-checked.
+- A file that ends early — between scans or inside a scan header — decodes with
+  `seen_iend = 0` if every component had its DC scan; one with a component that
+  never did is refused (`CHITRA_ERR_JPEG_SOS`).
+- `CHITRA_ERR_JPEG_PROGRESSIVE` (19) is now unreachable and stays defined (the
+  enum is frozen). The budget probe reads SOF2 dimensions, so an over-budget
+  progressive file is `CHITRA_ERR_BUDGET` for 16 bytes.
+
+### Added — `chitra_jpeg_decode_cmyk(a, src, len, max_bytes, err_out)` — [ADR 0014](docs/adr/0014-cmyk-samples-not-colours.md)
+
+- A 4-component JPEG's **C, M, Y, K samples**: as stored for no APP14 or Adobe
+  transform 0, and YCCK (transform 2) converted to CMYK exactly as libjpeg's
+  `ycck_cmyk_convert`; any other transform is `CHITRA_ERR_UNSUPPORTED`.
+  `source_color_type` is `0x104` (no Adobe marker), `0x144` (Adobe CMYK — the
+  inverted-ink convention applies) or `0x164` (Adobe YCCK, converted).
+  Baseline and progressive, every sampling. **Byte-identical to libjpeg's own
+  `JCS_CMYK` output on 124 files.**
+- Born with the long-running shape: the caller's `Allocator` (0 = global) and a
+  budget, with `chitra_image_decode_budget_via`'s contract.
+- **Every RGBA entry still refuses a 4-component file**
+  (`CHITRA_ERR_JPEG_COMPONENTS`): RGB from CMYK is the colour guess ADR 0009
+  forbids, and it stays the consumer's.
+
+### Added — `chitra_image_decode_budget_via(a, src, len, max_bytes, err_out)` — [ADR 0015](docs/adr/0015-the-decode-context.md)
+
+- Every allocation of the decode comes from the caller's stdlib `Allocator`
+  (zeroed, as the global allocator's always are), every working buffer goes
+  back to it before the call returns — all of them on a refusal — and
+  **`chitra_image_free` now frees** the pixels and the record of such an image.
+  For every other image it is still the no-op a 1.3.x consumer may rely on.
+- `ChitraImage` gains `alloc`@56 (no accessor; 64 bytes). The 16-byte
+  `ChitraErr` on a refusal still comes from the global allocator.
+- Mechanism: a per-decode **context** (limits + allocator) on the entry
+  point's stack, reached through each format's existing per-decode record — not
+  a global, so concurrent decodes with different budgets or allocators do not
+  interact. Every pre-1.4.0 entry passes none, so nothing they do moved.
+- Proved with a counting Allocator that hands out dirty blocks: after a decode
+  exactly two blocks are live, after `chitra_image_free` none, after a refusal
+  none ever were — in the suite for every format, and in the JPEG fuzzer's two
+  new modes on hostile input.
+
+### Changed — under a budget, the budget governs size
+
+- `chitra_image_decode_budget` held every decode to `CHITRA_MAX_PIXELS`
+  (4096 × 4096) and the 256 MB raw cap whatever budget it was given, so a
+  4100 × 4100 image was `CHITRA_ERR_DIMENSIONS` under 512 MiB. A budgeted
+  decode now allows `max_bytes / 4` pixels and single buffers up to
+  ~`2 × max_bytes`, never below the fixed caps; `CHITRA_MAX_DIM` and every
+  amplification ratio still apply. Cells for all four formats at 4100 × 4100,
+  each checked to fail against 1.3.1. `chitra_image_decode` and the per-format
+  entries keep the fixed caps.
+- A BMP over budget is now `CHITRA_ERR_BUDGET`, not `CHITRA_ERR_DIMENSIONS` (the
+  probe applied the fixed pixel cap and read it as unreadable).
+
+### Changed — interpolated chroma upsampling, and `djpeg` is the oracle — [ADR 0012](docs/adr/0012-interpolated-chroma-upsampling.md)
+
+- Subsampled chroma now goes through libjpeg-turbo's fancy filters bit for bit
+  (`h2v1` / `h1v2` / `h2v2`, edge-replicated; box where libjpeg uses box). Box
+  put each chroma sample at its block's corner; JFIF sites it at the centre.
+  Measured against **source pixels**: a 64×64 gradient at 4:2:0 q85 goes from
+  mean / max error 1.418 / 7 to **1.019 / 5**, 33×17 from 3.387 / 11 to
+  **1.405 / 7**; 4:4:4 is identical. (selah's fixtures: 2.345 / 78 → 1.808 / 54.)
+- The IDCT and colour conversion now round ties **up**, as libjpeg's
+  arithmetic-shift `DESCALE` does (through a biased logical shift — `>>>` is
+  newer than consumers' toolchains). 13 of a 180-file corpus differed from
+  `djpeg -nosmooth` by 1 LSB before; **all 180 are now byte-identical to
+  `djpeg`**, and ImageMagick agrees on subsampled files too.
+- Test pins moved with it: three suites' byte sums and two pixels, every new
+  value read out of `djpeg`.
+
+### Changed — BMP samples mean what the format says — [ADR 0011](docs/adr/0011-bmp-samples-mean-what-the-format-says.md)
+
+- **Sub-8-bit channels round** to the nearest level, `(v·510 + max)/(2·max)`,
+  instead of bit replication — the § 13.13 rescale, up to 0.5 of a level off
+  where replication was up to 0.714. 14 levels move by 1 (5-bit 3, 7, 24, 28;
+  6-bit 11–15, 48–52); a 6-bit 48 is now 194. ImageMagick replicates, so chitra
+  differs from it there; Skia and Rust's `image` round.
+- **32-bpp `BI_RGB` is opaque.** Its fourth byte is "not used" (Microsoft); the
+  heuristic that read it as alpha whenever any was non-zero turned opaque images
+  with noise there transparent. Declared alpha (`BI_BITFIELDS` V3+,
+  `BI_ALPHABITFIELDS`) is untouched.
+
+### Changed — decode throughput (decode-throughput issue)
+
+| file | 1.3.1 | 1.4.0 | |
+|---|---:|---:|---|
+| JPEG 512×512 4:4:4 q75 | 46.5 ms | **13.8 ms** | 3.4× |
+| JPEG 512×512 4:2:0 q75 | 29.5 ms | **11.2 ms** | 2.6× (and now interpolated) |
+| JPEG 3840×2160 4:2:0 | 1,033 ms | **354 ms** | 2.9× |
+| PNG 512×512 RGBA8 | 18.2 ms | **14.6 ms** | 1.25× |
+| PNG 3840×2160 RGB8 | 1,372 ms | 1,404 ms | inflate-bound |
+
+- **JPEG**: a 9-bit Huffman lookahead table per table and a 56-bit word buffer
+  in the bit reader (fabrication, restart and tail semantics kept by
+  construction and pinned); one inlined IDCT per block writing straight into
+  the plane, with libjpeg's two all-zero shortcuts; coefficients dequantized
+  into natural order as they decode; colour and upsampling without a call per
+  pixel. 4:4:4 512² is now ~5.4× Rust's `image` (was 18–23×).
+- **PNG**: inlined Paeth, the first-pixel test hoisted out of every predictor
+  loop, 32-bit stores in the 8-bit colour passes. What remains is mostly
+  sankoch's inflate — 1,258 of 1,350 ms on the 4K file — which is outside chitra.
+- 58 PNGs covering every filter × colour type × depth stay byte-identical to
+  ImageMagick; the JPEG corpus is the exact-match above.
+
+### Tests, fuzzing, gates
+
+- **4,460 assertions across 18 suites** (4,018 / 14): new `budget_via`,
+  `jpeg_progressive`, `jpeg_cmyk`, `jpeg_upsample`; every new repair checked to
+  fail against 1.3.1, every new guard mutation-checked.
+- `fuzz_jpeg` gains a progressive mode and a CMYK mode, each decoding through a
+  counting Allocator and each with an outcome-count no-op proof (the progressive
+  mode: of 4,000 cases 458 decode, 865 refuse as progression errors, 1,278 as
+  entropy errors).
+- `dist/chitra.cyr` compiles and decodes under cyrius 6.7.11 (the consumer
+  floor) as well as the 6.7.18 pin.
+
 ## [1.3.1] - 2026-10-28 — a large PNG's peak memory, cut twice
 
 ⛔ **No output changed, and nothing frozen moved.** A patch: the same files decode

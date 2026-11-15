@@ -98,7 +98,7 @@ fn _chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
         store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
         return 0;
     }
-    if (width * height > CHITRA_MAX_PIXELS) {
+    if (width * height > _chitra_lim_pixels(_chitra_raw_ctx(raw))) {
         store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
         return 0;
     }
@@ -114,7 +114,7 @@ fn _chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
         return 0;
     }
 
-    var out = alloc(out_size);
+    var out = _chitra_alloc(_chitra_raw_ctx(raw), out_size);
     if (out == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
 
     # ---- resolve + validate the tRNS span against (src, len) -------
@@ -243,11 +243,7 @@ fn _chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
             }
             var a = 255;
             if (gfull == key_g) { a = 0; }
-            var o = out + i * 4;
-            store8(o + 0, g);
-            store8(o + 1, g);
-            store8(o + 2, g);
-            store8(o + 3, a);
+            store32(out + i * 4, (g * 65793) | (a << 24));     # g,g,g,a
             i = i + 1;
         }
         return out;
@@ -296,11 +292,7 @@ fn _chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
             }
             var a = 255;
             if (rf == key_r && gf == key_g2 && bf == key_b) { a = 0; }
-            var o = out + i * 4;
-            store8(o + 0, r);
-            store8(o + 1, g);
-            store8(o + 2, b);
-            store8(o + 3, a);
+            store32(out + i * 4, r | (g << 8) | (b << 16) | (a << 24));
             i = i + 1;
         }
         return out;
@@ -382,10 +374,7 @@ fn _chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
             # which is a real price to pay on every 8-bit image for a change
             # that only concerns 16-bit ones.
             if (bps == 1) {
-                store8(o + 0, load8(s + 0));
-                store8(o + 1, load8(s + 1));
-                store8(o + 2, load8(s + 2));
-                store8(o + 3, load8(s + 3));
+                store32(o, load32(s));              # R,G,B,A bytes, in order
             }
             if (bps == 2) {
                 store8(o + 0, _chitra_png_scale16(load8(s + 0) * 256 + load8(s + 1)));

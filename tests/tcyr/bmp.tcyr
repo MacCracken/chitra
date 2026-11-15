@@ -1151,6 +1151,33 @@ fn _bpx(px, i, r, g, b, a, label) {
     return 0;
 }
 
+# Write a BITMAPFILEHEADER + a `dib`-byte info header (40 = BITMAPINFOHEADER)
+# for a w×h bottom-up image at `bpp` with compression `comp`. Fields past +40
+# of a larger header are left for the caller.
+fn _bmp_put32(p, v) {
+    store8(p + 0, v & 255);
+    store8(p + 1, (v >> 8) & 255);
+    store8(p + 2, (v >> 16) & 255);
+    store8(p + 3, (v >> 24) & 255);
+    return 0;
+}
+
+fn _bmp_put_hdr(b, file_len, off_bits, dib, w, h, bpp, comp) {
+    var i = 0;
+    while (i < off_bits) { store8(b + i, 0); i = i + 1; }
+    store8(b + 0, 66);
+    store8(b + 1, 77);
+    _bmp_put32(b + 2, file_len);
+    _bmp_put32(b + 10, off_bits);
+    _bmp_put32(b + 14, dib);
+    _bmp_put32(b + 18, w);
+    _bmp_put32(b + 22, h);
+    store8(b + 26, 1);
+    store8(b + 28, bpp);
+    _bmp_put32(b + 30, comp);
+    return 0;
+}
+
 fn _breject(bytes, lo, code, label) {
     var err = 0;
     var img = chitra_bmp_decode(bytes, lo, &err);
@@ -1217,8 +1244,14 @@ fn test_bmp24_top_down() {
 }
 
 # ================================================================
-# 32 bpp — and the undefined-fourth-byte heuristic.
+# 32 bpp BI_RGB — the fourth byte is unused, so the image is opaque.
 # ================================================================
+# Microsoft: "the high byte in each DWORD is not used". Through 1.3.x a
+# heuristic read it as alpha whenever ANY of it was non-zero, so this fixture —
+# whose fourth bytes are 255/128/64/0 — decoded partly transparent. A file
+# that wants alpha declares an alpha mask (the V4/V5 cells below), and only
+# then is the byte alpha (bmp-bi-rgb-32bpp-alpha, 1.4.0; ADR 0011).
+# ⚠ Checked to fail against 1.3.1: px(1,0) came back with alpha 128.
 fn test_bmp32_alpha() {
     var lo = 0;
     var b = fx_bmp32_2x2_alpha(&lo);
@@ -1227,16 +1260,14 @@ fn test_bmp32_alpha() {
     assert(img != 0, "bmp32 decodes");
     assert_eq(chitra_image_source_color_type(img), 512 + 32, "bmp32 src_ctype 0x220");
     var px = chitra_image_pixels(img);
-    _bpx(px, 0, 10, 20, 30, 255, "bmp32 px(0,0) alpha 255");
-    _bpx(px, 1, 40, 50, 60, 128, "bmp32 px(1,0) alpha honoured");
-    _bpx(px, 2, 70, 80, 90, 64, "bmp32 px(0,1) alpha honoured");
-    _bpx(px, 3, 100, 110, 120, 0, "bmp32 px(1,1) alpha 0 honoured");
+    _bpx(px, 0, 10, 20, 30, 255, "bmp32 BI_RGB px(0,0) opaque");
+    _bpx(px, 1, 40, 50, 60, 255, "bmp32 BI_RGB px(1,0) fourth byte 128 is not alpha");
+    _bpx(px, 2, 70, 80, 90, 255, "bmp32 BI_RGB px(0,1) fourth byte 64 is not alpha");
+    _bpx(px, 3, 100, 110, 120, 255, "bmp32 BI_RGB px(1,1) fourth byte 0 is not alpha");
     return 0;
 }
 
-# BI_RGB leaves the fourth byte UNDEFINED. When every one of them is zero it is
-# padding, not alpha — trusting it would render the whole image invisible. This
-# is the case that heuristic exists for.
+# The all-zero case the old heuristic existed for still decodes opaque.
 fn test_bmp32_zero_padding_is_opaque() {
     var lo = 0;
     var b = fx_bmp32_2x2_zeropad(&lo);
@@ -1246,6 +1277,48 @@ fn test_bmp32_zero_padding_is_opaque() {
     var px = chitra_image_pixels(img);
     _bpx(px, 0, 10, 20, 30, 255, "all-zero 4th byte -> opaque, not invisible");
     _bpx(px, 3, 100, 110, 120, 255, "all-zero 4th byte -> opaque (px3)");
+    return 0;
+}
+
+# Noise in the unused byte — the selah report's shape: a writer that left
+# uninitialised memory there. Every pixel is opaque, and the colour channels
+# are untouched by the noise. ⚠ Checked to fail against 1.3.1 (every alpha
+# came back as the noise byte).
+fn test_bmp32_birgb_noise_in_fourth_byte_is_opaque() {
+    var w = 7;
+    var h = 3;
+    var stride = w * 4;
+    var lo = 54 + stride * h;
+    var b = alloc(lo);
+    _bmp_put_hdr(b, lo, 54, 40, w, h, 32, 0);
+    var i = 0;
+    while (i < w * h) {
+        store8(b + 54 + i * 4 + 0, (i * 37 + 11) & 255);       # B
+        store8(b + 54 + i * 4 + 1, (i * 53 + 7) & 255);        # G
+        store8(b + 54 + i * 4 + 2, (i * 71 + 3) & 255);        # R
+        store8(b + 54 + i * 4 + 3, (i * 97 + 1) & 255);        # noise
+        i = i + 1;
+    }
+    var err = 0;
+    var img = chitra_bmp_decode(b, lo, &err);
+    assert(img != 0, "bmp32 BI_RGB noise decodes");
+    var px = chitra_image_pixels(img);
+    var bad = 0;
+    var y = 0;
+    while (y < h) {
+        var x = 0;
+        while (x < w) {
+            var si = (h - 1 - y) * w + x;                       # bottom-up
+            var o = px + (y * w + x) * 4;
+            if (load8(o + 0) != ((si * 71 + 3) & 255)) { bad = bad + 1; }
+            if (load8(o + 1) != ((si * 53 + 7) & 255)) { bad = bad + 1; }
+            if (load8(o + 2) != ((si * 37 + 11) & 255)) { bad = bad + 1; }
+            if (load8(o + 3) != 255) { bad = bad + 1; }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    assert_eq(bad, 0, "bmp32 BI_RGB noise in the unused byte: every pixel opaque, RGB intact");
     return 0;
 }
 
@@ -4394,8 +4467,75 @@ fn test_bmp16_bitfields565() {
     _bpx(px, 3, 255, 255, 255, 255, "16bpp BITFIELDS 5-6-5 px3");
     _bpx(px, 4, 132, 130, 33, 255, "16bpp BITFIELDS 5-6-5 px4");
     _bpx(px, 5, 33, 65, 66, 255, "16bpp BITFIELDS 5-6-5 px5");
-    _bpx(px, 6, 66, 195, 132, 255, "16bpp BITFIELDS 5-6-5 px6");
+    _bpx(px, 6, 66, 194, 132, 255, "16bpp BITFIELDS 5-6-5 px6 (6-bit 48 -> 194, not 195)");
     _bpx(px, 7, 0, 0, 0, 255, "16bpp BITFIELDS 5-6-5 px7");
+    return 0;
+}
+
+# Sub-8-bit channels ROUND to the nearest 8-bit level, v * 255 / max rounded
+# (bmp-sub-8-bit-rounding, 1.4.0; ADR 0011). These are exactly the 14 levels
+# where bit replication disagreed: 5-bit 3, 7, 24, 28 and 6-bit 11..15,
+# 48..52. Each expected value is the nearest level to the exact fraction —
+# 5-bit 3 is 24.68 (25, replication said 24); 6-bit 48 is 194.29 (194,
+# replication said 195). ⚠ Checked to fail against 1.3.1 on every one.
+fn test_bmp16_sub8_channels_round_to_nearest() {
+    var r5 = alloc(32);
+    store64(r5 + 0, 3);
+    store64(r5 + 8, 7);
+    store64(r5 + 16, 24);
+    store64(r5 + 24, 28);
+    var r5x = alloc(32);
+    store64(r5x + 0, 25);
+    store64(r5x + 8, 58);
+    store64(r5x + 16, 197);
+    store64(r5x + 24, 230);
+    var g6 = alloc(80);
+    var g6x = alloc(80);
+    var k = 0;
+    while (k < 5) {
+        store64(g6 + k * 8, 11 + k);
+        store64(g6 + (k + 5) * 8, 48 + k);
+        k = k + 1;
+    }
+    store64(g6x + 0, 45);
+    store64(g6x + 8, 49);
+    store64(g6x + 16, 53);
+    store64(g6x + 24, 57);
+    store64(g6x + 32, 61);
+    store64(g6x + 40, 194);
+    store64(g6x + 48, 198);
+    store64(g6x + 56, 202);
+    store64(g6x + 64, 206);
+    store64(g6x + 72, 210);
+    # 10 pixels, one row: BI_BITFIELDS 5-6-5, masks after the 40-byte header.
+    var w = 10;
+    var stride = 20;
+    var off = 14 + 40 + 12;
+    var lo = off + stride;
+    var b = alloc(lo);
+    _bmp_put_hdr(b, lo, off, 40, w, 1, 16, 3);
+    _bmp_put32(b + 54, 63488);                 # R 0xF800
+    _bmp_put32(b + 58, 2016);                  # G 0x07E0
+    _bmp_put32(b + 62, 31);                    # B 0x001F
+    var i = 0;
+    while (i < w) {
+        var rv = load64(r5 + (i % 4) * 8);
+        var bv = load64(r5 + (3 - (i % 4)) * 8);
+        var word = (rv << 11) | (load64(g6 + i * 8) << 5) | bv;
+        store8(b + off + i * 2, word & 255);
+        store8(b + off + i * 2 + 1, (word >> 8) & 255);
+        i = i + 1;
+    }
+    var err = 0;
+    var img = chitra_bmp_decode(b, lo, &err);
+    assert(img != 0, "565 rounding row decodes");
+    var px = chitra_image_pixels(img);
+    i = 0;
+    while (i < w) {
+        _bpx(px, i, load64(r5x + (i % 4) * 8), load64(g6x + i * 8),
+          load64(r5x + (3 - (i % 4)) * 8), 255, "sub-8-bit channel rounds to the nearest level");
+        i = i + 1;
+    }
     return 0;
 }
 
@@ -9329,6 +9469,7 @@ fn main() {
     test_bmp24_top_down();
     test_bmp32_alpha();
     test_bmp32_zero_padding_is_opaque();
+    test_bmp32_birgb_noise_in_fourth_byte_is_opaque();
     test_bmp8_palette();
     test_bmp4_palette();
     test_bmp1_palette();
@@ -9344,6 +9485,7 @@ fn main() {
     test_bmp_rle_topdown_rejected();
     test_bmp16_rgb555();
     test_bmp16_bitfields565();
+    test_bmp16_sub8_channels_round_to_nearest();
     test_bmp32_v4_alpha();
     test_bmp32_v5_alpha();
     test_bmp_mask_guards();

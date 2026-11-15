@@ -1,0 +1,489 @@
+# tests/tcyr/jpeg_upsample.tcyr — chroma upsampling (1.4.0): libjpeg-turbo's
+# "fancy" triangle filters, held byte-for-byte to `djpeg` (no -nosmooth).
+# Standalone CPU suite (own main + assert_summary); fixtures are embedded as hex,
+# no file I/O.
+#
+# WHAT THIS PINS. `_chitra_jpeg_upsample_row` picks a filter per component from
+# its ratio to the frame maximum, exactly as libjpeg-turbo's jdsample.c does:
+#   2x1 (dsw > 2) -> h2v1_fancy     1x2 -> h1v2_fancy     2x2 (dsw > 2) -> h2v2_fancy
+#   anything else, including 2x1 / 2x2 with a real chroma width of 2 or less,
+#   and every non-2 ratio -> box (libjpeg's h2v1 / h2v2 / int_upsample).
+# The fancy cells differ from box on 150-176 of their 189 colour bytes, so a
+# regression to box fails them outright. The narrow and 4x1 cells decode
+# IDENTICALLY under fancy and box in djpeg — they pin the selection: a decoder
+# that applied the triangle filter where libjpeg does not would move them.
+# Two cells reach the h2v1 / h1v2 filters through a non-unit maximum on the
+# other axis (Y 2x2 with chroma 1x2 or 2x1), where the row-group arithmetic
+# differs from the plain 4:2:2 / 4:4:0 case.
+#
+# Every fixture is 9x7 or 4x5, so chroma widths 5 / 2 and heights 4 / 3 are
+# odd and partial: the right column and bottom row exercise the edge clamps
+# (the neighbour of an edge sample is the sample itself).
+#
+# ⚠ Checked to fail against 1.3.1 (box): every fancy cell, on most bytes.
+#
+# REGENERATION. Source pixels (w x h, P6):
+#   R = (37x + 11y) mod 256, G = (5x^2 + 29y) mod 256, B = (255 - 23x + 7y^2) mod 256
+#   cjpeg -quality 90 -sample <S> src.ppm > f.jpg ; djpeg -pnm f.jpg  (RGB -> RGBA, A = 255)
+# with <S> as each cell's comment says.
+
+include "src/lib.cyr"
+include "lib/assert.cyr"
+
+fn _up_hexval(c): i64 {
+    if (c >= 48 && c <= 57) { return c - 48; }
+    if (c >= 97 && c <= 102) { return c - 87; }
+    return c - 55;
+}
+
+# Decode hex string s into b at off; returns the new offset.
+fn _up_hex(b, off, s): i64 {
+    var i = 0;
+    var n = strlen(s);
+    while (i + 1 < n) {
+        store8(b + off, _up_hexval(load8(s + i)) * 16 + _up_hexval(load8(s + i + 1)));
+        off = off + 1;
+        i = i + 2;
+    }
+    return off;
+}
+
+# Decode `jpg` (n bytes) and compare all w*h*4 output bytes against `want`.
+fn _up_check(jpg, n, want, w, h, name): i64 {
+    var err = 0;
+    var img = chitra_jpeg_decode(jpg, n, &err);
+    assert(img != 0, name);
+    assert_eq(err, 0, name);
+    if (img == 0) { return 0; }
+    assert_eq(chitra_image_width(img), w, name);
+    assert_eq(chitra_image_height(img), h, name);
+    assert_eq(chitra_image_seen_iend(img), 1, name);
+    var px = chitra_image_pixels(img);
+    var bad = 0;
+    var maxd = 0;
+    var i = 0;
+    var d = 0;
+    while (i < w * h * 4) {
+        d = load8(px + i) - load8(want + i);
+        if (d < 0) { d = 0 - d; }
+        if (d != 0) { bad = bad + 1; }
+        if (d > maxd) { maxd = d; }
+        i = i + 1;
+    }
+    assert_eq(bad, 0, name);
+    assert_eq(maxd, 0, name);
+    return 0;
+}
+
+# cjpeg -sample 2x2, 9x7. djpeg: fancy and box differ on 176 of 189 colour bytes.
+fn test_up_h2v2_9x7(): i64 {
+    var jpg = alloc(735);
+    var o = 0;
+    o = _up_hex(jpg, o, "ffd8ffe000104a46494600010100000100010000ffdb004300030202030202030303030403030405");
+    o = _up_hex(jpg, o, "0805050404050a07");
+    o = _up_hex(jpg, o, "0706080c0a0c0c0b0a0b0b0d0e12100d0e110e0b0b1016101113141515150c0f1718161418121415");
+    o = _up_hex(jpg, o, "14ffdb0043010304");
+    o = _up_hex(jpg, o, "0405040509050509140d0b0d14141414141414141414141414141414141414141414141414141414");
+    o = _up_hex(jpg, o, "1414141414141414");
+    o = _up_hex(jpg, o, "1414141414141414141414141414ffc00011080007000903012200021101031101ffc4001f000001");
+    o = _up_hex(jpg, o, "0501010101010100");
+    o = _up_hex(jpg, o, "000000000000000102030405060708090a0bffc400b5100002010303020403050504040000017d01");
+    o = _up_hex(jpg, o, "0203000411051221");
+    o = _up_hex(jpg, o, "31410613516107227114328191a1082342b1c11552d1f02433627282090a161718191a2526272829");
+    o = _up_hex(jpg, o, "2a3435363738393a");
+    o = _up_hex(jpg, o, "434445464748494a535455565758595a636465666768696a737475767778797a838485868788898a");
+    o = _up_hex(jpg, o, "9293949596979899");
+    o = _up_hex(jpg, o, "9aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3");
+    o = _up_hex(jpg, o, "e4e5e6e7e8e9eaf1");
+    o = _up_hex(jpg, o, "f2f3f4f5f6f7f8f9faffc4001f010003010101010101010101000000000000010203040506070809");
+    o = _up_hex(jpg, o, "0a0bffc400b51100");
+    o = _up_hex(jpg, o, "020102040403040705040400010277000102031104052131061241510761711322328108144291a1");
+    o = _up_hex(jpg, o, "b1c109233352f015");
+    o = _up_hex(jpg, o, "6272d10a162434e125f11718191a262728292a35363738393a434445464748494a53545556575859");
+    o = _up_hex(jpg, o, "5a63646566676869");
+    o = _up_hex(jpg, o, "6a737475767778797a82838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5");
+    o = _up_hex(jpg, o, "b6b7b8b9bac2c3c4");
+    o = _up_hex(jpg, o, "c5c6c7c8c9cad2d3d4d5d6d7d8d9dae2e3e4e5e6e7e8e9eaf2f3f4f5f6f7f8f9faffda000c030100");
+    o = _up_hex(jpg, o, "02110311003f0087");
+    o = _up_hex(jpg, o, "c31f0ca5f82bf04758bd4b532ea9a9edd12ceea0902b42f719432960ca55923f31958127784c8c64");
+    o = _up_hex(jpg, o, "d687fc327693ff00");
+    o = _up_hex(jpg, o, "3d61ff00be4ff851457cef17710e3326c64a292aadca4b9aa5dcad1e5495e2e37b5f7777e67e699e");
+    o = _up_hex(jpg, o, "e6189fabe0671959");
+    o = _up_hex(jpg, o, "ca9dddbbf3c97dd64b4db7ee7fffd9");
+    var want = alloc(252);
+    o = 0;
+    o = _up_hex(want, o, "0e0fa7ff1b10aaff3e1bb7ff6433b0ff8e5a98ffa58590ffb4bca5ff88aa89ff214835ff060a76ff");
+    o = _up_hex(want, o, "3a33a5ff5a3dbdff");
+    o = _up_hex(want, o, "734cb7ff9d72aaffb79aacffcecfc7ff0a230eff345d4dff252d44ff2f3157ff635497ff856eb6ff");
+    o = _up_hex(want, o, "a68abdffc7afd1ff");
+    o = _up_hex(want, o, "f4e7fbff262f34ff487369ff374e3cff425349ff656773ffa296aaffb8a1b5ffe3cbe1ff675c7aff");
+    o = _up_hex(want, o, "3e4d64ff588d91ff");
+    o = _up_hex(want, o, "417161ff4b7359ff73885dff8e8c5cffd0b089ffffe9d9ff2d3447ff436c8cff63abc3ff4a8d95ff");
+    o = _up_hex(want, o, "5b9589ff80a677ff");
+    o = _up_hex(want, o, "babe83ffeec291ff765337ff223b3fff2d717cff76d1ccff57a8ddff6db6d7ff94c6c3ffc0c7b5ff");
+    o = _up_hex(want, o, "ffd0c4ff9a6c5fff");
+    o = _up_hex(want, o, "305d49ff47a67cff6fdc89ff");
+    _up_check(jpg, 735, want, 9, 7, "h2v2_9x7: byte-identical to djpeg (2x2)");
+    return 0;
+}
+
+# cjpeg -sample 2x1, 9x7. djpeg: fancy and box differ on 152 of 189 colour bytes.
+fn test_up_h2v1_9x7(): i64 {
+    var jpg = alloc(740);
+    var o = 0;
+    o = _up_hex(jpg, o, "ffd8ffe000104a46494600010100000100010000ffdb004300030202030202030303030403030405");
+    o = _up_hex(jpg, o, "0805050404050a07");
+    o = _up_hex(jpg, o, "0706080c0a0c0c0b0a0b0b0d0e12100d0e110e0b0b1016101113141515150c0f1718161418121415");
+    o = _up_hex(jpg, o, "14ffdb0043010304");
+    o = _up_hex(jpg, o, "0405040509050509140d0b0d14141414141414141414141414141414141414141414141414141414");
+    o = _up_hex(jpg, o, "1414141414141414");
+    o = _up_hex(jpg, o, "1414141414141414141414141414ffc00011080007000903012100021101031101ffc4001f000001");
+    o = _up_hex(jpg, o, "0501010101010100");
+    o = _up_hex(jpg, o, "000000000000000102030405060708090a0bffc400b5100002010303020403050504040000017d01");
+    o = _up_hex(jpg, o, "0203000411051221");
+    o = _up_hex(jpg, o, "31410613516107227114328191a1082342b1c11552d1f02433627282090a161718191a2526272829");
+    o = _up_hex(jpg, o, "2a3435363738393a");
+    o = _up_hex(jpg, o, "434445464748494a535455565758595a636465666768696a737475767778797a838485868788898a");
+    o = _up_hex(jpg, o, "9293949596979899");
+    o = _up_hex(jpg, o, "9aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3");
+    o = _up_hex(jpg, o, "e4e5e6e7e8e9eaf1");
+    o = _up_hex(jpg, o, "f2f3f4f5f6f7f8f9faffc4001f010003010101010101010101000000000000010203040506070809");
+    o = _up_hex(jpg, o, "0a0bffc400b51100");
+    o = _up_hex(jpg, o, "020102040403040705040400010277000102031104052131061241510761711322328108144291a1");
+    o = _up_hex(jpg, o, "b1c109233352f015");
+    o = _up_hex(jpg, o, "6272d10a162434e125f11718191a262728292a35363738393a434445464748494a53545556575859");
+    o = _up_hex(jpg, o, "5a63646566676869");
+    o = _up_hex(jpg, o, "6a737475767778797a82838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5");
+    o = _up_hex(jpg, o, "b6b7b8b9bac2c3c4");
+    o = _up_hex(jpg, o, "c5c6c7c8c9cad2d3d4d5d6d7d8d9dae2e3e4e5e6e7e8e9eaf2f3f4f5f6f7f8f9faffda000c030100");
+    o = _up_hex(jpg, o, "02110311003f0087");
+    o = _up_hex(jpg, o, "c31f0ca5f82bf04758bd4b532ea9a9edd12ceea0902b42f719432960ca55923f31958127784c8c64");
+    o = _up_hex(jpg, o, "d687fc327693ff00");
+    o = _up_hex(jpg, o, "3d61ff00be4ff856b9ae7b875899d5cf2b3a788727172b3929a828a52bc5369ddb724d25aae56eee");
+    o = _up_hex(jpg, o, "df0b9ee6d2a54709");
+    o = _up_hex(jpg, o, "529c6ee70bdfcb99a49e8b66a5d5e8fa6b7fffd9");
+    var want = alloc(252);
+    o = 0;
+    o = _up_hex(want, o, "1c00eeff2600e1ff4513ceff6630b9ff8e599fff988c8eff90d48bff6abe70ff224833ff0a0971ff");
+    o = _up_hex(want, o, "3c32a3ff5a3dbdff");
+    o = _up_hex(want, o, "784ab7ffa76ea3ffc893a7ffe0c6c9ff181a15ff335c54ff1c3c0bff243e33ff515c9cff7672c6ff");
+    o = _up_hex(want, o, "a28cbbffc7b1c8ff");
+    o = _up_hex(want, o, "f0eaf6ff233132ff4c7169ff30552cff3f573fff69676cffa695a8ffb8a1b1ffeec3f0ff8e40a5ff");
+    o = _up_hex(want, o, "64318eff5e8a97ff");
+    o = _up_hex(want, o, "3a7466ff477751ff72903aff869930ffb4c565ffe5f8e2ff142fa0ff3560eaff5fa9daff458ca8ff");
+    o = _up_hex(want, o, "58929dff81a285ff");
+    o = _up_hex(want, o, "c1b988fffbbe87ff855213ff2d4300ff337943ff72d2ceff50a9edff69b6e2ff91c9c0ffbccab3ff");
+    o = _up_hex(want, o, "ffd2ceff906e6dff");
+    o = _up_hex(want, o, "27604dff3fae6cff68e95bff");
+    _up_check(jpg, 740, want, 9, 7, "h2v1_9x7: byte-identical to djpeg (2x1)");
+    return 0;
+}
+
+# cjpeg -sample 1x2, 9x7. djpeg: fancy and box differ on 150 of 189 colour bytes.
+fn test_up_h1v2_9x7(): i64 {
+    var jpg = alloc(768);
+    var o = 0;
+    o = _up_hex(jpg, o, "ffd8ffe000104a46494600010100000100010000ffdb004300030202030202030303030403030405");
+    o = _up_hex(jpg, o, "0805050404050a07");
+    o = _up_hex(jpg, o, "0706080c0a0c0c0b0a0b0b0d0e12100d0e110e0b0b1016101113141515150c0f1718161418121415");
+    o = _up_hex(jpg, o, "14ffdb0043010304");
+    o = _up_hex(jpg, o, "0405040509050509140d0b0d14141414141414141414141414141414141414141414141414141414");
+    o = _up_hex(jpg, o, "1414141414141414");
+    o = _up_hex(jpg, o, "1414141414141414141414141414ffc00011080007000903011200021101031101ffc4001f000001");
+    o = _up_hex(jpg, o, "0501010101010100");
+    o = _up_hex(jpg, o, "000000000000000102030405060708090a0bffc400b5100002010303020403050504040000017d01");
+    o = _up_hex(jpg, o, "0203000411051221");
+    o = _up_hex(jpg, o, "31410613516107227114328191a1082342b1c11552d1f02433627282090a161718191a2526272829");
+    o = _up_hex(jpg, o, "2a3435363738393a");
+    o = _up_hex(jpg, o, "434445464748494a535455565758595a636465666768696a737475767778797a838485868788898a");
+    o = _up_hex(jpg, o, "9293949596979899");
+    o = _up_hex(jpg, o, "9aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3");
+    o = _up_hex(jpg, o, "e4e5e6e7e8e9eaf1");
+    o = _up_hex(jpg, o, "f2f3f4f5f6f7f8f9faffc4001f010003010101010101010101000000000000010203040506070809");
+    o = _up_hex(jpg, o, "0a0bffc400b51100");
+    o = _up_hex(jpg, o, "020102040403040705040400010277000102031104052131061241510761711322328108144291a1");
+    o = _up_hex(jpg, o, "b1c109233352f015");
+    o = _up_hex(jpg, o, "6272d10a162434e125f11718191a262728292a35363738393a434445464748494a53545556575859");
+    o = _up_hex(jpg, o, "5a63646566676869");
+    o = _up_hex(jpg, o, "6a737475767778797a82838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5");
+    o = _up_hex(jpg, o, "b6b7b8b9bac2c3c4");
+    o = _up_hex(jpg, o, "c5c6c7c8c9cad2d3d4d5d6d7d8d9dae2e3e4e5e6e7e8e9eaf2f3f4f5f6f7f8f9faffda000c030100");
+    o = _up_hex(jpg, o, "02110311003f0087");
+    o = _up_hex(jpg, o, "c31f0ca5f82bf04758bd4b532ea9a9edd12ceea0902b42f719432960ca55923f31958127784c8c64");
+    o = _up_hex(jpg, o, "d15ed67b5f134f34");
+    o = _up_hex(jpg, o, "786ad5a5569d384e718d46a56946dcaeed7334ba45be5f23c1c9b1f5f1590e3aad569b8524d69a7b");
+    o = _up_hex(jpg, o, "d529d3774ee9fbb3");
+    o = _up_hex(jpg, o, "974ba766b54687fc327693ff003d61ff00be4ff8515f83ff00af98ff00f9f14feea9ff00cb0fc93f");
+    o = _up_hex(jpg, o, "b4b19ff3f19fffd9");
+    var want = alloc(252);
+    o = 0;
+    o = _up_hex(want, o, "0c1493ff2104d8ff3f17c5ff6632b0ff9754a4ffaf847bffc9bb70ff52c1a0ff254345ff000f6aff");
+    o = _up_hex(want, o, "3f2bc0ff5b3bc2ff");
+    o = _up_hex(want, o, "7648c5ffa46bb8ffbd9d8efff4c695ff003334ff335c58ff143642ff343247ff64558cff8465e4ff");
+    o = _up_hex(want, o, "a787c8ffc4bb9cff");
+    o = _up_hex(want, o, "ffcad2ff073372ff3c7967ff235647ff465631ff686868ff9f90d3ffb7a3aeffe7d0beffa63f6eff");
+    o = _up_hex(want, o, "2b4e92ff49978aff");
+    o = _up_hex(want, o, "317576ff4e7258ff758662ff888f5cffcabb5cffffd7ecff38276bff32777cff56b2bdff3b90adff");
+    o = _up_hex(want, o, "5b9390ff7ca680ff");
+    o = _up_hex(want, o, "b0c86affd8da53ffae2d65ff14367eff267c57ff6cd8beff45aef2ff68b9d7ff82cfc5ffadd798ff");
+    o = _up_hex(want, o, "d8f782fff2358fff");
+    o = _up_hex(want, o, "22578dff4ea765ff68e668ff");
+    _up_check(jpg, 768, want, 9, 7, "h1v2_9x7: byte-identical to djpeg (1x2)");
+    return 0;
+}
+
+# cjpeg -sample 2x2, 4x5. djpeg: fancy and box differ on 0 of 60 colour bytes.
+fn test_up_h2v2_narrow_4x5(): i64 {
+    var jpg = alloc(689);
+    var o = 0;
+    o = _up_hex(jpg, o, "ffd8ffe000104a46494600010100000100010000ffdb004300030202030202030303030403030405");
+    o = _up_hex(jpg, o, "0805050404050a07");
+    o = _up_hex(jpg, o, "0706080c0a0c0c0b0a0b0b0d0e12100d0e110e0b0b1016101113141515150c0f1718161418121415");
+    o = _up_hex(jpg, o, "14ffdb0043010304");
+    o = _up_hex(jpg, o, "0405040509050509140d0b0d14141414141414141414141414141414141414141414141414141414");
+    o = _up_hex(jpg, o, "1414141414141414");
+    o = _up_hex(jpg, o, "1414141414141414141414141414ffc00011080005000403012200021101031101ffc4001f000001");
+    o = _up_hex(jpg, o, "0501010101010100");
+    o = _up_hex(jpg, o, "000000000000000102030405060708090a0bffc400b5100002010303020403050504040000017d01");
+    o = _up_hex(jpg, o, "0203000411051221");
+    o = _up_hex(jpg, o, "31410613516107227114328191a1082342b1c11552d1f02433627282090a161718191a2526272829");
+    o = _up_hex(jpg, o, "2a3435363738393a");
+    o = _up_hex(jpg, o, "434445464748494a535455565758595a636465666768696a737475767778797a838485868788898a");
+    o = _up_hex(jpg, o, "9293949596979899");
+    o = _up_hex(jpg, o, "9aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3");
+    o = _up_hex(jpg, o, "e4e5e6e7e8e9eaf1");
+    o = _up_hex(jpg, o, "f2f3f4f5f6f7f8f9faffc4001f010003010101010101010101000000000000010203040506070809");
+    o = _up_hex(jpg, o, "0a0bffc400b51100");
+    o = _up_hex(jpg, o, "020102040403040705040400010277000102031104052131061241510761711322328108144291a1");
+    o = _up_hex(jpg, o, "b1c109233352f015");
+    o = _up_hex(jpg, o, "6272d10a162434e125f11718191a262728292a35363738393a434445464748494a53545556575859");
+    o = _up_hex(jpg, o, "5a63646566676869");
+    o = _up_hex(jpg, o, "6a737475767778797a82838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5");
+    o = _up_hex(jpg, o, "b6b7b8b9bac2c3c4");
+    o = _up_hex(jpg, o, "c5c6c7c8c9cad2d3d4d5d6d7d8d9dae2e3e4e5e6e7e8e9eaf2f3f4f5f6f7f8f9faffda000c030100");
+    o = _up_hex(jpg, o, "02110311003f00e5");
+    o = _up_hex(jpg, o, "fe16fc2ad0edfc216f1cd09b865620487009181d7ae4fbd14515f9fe61e20f136171756853c5be58");
+    o = _up_hex(jpg, o, "b695e3093b2eee51");
+    o = _up_hex(jpg, o, "6dfab6d9d3839ce587a6dc9ecbaf91ffd9");
+    var want = alloc(80);
+    o = 0;
+    o = _up_hex(want, o, "160aacff2014b6ff5312b8ff6e2dd3ff08009eff2f23c5ff7231d7ff8241e7ff073e07ff235a23ff");
+    o = _up_hex(want, o, "635592ff8173b0ff");
+    o = _up_hex(want, o, "275e27ff2c632cff655794ff9385c2ff3d7461ff487f6cff7a863aff94a054ff");
+    _up_check(jpg, 689, want, 4, 5, "h2v2_narrow_4x5: byte-identical to djpeg (2x2)");
+    return 0;
+}
+
+# cjpeg -sample 2x1, 4x5. djpeg: fancy and box differ on 0 of 60 colour bytes.
+fn test_up_h2v1_narrow_4x5(): i64 {
+    var jpg = alloc(688);
+    var o = 0;
+    o = _up_hex(jpg, o, "ffd8ffe000104a46494600010100000100010000ffdb004300030202030202030303030403030405");
+    o = _up_hex(jpg, o, "0805050404050a07");
+    o = _up_hex(jpg, o, "0706080c0a0c0c0b0a0b0b0d0e12100d0e110e0b0b1016101113141515150c0f1718161418121415");
+    o = _up_hex(jpg, o, "14ffdb0043010304");
+    o = _up_hex(jpg, o, "0405040509050509140d0b0d14141414141414141414141414141414141414141414141414141414");
+    o = _up_hex(jpg, o, "1414141414141414");
+    o = _up_hex(jpg, o, "1414141414141414141414141414ffc00011080005000403012100021101031101ffc4001f000001");
+    o = _up_hex(jpg, o, "0501010101010100");
+    o = _up_hex(jpg, o, "000000000000000102030405060708090a0bffc400b5100002010303020403050504040000017d01");
+    o = _up_hex(jpg, o, "0203000411051221");
+    o = _up_hex(jpg, o, "31410613516107227114328191a1082342b1c11552d1f02433627282090a161718191a2526272829");
+    o = _up_hex(jpg, o, "2a3435363738393a");
+    o = _up_hex(jpg, o, "434445464748494a535455565758595a636465666768696a737475767778797a838485868788898a");
+    o = _up_hex(jpg, o, "9293949596979899");
+    o = _up_hex(jpg, o, "9aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3");
+    o = _up_hex(jpg, o, "e4e5e6e7e8e9eaf1");
+    o = _up_hex(jpg, o, "f2f3f4f5f6f7f8f9faffc4001f010003010101010101010101000000000000010203040506070809");
+    o = _up_hex(jpg, o, "0a0bffc400b51100");
+    o = _up_hex(jpg, o, "020102040403040705040400010277000102031104052131061241510761711322328108144291a1");
+    o = _up_hex(jpg, o, "b1c109233352f015");
+    o = _up_hex(jpg, o, "6272d10a162434e125f11718191a262728292a35363738393a434445464748494a53545556575859");
+    o = _up_hex(jpg, o, "5a63646566676869");
+    o = _up_hex(jpg, o, "6a737475767778797a82838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5");
+    o = _up_hex(jpg, o, "b6b7b8b9bac2c3c4");
+    o = _up_hex(jpg, o, "c5c6c7c8c9cad2d3d4d5d6d7d8d9dae2e3e4e5e6e7e8e9eaf2f3f4f5f6f7f8f9faffda000c030100");
+    o = _up_hex(jpg, o, "02110311003f00e5");
+    o = _up_hex(jpg, o, "fe16fc2ad0edfc216f1cd09b865620487009181d7ae4fbd15588f17f1185ab2a189c2ba938bb39fb");
+    o = _up_hex(jpg, o, "4b7335a7335c8ecd");
+    o = _up_hex(jpg, o, "eef5dcecc2e22b4b0f071959591fffd9");
+    var want = alloc(80);
+    o = 0;
+    o = _up_hex(want, o, "1300f1ff1d08fbff4a17b0ff6532cbff040b5bff2b3282ff6537d7ff7547e7ff153704ff315320ff");
+    o = _up_hex(want, o, "6847caff8665e8ff");
+    o = _up_hex(want, o, "315730ff365c35ff655a82ff9388b0ff466d6aff517875ff7a8c1cff94a636ff");
+    _up_check(jpg, 688, want, 4, 5, "h2v1_narrow_4x5: byte-identical to djpeg (2x1)");
+    return 0;
+}
+
+# cjpeg -sample 4x1, 9x7. djpeg: fancy and box differ on 0 of 189 colour bytes.
+fn test_up_h4v1_box_9x7(): i64 {
+    var jpg = alloc(733);
+    var o = 0;
+    o = _up_hex(jpg, o, "ffd8ffe000104a46494600010100000100010000ffdb004300030202030202030303030403030405");
+    o = _up_hex(jpg, o, "0805050404050a07");
+    o = _up_hex(jpg, o, "0706080c0a0c0c0b0a0b0b0d0e12100d0e110e0b0b1016101113141515150c0f1718161418121415");
+    o = _up_hex(jpg, o, "14ffdb0043010304");
+    o = _up_hex(jpg, o, "0405040509050509140d0b0d14141414141414141414141414141414141414141414141414141414");
+    o = _up_hex(jpg, o, "1414141414141414");
+    o = _up_hex(jpg, o, "1414141414141414141414141414ffc00011080007000903014100021101031101ffc4001f000001");
+    o = _up_hex(jpg, o, "0501010101010100");
+    o = _up_hex(jpg, o, "000000000000000102030405060708090a0bffc400b5100002010303020403050504040000017d01");
+    o = _up_hex(jpg, o, "0203000411051221");
+    o = _up_hex(jpg, o, "31410613516107227114328191a1082342b1c11552d1f02433627282090a161718191a2526272829");
+    o = _up_hex(jpg, o, "2a3435363738393a");
+    o = _up_hex(jpg, o, "434445464748494a535455565758595a636465666768696a737475767778797a838485868788898a");
+    o = _up_hex(jpg, o, "9293949596979899");
+    o = _up_hex(jpg, o, "9aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3");
+    o = _up_hex(jpg, o, "e4e5e6e7e8e9eaf1");
+    o = _up_hex(jpg, o, "f2f3f4f5f6f7f8f9faffc4001f010003010101010101010101000000000000010203040506070809");
+    o = _up_hex(jpg, o, "0a0bffc400b51100");
+    o = _up_hex(jpg, o, "020102040403040705040400010277000102031104052131061241510761711322328108144291a1");
+    o = _up_hex(jpg, o, "b1c109233352f015");
+    o = _up_hex(jpg, o, "6272d10a162434e125f11718191a262728292a35363738393a434445464748494a53545556575859");
+    o = _up_hex(jpg, o, "5a63646566676869");
+    o = _up_hex(jpg, o, "6a737475767778797a82838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5");
+    o = _up_hex(jpg, o, "b6b7b8b9bac2c3c4");
+    o = _up_hex(jpg, o, "c5c6c7c8c9cad2d3d4d5d6d7d8d9dae2e3e4e5e6e7e8e9eaf2f3f4f5f6f7f8f9faffda000c030100");
+    o = _up_hex(jpg, o, "02110311003f0087");
+    o = _up_hex(jpg, o, "c31f0ca5f82bf04758bd4b532ea9a9edd12ceea0902b42f719432960ca55923f31958127784c8c64");
+    o = _up_hex(jpg, o, "d687fc327693ff00");
+    o = _up_hex(jpg, o, "3d61ff00be4ff85145618de20cae189a8b30c57b3ad76e71719bf79eadde3169ddbbad767aeb73f2");
+    o = _up_hex(jpg, o, "ecd73aa94f1728d3");
+    o = _up_hex(jpg, o, "8e968bfbe29f977ff87dcfffd9");
+    var want = alloc(252);
+    o = 0;
+    o = _up_hex(want, o, "2100ccff2603d1ff3815e3ff512efcff697b53ff889a72ffafc199ff94a67eff254341ff190171ff");
+    o = _up_hex(want, o, "462e9eff5840b0ff");
+    o = _up_hex(want, o, "6850c0ff927d8effb29daeffdbc6d7ff261122ff365c4fff302359ff382b61ff63568cff8073a9ff");
+    o = _up_hex(want, o, "909c9affb2bebcff");
+    o = _up_hex(want, o, "e5f1efff25312fff497077ff3f4b35ff47533dff626e58ff96a28cffc590eafff0bbffff7e49a3ff");
+    o = _up_hex(want, o, "66318bff4d9682ff");
+    o = _up_hex(want, o, "49753aff4c783dff659156ff6f9b60ffa7b5d8ffe2f0ffff263457ff556386ff5cb1b8ff548f6fff");
+    o = _up_hex(want, o, "5c9777ff6faa8aff");
+    o = _up_hex(want, o, "90cbabffdccb95ff6c5b25ff463500ff705f29ff66d3eaff66a6bfff74b4cdff87c7e0ff93d3ecff");
+    o = _up_hex(want, o, "dae7cbff727f63ff");
+    o = _up_hex(want, o, "475438ff7f8c70ff65f03bff");
+    _up_check(jpg, 733, want, 9, 7, "h4v1_box_9x7: byte-identical to djpeg (4x1)");
+    return 0;
+}
+
+# cjpeg -sample 2x2,1x2,1x2, 9x7. djpeg: fancy and box differ on 152 of 189 colour bytes.
+fn test_up_h2v1_vgroup2_9x7(): i64 {
+    var jpg = alloc(742);
+    var o = 0;
+    o = _up_hex(jpg, o, "ffd8ffe000104a46494600010100000100010000ffdb004300030202030202030303030403030405");
+    o = _up_hex(jpg, o, "0805050404050a07");
+    o = _up_hex(jpg, o, "0706080c0a0c0c0b0a0b0b0d0e12100d0e110e0b0b1016101113141515150c0f1718161418121415");
+    o = _up_hex(jpg, o, "14ffdb0043010304");
+    o = _up_hex(jpg, o, "0405040509050509140d0b0d14141414141414141414141414141414141414141414141414141414");
+    o = _up_hex(jpg, o, "1414141414141414");
+    o = _up_hex(jpg, o, "1414141414141414141414141414ffc00011080007000903012200021201031201ffc4001f000001");
+    o = _up_hex(jpg, o, "0501010101010100");
+    o = _up_hex(jpg, o, "000000000000000102030405060708090a0bffc400b5100002010303020403050504040000017d01");
+    o = _up_hex(jpg, o, "0203000411051221");
+    o = _up_hex(jpg, o, "31410613516107227114328191a1082342b1c11552d1f02433627282090a161718191a2526272829");
+    o = _up_hex(jpg, o, "2a3435363738393a");
+    o = _up_hex(jpg, o, "434445464748494a535455565758595a636465666768696a737475767778797a838485868788898a");
+    o = _up_hex(jpg, o, "9293949596979899");
+    o = _up_hex(jpg, o, "9aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3");
+    o = _up_hex(jpg, o, "e4e5e6e7e8e9eaf1");
+    o = _up_hex(jpg, o, "f2f3f4f5f6f7f8f9faffc4001f010003010101010101010101000000000000010203040506070809");
+    o = _up_hex(jpg, o, "0a0bffc400b51100");
+    o = _up_hex(jpg, o, "020102040403040705040400010277000102031104052131061241510761711322328108144291a1");
+    o = _up_hex(jpg, o, "b1c109233352f015");
+    o = _up_hex(jpg, o, "6272d10a162434e125f11718191a262728292a35363738393a434445464748494a53545556575859");
+    o = _up_hex(jpg, o, "5a63646566676869");
+    o = _up_hex(jpg, o, "6a737475767778797a82838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5");
+    o = _up_hex(jpg, o, "b6b7b8b9bac2c3c4");
+    o = _up_hex(jpg, o, "c5c6c7c8c9cad2d3d4d5d6d7d8d9dae2e3e4e5e6e7e8e9eaf2f3f4f5f6f7f8f9faffda000c030100");
+    o = _up_hex(jpg, o, "02110311003f0087");
+    o = _up_hex(jpg, o, "c31f0ca5f82bf04758bd4b532ea9a9edd12ceea0902b42f719432960ca55923f31958127784c8c64");
+    o = _up_hex(jpg, o, "d687fc327693ff00");
+    o = _up_hex(jpg, o, "3d61ff00be4ff851456b9ae7b875899d5cf2b3a788727172b3929a828a52bc5369ddb724d25aae56");
+    o = _up_hex(jpg, o, "eeec1f0b9ee6d2a5");
+    o = _up_hex(jpg, o, "4709529c6ee70bdfcb99a49e8b66a5d5e8fa6b70ffd9");
+    var want = alloc(252);
+    o = 0;
+    o = _up_hex(want, o, "1c00eeff2600e1ff4513ceff6630b9ff8e599fff988c8eff90d48bff6abe70ff224833ff0a0971ff");
+    o = _up_hex(want, o, "3c32a3ff5a3dbdff");
+    o = _up_hex(want, o, "784ab7ffa76ea3ffc893a7ffe0c6c9ff181a15ff335c54ff1c3c0bff243e33ff515c9cff7672c6ff");
+    o = _up_hex(want, o, "a28cbbffc7b1c8ff");
+    o = _up_hex(want, o, "f0eaf6ff233132ff4c7169ff30552cff3f573fff69676cffa695a8ffb8a1b1ffeec3f0ff8e40a5ff");
+    o = _up_hex(want, o, "64318eff5e8a97ff");
+    o = _up_hex(want, o, "3a7466ff477751ff72903aff869930ffb4c565ffe5f8e2ff142fa0ff3560eaff5fa9daff458ca8ff");
+    o = _up_hex(want, o, "58929dff81a285ff");
+    o = _up_hex(want, o, "c1b988fffbbe87ff855213ff2d4300ff337943ff72d2ceff50a9edff69b6e2ff91c9c0ffbccab3ff");
+    o = _up_hex(want, o, "ffd2ceff906e6dff");
+    o = _up_hex(want, o, "27604dff3fae6cff68e95bff");
+    _up_check(jpg, 742, want, 9, 7, "h2v1_vgroup2_9x7: byte-identical to djpeg (2x2,1x2,1x2)");
+    return 0;
+}
+
+# cjpeg -sample 2x2,2x1,2x1, 9x7. djpeg: fancy and box differ on 150 of 189 colour bytes.
+fn test_up_h1v2_hgroup2_9x7(): i64 {
+    var jpg = alloc(767);
+    var o = 0;
+    o = _up_hex(jpg, o, "ffd8ffe000104a46494600010100000100010000ffdb004300030202030202030303030403030405");
+    o = _up_hex(jpg, o, "0805050404050a07");
+    o = _up_hex(jpg, o, "0706080c0a0c0c0b0a0b0b0d0e12100d0e110e0b0b1016101113141515150c0f1718161418121415");
+    o = _up_hex(jpg, o, "14ffdb0043010304");
+    o = _up_hex(jpg, o, "0405040509050509140d0b0d14141414141414141414141414141414141414141414141414141414");
+    o = _up_hex(jpg, o, "1414141414141414");
+    o = _up_hex(jpg, o, "1414141414141414141414141414ffc00011080007000903012200022101032101ffc4001f000001");
+    o = _up_hex(jpg, o, "0501010101010100");
+    o = _up_hex(jpg, o, "000000000000000102030405060708090a0bffc400b5100002010303020403050504040000017d01");
+    o = _up_hex(jpg, o, "0203000411051221");
+    o = _up_hex(jpg, o, "31410613516107227114328191a1082342b1c11552d1f02433627282090a161718191a2526272829");
+    o = _up_hex(jpg, o, "2a3435363738393a");
+    o = _up_hex(jpg, o, "434445464748494a535455565758595a636465666768696a737475767778797a838485868788898a");
+    o = _up_hex(jpg, o, "9293949596979899");
+    o = _up_hex(jpg, o, "9aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3");
+    o = _up_hex(jpg, o, "e4e5e6e7e8e9eaf1");
+    o = _up_hex(jpg, o, "f2f3f4f5f6f7f8f9faffc4001f010003010101010101010101000000000000010203040506070809");
+    o = _up_hex(jpg, o, "0a0bffc400b51100");
+    o = _up_hex(jpg, o, "020102040403040705040400010277000102031104052131061241510761711322328108144291a1");
+    o = _up_hex(jpg, o, "b1c109233352f015");
+    o = _up_hex(jpg, o, "6272d10a162434e125f11718191a262728292a35363738393a434445464748494a53545556575859");
+    o = _up_hex(jpg, o, "5a63646566676869");
+    o = _up_hex(jpg, o, "6a737475767778797a82838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5");
+    o = _up_hex(jpg, o, "b6b7b8b9bac2c3c4");
+    o = _up_hex(jpg, o, "c5c6c7c8c9cad2d3d4d5d6d7d8d9dae2e3e4e5e6e7e8e9eaf2f3f4f5f6f7f8f9faffda000c030100");
+    o = _up_hex(jpg, o, "02110311003f0087");
+    o = _up_hex(jpg, o, "c31f0ca5f82bf04758bd4b532ea9a9edd12ceea0902b42f719432960ca55923f31958127784c8c64");
+    o = _up_hex(jpg, o, "d687fc327693ff00");
+    o = _up_hex(jpg, o, "3d61ff00be4ff851457b59ed7c4d3cd1e1ab56955a74e139c6351a95a51b72bbb5ccd2e916f97c8f");
+    o = _up_hex(jpg, o, "c1ff00d7cc7ffcf8");
+    o = _up_hex(jpg, o, "a7f754ff00e587839363ebe2b21c755aad370a49ad34f7aa53a6ee9dd3f7672e974ecd6a8fc93fb4");
+    o = _up_hex(jpg, o, "b19ff3f19fffd9");
+    var want = alloc(252);
+    o = 0;
+    o = _up_hex(want, o, "0c1493ff2104d8ff3f17c5ff6632b0ff9754a4ffaf847bffc9bb70ff52c1a0ff254345ff000f6aff");
+    o = _up_hex(want, o, "3f2bc0ff5b3bc2ff");
+    o = _up_hex(want, o, "7648c5ffa46bb8ffbd9d8efff4c695ff003334ff335c58ff143642ff343247ff64558cff8465e4ff");
+    o = _up_hex(want, o, "a787c8ffc4bb9cff");
+    o = _up_hex(want, o, "ffcad2ff073372ff3c7967ff235647ff465631ff686868ff9f90d3ffb7a3aeffe7d0beffa63f6eff");
+    o = _up_hex(want, o, "2b4e92ff49978aff");
+    o = _up_hex(want, o, "317576ff4e7258ff758662ff888f5cffcabb5cffffd7ecff38276bff32777cff56b2bdff3b90adff");
+    o = _up_hex(want, o, "5b9390ff7ca680ff");
+    o = _up_hex(want, o, "b0c86affd8da53ffae2d65ff14367eff267c57ff6cd8beff45aef2ff68b9d7ff82cfc5ffadd798ff");
+    o = _up_hex(want, o, "d8f782fff2358fff");
+    o = _up_hex(want, o, "22578dff4ea765ff68e668ff");
+    _up_check(jpg, 767, want, 9, 7, "h1v2_hgroup2_9x7: byte-identical to djpeg (2x2,2x1,2x1)");
+    return 0;
+}
+
+fn main(): i64 {
+    test_up_h2v2_9x7();
+    test_up_h2v1_9x7();
+    test_up_h1v2_9x7();
+    test_up_h2v2_narrow_4x5();
+    test_up_h2v1_narrow_4x5();
+    test_up_h4v1_box_9x7();
+    test_up_h2v1_vgroup2_9x7();
+    test_up_h1v2_hgroup2_9x7();
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

@@ -14,7 +14,7 @@ concatenated source in and calls the decode functions directly.
 
 Cyrius has no opaque-handle facility and no stable cross-bundle symbol
 ABI. Records are plain byte buffers; field access is `load64`/`store64`
-at a constant byte offset (`src/png.cyr:34-41` declares the offsets as
+at a constant byte offset (`src/png.cyr:37-41` declares the offsets as
 `IMAGE_*_OFFSET` constants). When mabda reads a decoded image it reads
 those same offsets, and when a decode fails it maps the returned
 `ChitraErr` onto its own `GPU_ERR_IMAGE_DECODE`. There is no translation
@@ -25,8 +25,8 @@ consumer boundary:
 
 - **`ChitraErr`** — `src/error.cyr:9-11`: a 16-byte record, `+0` code,
   `+8` detail pointer. Returned by-pointer through the `err_out` slot of
-  `chitra_png_decode` (`src/png.cyr:106`).
-- **`ChitraImage`** — `src/png.cyr:21-41`: the decode result. As of
+  `chitra_png_decode` (`src/png.cyr:110`).
+- **`ChitraImage`** — `src/png.cyr:21-45`: the decode result. As of
   0.2.1 it is 48 bytes: `width@0`, `height@8`, `pixels@16` (owned RGBA8),
   `channels@24` (always 4), `seen_iend@32`, `src_ctype@40` — and 56 since
   0.9.0 appended `src_depth@48` under rule (b) below.
@@ -42,7 +42,7 @@ contract, with two specific rules.**
 
 (a) **`ChitraErr` is a fixed 16-byte record deliberately
 layout-compatible with mabda's `GpuErr`** — `+0` code, `+8` detail
-pointer (layout: `ChitraErr`, `src/error.cyr:9-11`; `chitra_err_new` at `:116`). The shared
+pointer (layout: `ChitraErr`, `src/error.cyr:9-11`; `chitra_err_new` at `:123`). The shared
 shape means a chitra decode failure maps onto `GPU_ERR_IMAGE_DECODE`
 with zero translation: mabda reads the code and detail pointer at the
 offsets its own `GpuErr` already uses.
@@ -50,7 +50,7 @@ offsets its own `GpuErr` already uses.
 (b) **`ChitraImage` fields are append-only.** The 0.1.x quartet —
 `width@0`, `height@8`, `pixels@16`, `channels@24` — keeps those offsets
 forever. 0.2.0 added `seen_iend@32` and `src_ctype@40` strictly at the
-end and bumped `CHITRA_IMAGE_SIZE` from 32 to 48 (`src/png.cyr:41`, 56 since 0.9.0);
+end and bumped `CHITRA_IMAGE_SIZE` from 32 to 48 (`src/png.cyr:45`, 56 since 0.9.0, 64 since 1.4.0);
 existing accessors and mabda's reads were untouched. Any future field
 appends at the next free offset and bumps the size constant. **No field
 ever reorders, shrinks, or is repurposed within a major version.**
@@ -95,7 +95,7 @@ consumer contract and may change freely.
   would, at no abstraction cost.
 - **A tagged-union `Result` instead of the `(ptr, err_out)` pair.**
   Rejected: the `(ptr, 0-on-fail, *err_out set)` shape matches the
-  established `_chitra_png_parse_raw` convention (`src/png_filter.cyr:369`) and
+  established `_chitra_png_parse_raw` convention (`src/png_filter.cyr:399`) and
   maps directly onto mabda's `GpuErr` flow. A tagged union would add a
   carrier record with its own layout contract and buy nothing the pair
   does not already give.

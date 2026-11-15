@@ -1,0 +1,1017 @@
+# tests/tcyr/jpeg_progressive.tcyr — progressive JPEG (SOF2, T.81 Annex G),
+# 1.4.0 — ADR 0013. Standalone CPU suite; fixtures embedded as hex.
+#
+# THE ORACLE is `djpeg` (libjpeg-turbo, default fancy upsampling): every
+# fixture below decodes to its RGBA byte for byte, all 748 bytes. Out of tree
+# the same holds for a 93-file corpus — cjpeg -progressive at every sampling,
+# odd and 1-pixel sizes, restart intervals, quality 1 and 5 (16-bit quant
+# tables under SOF2), jpegtran -progressive output, ImageMagick's progressive
+# writer, and hand-written scan scripts down to four levels of successive
+# approximation.
+#
+# The cells, in order: the five real fixtures (default 4:2:0 script; 4:4:4 at
+# quality 1 with 16-bit DQT; a deep successive-approximation script with a
+# restart interval of one MCU; band-split refinements at 4:2:0; greyscale);
+# then the progression rules, each refused as CHITRA_ERR_JPEG_SOS — they are
+# also what bounds the decode's work (jpeg_prog.cyr header); then truncation:
+# a file cut after some scans still decodes (seen_iend = 0) if every
+# component had its DC scan, and is refused if one did not.
+#
+# ⚠ Checked to fail against 1.3.1: every decode cell (SOF2 refused as
+# CHITRA_ERR_JPEG_PROGRESSIVE, 19).
+#
+# REGENERATION. src.ppm is 17 x 11, R = (37x + 11y) mod 256,
+# G = (5x^2 + 29y) mod 256, B = (255 - 23x + 7y^2) mod 256 (srcg.pgm: its
+# `magick -colorspace gray`). Each cell's comment gives the cjpeg line; the
+# scan scripts are in the cell comments too. Reference: djpeg -pnm | RGBA.
+
+include "src/lib.cyr"
+include "lib/assert.cyr"
+
+fn _pg_hexval(c): i64 {
+    if (c >= 48 && c <= 57) { return c - 48; }
+    if (c >= 97 && c <= 102) { return c - 87; }
+    return c - 55;
+}
+
+fn _pg_hex(b, off, s): i64 {
+    var i = 0;
+    var n = strlen(s);
+    while (i + 1 < n) {
+        store8(b + off, _pg_hexval(load8(s + i)) * 16 + _pg_hexval(load8(s + i + 1)));
+        off = off + 1;
+        i = i + 2;
+    }
+    return off;
+}
+
+fn _pg_check(jpg, n, want, name): i64 {
+    var err = 0;
+    var img = chitra_jpeg_decode(jpg, n, &err);
+    assert(img != 0, name);
+    assert_eq(err, 0, name);
+    if (img == 0) { return 0; }
+    assert_eq(chitra_image_width(img), 17, name);
+    assert_eq(chitra_image_height(img), 11, name);
+    assert_eq(chitra_image_seen_iend(img), 1, name);
+    var px = chitra_image_pixels(img);
+    var bad = 0;
+    var i = 0;
+    while (i < 748) {
+        if (load8(px + i) != load8(want + i)) { bad = bad + 1; }
+        i = i + 1;
+    }
+    assert_eq(bad, 0, name);
+    return 0;
+}
+
+# Offset of the n-th (1-based) SOS marker's 0xFF, or -1.
+fn _pg_sos(b, lo, n): i64 {
+    var i = 2;
+    var k = 0;
+    while (i + 1 < lo) {
+        if (load8(b + i) == 0xFF) {
+            if (load8(b + i + 1) == 0xDA) {
+                k = k + 1;
+                if (k == n) { return i; }
+            }
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+# The Ss / Se / AhAl bytes of the n-th scan header.
+fn _pg_spec_at(b, lo, n): i64 {
+    var o = _pg_sos(b, lo, n);
+    var ns = load8(b + o + 4);
+    return o + 5 + 2 * ns;
+}
+
+fn _pg_refuses(b, lo, code, name): i64 {
+    var err = 0;
+    var img = chitra_jpeg_decode(b, lo, &err);
+    assert(img == 0, name);
+    assert(err != 0, name);
+    if (err != 0) { assert_eq(chitra_err_code(err), code, name); }
+    return 0;
+}
+
+# cjpeg -progressive -quality 85 src.ppm (cjpeg's default 10-scan 4:2:0 script)
+fn _pg_fx_p420_17x11(len_out): i64 {
+    var b = alloc(797);
+    var o = 0;
+    o = _pg_hex(b, o, "ffd8ffe000104a46494600010100000100010000ffdb004300050304040403050404040505050607");
+    o = _pg_hex(b, o, "0c08070707070f0b");
+    o = _pg_hex(b, o, "0b090c110f1212110f111113161c1713141a1511111821181a1d1d1f1f1f13172224221e241c1e1f");
+    o = _pg_hex(b, o, "1effdb0043010505");
+    o = _pg_hex(b, o, "050706070e08080e1e1411141e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e");
+    o = _pg_hex(b, o, "1e1e1e1e1e1e1e1e");
+    o = _pg_hex(b, o, "1e1e1e1e1e1e1e1e1e1e1e1e1e1effc2001108000b001103012200021101031101ffc40018000002");
+    o = _pg_hex(b, o, "0300000000000000");
+    o = _pg_hex(b, o, "0000000000000005010204ffc400160101010100000000000000000000000000020305ffda000c03");
+    o = _pg_hex(b, o, "0100021003100000");
+    o = _pg_hex(b, o, "01a4ae74c2d3117ddfffc4001e100001030403000000000000000000000003000204010513141521");
+    o = _pg_hex(b, o, "22ffda0008010100");
+    o = _pg_hex(b, o, "0105020c7d2b7f4c0f1086426367aaecc85fffc40020110001020505000000000000000000000001");
+    o = _pg_hex(b, o, "0002030411131521");
+    o = _pg_hex(b, o, "315291a1ffda0008010301013f018e2d0735dad001defe158999e617ffc4001f1100010303050000");
+    o = _pg_hex(b, o, "0000000000000000");
+    o = _pg_hex(b, o, "0002000111031213152151a1f0ffda0008010201013f013bb23b9bc906f3d7a56a35795fffc40023");
+    o = _pg_hex(b, o, "1000020004050500");
+    o = _pg_hex(b, o, "000000000000000000010200031121122231419223333461a2ffda0008010100063f026b7566644a");
+    o = _pg_hex(b, o, "1bdf78a2cd50a4d2");
+    o = _pg_hex(b, o, "9ae51b8fa8ed98c65cb32a3105b3683dc2a91644187818f226f331ffc40020100100020103050100");
+    o = _pg_hex(b, o, "0000000000000000");
+    o = _pg_hex(b, o, "010011213151a1416191c1e1f0ffda0008010100013f21c62de181d5782f3bd45af6e9b92568f505");
+    o = _pg_hex(b, o, "46ef6657e3291dc5");
+    o = _pg_hex(b, o, "d8707271086c9e2b4b77967e5bdcffda000c03010002000300000010643fffc4001b110003000203");
+    o = _pg_hex(b, o, "0000000000000000");
+    o = _pg_hex(b, o, "00000001112100314161f1ffda0008010301013f1063589c164ece200edc1cf8473fffc4001a1101");
+    o = _pg_hex(b, o, "0100020300000000");
+    o = _pg_hex(b, o, "00000000000000011121410051f0ffda0008010201013f107b6036970288c26f737a7c839fffc400");
+    o = _pg_hex(b, o, "1d10010100020105");
+    o = _pg_hex(b, o, "000000000000000000000111002141103161d1f1ffda0008010100013f1085225c00e8a0a740b369");
+    o = _pg_hex(b, o, "b5c06079d1851a48");
+    o = _pg_hex(b, o, "258377c3e0fde54c8575c96b429c36eb16770c425bcd477671d1c7ffd9");
+    store64(len_out, 797);
+    return b;
+}
+
+fn _pg_ref_p420_17x11(): i64 {
+    var b = alloc(748);
+    var o = 0;
+    o = _pg_hex(b, o, "1a0aa1ff2a0da7ff4b17b9ff682baaff926095ff9b8989ffa3c8a9ff78b981ff18540aff5f8b36ff");
+    o = _pg_hex(b, o, "b7c16aff76602eff");
+    o = _pg_hex(b, o, "f0bbd5ff8982aeff41b4bbff0a7e95ff211b7bff08036aff3e30a1ff5530b4ff8a5bcbff996fa1ff");
+    o = _pg_hex(b, o, "a995a0ffc4d8cfff");
+    o = _pg_hex(b, o, "002805ff3e7031ff6d9244ff454600ff9b7d4bffffc9d8ffa997c1ff6ec2e4ff287fb4ff382d95ff");
+    o = _pg_hex(b, o, "233740ff222d4dff");
+    o = _pg_hex(b, o, "7068b5ff7761b4ffa58bbbffd4bbdbfff6e5ffff292933ff537248ff93aa66ff5e4b07ffb58255ff");
+    o = _pg_hex(b, o, "78312fffd1a4cdff");
+    o = _pg_hex(b, o, "041e73ff6686f5ff5840b8ff265237ff3b5c51ff525e74ff9792b2ffc2acc1ffdac2daff5b4a76ff");
+    o = _pg_hex(b, o, "515070ff70867aff");
+    o = _pg_hex(b, o, "b9c7a3ff7e663affc59773ff7f4e40ff7c5d6fff3c4a87ff8597edff6c5bb9ff2f6d6cff4f8176ff");
+    o = _pg_hex(b, o, "738b6bff9c9a73ff");
+    o = _pg_hex(b, o, "c6a98bfffff7eeff1b3146ff436a8bff7d98b3ff2e3844ff83756cffdac9b7ff858877ff657d65ff");
+    o = _pg_hex(b, o, "215429ff7ba98dff");
+    o = _pg_hex(b, o, "7f86a0ff44948bff539476ff84a963ffabb169ffe0c29eff64534bff174350ff39728dffaac4e7ff");
+    o = _pg_hex(b, o, "565574ffa38c96ff");
+    o = _pg_hex(b, o, "e9dcd6ff759280ff78aa87ff447440ffa0c79bff758987ff5cb887ff76c687ff98cf72ffc1d58eff");
+    o = _pg_hex(b, o, "fee6e6ff776885ff");
+    o = _pg_hex(b, o, "28596aff538d9bffa1b1c0ff5f4a59ffc3919dff79595affa5c4b4ff92bfb8ff6a7090ff46446bff");
+    o = _pg_hex(b, o, "94a8b3ff68b684ff");
+    o = _pg_hex(b, o, "7ab77effaec984ffd7d2aaff7f5b77ff53446dff43807bff75b5a5ff3d3b40ff966875ffe3a0a9ff");
+    o = _pg_hex(b, o, "7d5754ff4f775dff");
+    o = _pg_hex(b, o, "00322cff7271aaff5e4e8dffbabfd3ff9fc0b5ffc6cdc5fff3c5c5ff8c4557ff9b578aff4f3d57ff");
+    o = _pg_hex(b, o, "45945dff70bc7cff");
+    o = _pg_hex(b, o, "593e43ffbe728cffffcacbff957961ff649c6fff135c3eff839cb0ff5f597dffd0bad1ff342953ff");
+    o = _pg_hex(b, o, "3b1641ff7a234eff");
+    o = _pg_hex(b, o, "b45985ffab7aa7ff646c6fff6db56cff9fdb93ff735054ffca7ea4fffdbcdaffa28f93ff5b9e75ff");
+    o = _pg_hex(b, o, "076032ffa6d6c6ff");
+    o = _pg_hex(b, o, "84858aff723c53ff59208bff8942a0ff9e3d80ffa9678bff465b60ff518b72ff7fa671ff313d0fff");
+    o = _pg_hex(b, o, "7e6261ffd9a9d9ff");
+    o = _pg_hex(b, o, "8858bbff514a98ff87d3c6ff288d55ff8fd59fff828b6cff903a47ff");
+    return b;
+}
+
+fn test_pg_p420_17x11(): i64 {
+    var lo = 0;
+    _pg_check(_pg_fx_p420_17x11(&lo), lo, _pg_ref_p420_17x11(), "p420_17x11: byte-identical to djpeg");
+    return 0;
+}
+
+# cjpeg -progressive -sample 1x1 -quality 1 src.ppm (16-bit DQT, Pq = 1, under SOF2)
+fn _pg_fx_p444_q1_dqt16_17x11(len_out): i64 {
+    var b = alloc(652);
+    var o = 0;
+    o = _pg_hex(b, o, "ffd8ffe000104a46494600010100000100010000ffdb00831003200226025802bc025801f4032002");
+    o = _pg_hex(b, o, "bc028a02bc038403");
+    o = _pg_hex(b, o, "52032003b604b007d0051404b0044c044c04b0099206d6073a05aa07d00b5409f60bea0bb80b2209");
+    o = _pg_hex(b, o, "f60af00abe0c800e");
+    o = _pg_hex(b, o, "1011f80f3c0c800d4810fe0d7a0abe0af00fa0154a0fd210fe128e1324141e1450141e0c1c0f0a16");
+    o = _pg_hex(b, o, "1217a215e0138817");
+    o = _pg_hex(b, o, "7011f813ba141e1356ffdb00831103520384038404b0041a04b0092e05140514092e13560ce40af0");
+    o = _pg_hex(b, o, "0ce4135613561356");
+    o = _pg_hex(b, o, "13561356135613561356135613561356135613561356135613561356135613561356135613561356");
+    o = _pg_hex(b, o, "1356135613561356");
+    o = _pg_hex(b, o, "13561356135613561356135613561356135613561356135613561356135613561356135613561356");
+    o = _pg_hex(b, o, "135613561356ffc2");
+    o = _pg_hex(b, o, "001108000b001103011100021101031101ffc40014000100000000000000000000000000000000ff");
+    o = _pg_hex(b, o, "c400140101000000");
+    o = _pg_hex(b, o, "00000000000000000000000000ffda000c0301000210031000000100003fffc40014100100000000");
+    o = _pg_hex(b, o, "0000000000000000");
+    o = _pg_hex(b, o, "00000020ffda00080101000105025fffc40014110100000000000000000000000000000020ffda00");
+    o = _pg_hex(b, o, "08010301013f015f");
+    o = _pg_hex(b, o, "ffc40014110100000000000000000000000000000020ffda0008010201013f015fffc40014100100");
+    o = _pg_hex(b, o, "0000000000000000");
+    o = _pg_hex(b, o, "00000000000020ffda0008010100063f025fffc40014100100000000000000000000000000000020");
+    o = _pg_hex(b, o, "ffda000801010001");
+    o = _pg_hex(b, o, "3f215fffda000c0301000200030000001000007fffc4001411010000000000000000000000000000");
+    o = _pg_hex(b, o, "0020ffda00080103");
+    o = _pg_hex(b, o, "01013f105fffc40014110100000000000000000000000000000020ffda0008010201013f105fffc4");
+    o = _pg_hex(b, o, "0016100003000000");
+    o = _pg_hex(b, o, "0000000000000000000000101120ffda0008010100013f100a3fffd9");
+    store64(len_out, 652);
+    return b;
+}
+
+fn _pg_ref_p444_q1_dqt16_17x11(): i64 {
+    var b = alloc(748);
+    var o = 0;
+    o = _pg_hex(b, o, "808080ff808080ff808080ff808080ff808080ff808080ff808080ff808080ff808080ff808080ff");
+    o = _pg_hex(b, o, "808080ff808080ff");
+    o = _pg_hex(b, o, "808080ff808080ff808080ff808080ff181818ff808080ff808080ff808080ff808080ff808080ff");
+    o = _pg_hex(b, o, "808080ff808080ff");
+    o = _pg_hex(b, o, "808080ff808080ff808080ff808080ff808080ff808080ff808080ff808080ff808080ff282828ff");
+    o = _pg_hex(b, o, "808080ff808080ff");
+    o = _pg_hex(b, o, "808080ff808080ff808080ff808080ff808080ff808080ff808080ff808080ff808080ff808080ff");
+    o = _pg_hex(b, o, "808080ff808080ff");
+    o = _pg_hex(b, o, "808080ff808080ff454545ff808080ff808080ff808080ff808080ff808080ff808080ff808080ff");
+    o = _pg_hex(b, o, "808080ff808080ff");
+    o = _pg_hex(b, o, "808080ff808080ff808080ff808080ff808080ff808080ff808080ff6b6b6bff808080ff808080ff");
+    o = _pg_hex(b, o, "808080ff808080ff");
+    o = _pg_hex(b, o, "808080ff808080ff808080ff808080ff808080ff808080ff808080ff808080ff808080ff808080ff");
+    o = _pg_hex(b, o, "808080ff808080ff");
+    o = _pg_hex(b, o, "959595ff808080ff808080ff808080ff808080ff808080ff808080ff808080ff808080ff808080ff");
+    o = _pg_hex(b, o, "808080ff808080ff");
+    o = _pg_hex(b, o, "808080ff808080ff808080ff808080ff808080ffbbbbbbff808080ff808080ff808080ff808080ff");
+    o = _pg_hex(b, o, "808080ff808080ff");
+    o = _pg_hex(b, o, "808080ff808080ff808080ff808080ff808080ff808080ff808080ff808080ff808080ff808080ff");
+    o = _pg_hex(b, o, "d8d8d8ff808080ff");
+    o = _pg_hex(b, o, "808080ff808080ff808080ff808080ff808080ff808080ff808080ff808080ff808080ff808080ff");
+    o = _pg_hex(b, o, "808080ff808080ff");
+    o = _pg_hex(b, o, "808080ff808080ff808080ffe8e8e8ff808080ff808080ff808080ff808080ff808080ff808080ff");
+    o = _pg_hex(b, o, "808080ff808080ff");
+    o = _pg_hex(b, o, "808080ff808080ff808080ff808080ff808080ff808080ff808080ff808080ffff3480ff808080ff");
+    o = _pg_hex(b, o, "808080ff808080ff");
+    o = _pg_hex(b, o, "808080ff808080ff808080ff808080ff808080ff808080ff808080ff808080ff808080ff808080ff");
+    o = _pg_hex(b, o, "808080ff808080ff");
+    o = _pg_hex(b, o, "808080ffff3480ff808080ff808080ff808080ff808080ff808080ff808080ff808080ff808080ff");
+    o = _pg_hex(b, o, "808080ff808080ff");
+    o = _pg_hex(b, o, "808080ff808080ff808080ff808080ff808080ff808080ffff3480ff");
+    return b;
+}
+
+fn test_pg_p444_q1_dqt16_17x11(): i64 {
+    var lo = 0;
+    _pg_check(_pg_fx_p444_q1_dqt16_17x11(&lo), lo, _pg_ref_p444_q1_dqt16_17x11(),
+      "p444_q1_dqt16_17x11: byte-identical to djpeg");
+    return 0;
+}
+
+# cjpeg -scans s2.scan -sample 1x1 -restart 1 src.ppm;
+#   s2.scan = DC Al 3 then three DC refinements, Y AC Al 4 then four AC refinements, Cb/Cr AC Al 2
+#   then two each
+fn _pg_fx_p_sa_rst_17x11(len_out): i64 {
+    var b = alloc(1085);
+    var o = 0;
+    o = _pg_hex(b, o, "ffd8ffe000104a46494600010100000100010000ffdb004300080606070605080707070909080a0c");
+    o = _pg_hex(b, o, "140d0c0b0b0c1912");
+    o = _pg_hex(b, o, "130f141d1a1f1e1d1a1c1c20242e2720222c231c1c2837292c30313434341f27393d38323c2e3334");
+    o = _pg_hex(b, o, "32ffdb0043010909");
+    o = _pg_hex(b, o, "090c0b0c180d0d1832211c2132323232323232323232323232323232323232323232323232323232");
+    o = _pg_hex(b, o, "3232323232323232");
+    o = _pg_hex(b, o, "3232323232323232323232323232ffc2001108000b001103011100021101031101ffc40017000003");
+    o = _pg_hex(b, o, "0100000000000000");
+    o = _pg_hex(b, o, "00000000000000010302ffc40017010101010100000000000000000000000001000204ffdd000400");
+    o = _pg_hex(b, o, "03ffda000c030100");
+    o = _pg_hex(b, o, "021003100000034812dbffd0c552cc8e9fffda000c03010002000300000032957fffd0257fffda00");
+    o = _pg_hex(b, o, "0c03010002000300");
+    o = _pg_hex(b, o, "00002132ff00ffd06e7fffda000c0301000200030000001020ff00ffd0fc7fffc4001b1000010403");
+    o = _pg_hex(b, o, "0000000000000000");
+    o = _pg_hex(b, o, "000000000001021112104151ffda0008010100013f048ab4d143ffd0c4af4fffc4001d1100020202");
+    o = _pg_hex(b, o, "0301000000000000");
+    o = _pg_hex(b, o, "0000000000010221111203135181ffda0008010201013f02ddcde1de08ad65476af0ffd0e5aa43a8");
+    o = _pg_hex(b, o, "267c3fffc4002011");
+    o = _pg_hex(b, o, "0001020505000000000000000000000000010203111222f02331414251ffda0008010301013f0247");
+    o = _pg_hex(b, o, "583934e599b159ff");
+    o = _pg_hex(b, o, "d08bd5a445bd339286f87fffc4001c10000202020300000000000000000000000001113171c12161");
+    o = _pg_hex(b, o, "91ffda0008010100");
+    o = _pg_hex(b, o, "013f43590f84558c4fffd04dc49a5a3b9e9fffc4001e100100020201050000000000000000000001");
+    o = _pg_hex(b, o, "0011213161105171");
+    o = _pg_hex(b, o, "91a1ffda0008010100013f32bd91d834bae38fb3cd3fffd0da1505b730ca0e82bdba2bffc4001e10");
+    o = _pg_hex(b, o, "0100020201050000");
+    o = _pg_hex(b, o, "000000000000000001001121315181c1d1f0f1ffda0008010100013f21d3ef4ce73b7a1da62a0545");
+    o = _pg_hex(b, o, "66ce2fc1ccf613ff");
+    o = _pg_hex(b, o, "d0a145a2d8431b8424200e2d27d24fffc4001d100100030100020300000000000000000001112131");
+    o = _pg_hex(b, o, "004171c1e1f0ffda");
+    o = _pg_hex(b, o, "0008010100013f10ae00d181a683a3279e290dc4ae4b05c838969d87a3f53bffd0d631d515a542b5");
+    o = _pg_hex(b, o, "97d128115043ddae");
+    o = _pg_hex(b, o, "f7e37e7bffc4001f110001040105010000000000000000000001001121314151618191f0e1ffda00");
+    o = _pg_hex(b, o, "08010201013f2134");
+    o = _pg_hex(b, o, "0b213da78337e27ccb71ee57ffd010fa1030d9f98a51a3a0bfffc4001f1101000301000105010000");
+    o = _pg_hex(b, o, "0000000000000111");
+    o = _pg_hex(b, o, "213100514171a1d1f0f1ffda0008010201013f10f3ec282ac065f95b0c59792159436746dc8a2521");
+    o = _pg_hex(b, o, "cf6fe49cffd08844");
+    o = _pg_hex(b, o, "926a769dbf4e90cc02da9a35f08aefd7ebefffc4001e110100020104030000000000000000000001");
+    o = _pg_hex(b, o, "001131102161f0b1");
+    o = _pg_hex(b, o, "d1f1ffda0008010301013f21052e25029bbf7ce8ff00ffd0251617d46afbd54e34ffc4001f110100");
+    o = _pg_hex(b, o, "0103040300000000");
+    o = _pg_hex(b, o, "00000000000001110021413151619181f0f1ffda0008010301013f10c4a221b4cda346778c834c8c");
+    o = _pg_hex(b, o, "d4e1df24e2056da1");
+    o = _pg_hex(b, o, "98a96e57ffd0304178044e8c4617d0a205b42f940bd0eb96be715fffd9");
+    store64(len_out, 1085);
+    return b;
+}
+
+fn _pg_ref_p_sa_rst_17x11(): i64 {
+    var b = alloc(748);
+    var o = 0;
+    o = _pg_hex(b, o, "0000f6ff3902fbff4911baff7737ccff754d93ffea7592ffeaa971ff00f657ff3e3665ff2c992cff");
+    o = _pg_hex(b, o, "87f903ffa25e0bff");
+    o = _pg_hex(b, o, "a5ddd2ffff47dcff00d77eff1173b0ff49038aff003008ff4c12fcff6432d1ff8b31c4ffad73c7ff");
+    o = _pg_hex(b, o, "be9b63ffd2dd7dff");
+    o = _pg_hex(b, o, "070c84ff335522ff54c551ff74002cff9d7803ffc3e4dbffe459feff05ffd3ff526bdfff671b95ff");
+    o = _pg_hex(b, o, "10350cff315200ff");
+    o = _pg_hex(b, o, "554affff7a6eacff958be4ffacbba4fffcd496ff254659ff3f8b5cff77c45cff9e243dffa6931dff");
+    o = _pg_hex(b, o, "de1000ffde8cffff");
+    o = _pg_hex(b, o, "100cc3ff46a0bbff6730b2ff3c5c47ff3b543eff51731cff8689e6ffc978ffffffe8c2ffdf27a9ff");
+    o = _pg_hex(b, o, "2f3396ff47969dff");
+    o = _pg_hex(b, o, "4eed48ff8f654fffb8c23bfff5162bff209b02ff2623e6ff5db0d8ff6b5fcdff3a5a65ff6d6855ff");
+    o = _pg_hex(b, o, "76911eff80b300ff");
+    o = _pg_hex(b, o, "d5d500ffece6ffff0036e5ff1f73d5ff739fc6ff8c12a5ff745986ffc4c28fffe65a77ff00ab38ff");
+    o = _pg_hex(b, o, "384e1dff61e92fff");
+    o = _pg_hex(b, o, "7a71ffff2895acff50b186ff93b3a8ff9d9f56ffe1d368fff41f4dff002c00ff537b25ff44d2ffff");
+    o = _pg_hex(b, o, "9624ebffbb94afff");
+    o = _pg_hex(b, o, "cdff9dffe061a6ff26d18dff177889ff4ceb48ff86923eff43b2ffff30bdc7ff8ac0dcffc5d5ffff");
+    o = _pg_hex(b, o, "f3ff91ffc92f6fff");
+    o = _pg_hex(b, o, "3f6f7bff3cb766ff60f565ff843a1fff989c2bffe705fffffe70e0ff2efac7ff6590b2ff4f12b5ff");
+    o = _pg_hex(b, o, "98ab8dff58ca59ff");
+    o = _pg_hex(b, o, "74c835ffa4dd00ffcef42fffc029e8ff0148d6ff2886deff65aa97ff681e81ffb64d75ffc1ce7eff");
+    o = _pg_hex(b, o, "f42b91ff00ad05ff");
+    o = _pg_hex(b, o, "5a162bff539420ff7837ffff9dcce8ff45e5c3ffaef0b3ffa7f174ffb91786ffc54c79ff2c6049ff");
+    o = _pg_hex(b, o, "398638ff4ef10aff");
+    o = _pg_hex(b, o, "8f272eff8d84d7ffdcdbe3ffff30caff13b8ceff283c9bff6bbd8cff804a57ffa8ea48ff6e0a2eff");
+    o = _pg_hex(b, o, "77001effcb152bff");
+    o = _pg_hex(b, o, "e631deffec5cf1ff009ab8ff48a8a7ff73fca0ff7b3663ffbfa67dffd9f03dffe36624ff00fa00ff");
+    o = _pg_hex(b, o, "4a4609ff6ad7c4ff");
+    o = _pg_hex(b, o, "a367ffffac04cbff4b1fbaffa317c2ffa44774ffff38a2ff246a62ff3d965cff47b34eff77200cff");
+    o = _pg_hex(b, o, "9f761affa8abd6ff");
+    o = _pg_hex(b, o, "e642bbff266acfff30dbcbff49828dff98f368ff7b913effc91d4fff");
+    return b;
+}
+
+fn test_pg_p_sa_rst_17x11(): i64 {
+    var lo = 0;
+    _pg_check(_pg_fx_p_sa_rst_17x11(&lo), lo, _pg_ref_p_sa_rst_17x11(), "p_sa_rst_17x11: byte-identical to djpeg");
+    return 0;
+}
+
+# cjpeg -scans s3.scan -sample 2x2 src.ppm;
+#   s3.scan = DC Al 1, Y AC in bands 1-2 / 3-9 / 10-63 at Al 2, refinements over 1-63
+fn _pg_fx_p_bands_420_17x11(len_out): i64 {
+    var b = alloc(778);
+    var o = 0;
+    o = _pg_hex(b, o, "ffd8ffe000104a46494600010100000100010000ffdb004300080606070605080707070909080a0c");
+    o = _pg_hex(b, o, "140d0c0b0b0c1912");
+    o = _pg_hex(b, o, "130f141d1a1f1e1d1a1c1c20242e2720222c231c1c2837292c30313434341f27393d38323c2e3334");
+    o = _pg_hex(b, o, "32ffdb0043010909");
+    o = _pg_hex(b, o, "090c0b0c180d0d1832211c2132323232323232323232323232323232323232323232323232323232");
+    o = _pg_hex(b, o, "3232323232323232");
+    o = _pg_hex(b, o, "3232323232323232323232323232ffc2001108000b001103012200021101031101ffc40018000002");
+    o = _pg_hex(b, o, "0300000000000000");
+    o = _pg_hex(b, o, "0000000000000004010205ffc40017010003010000000000000000000000000001020305ffda000c");
+    o = _pg_hex(b, o, "0301000210031000");
+    o = _pg_hex(b, o, "0001aca9a0554172ba1fffc400191000020301000000000000000000000000000201031314ffda00");
+    o = _pg_hex(b, o, "080101000102024a");
+    o = _pg_hex(b, o, "8e057836ffc4001e10000104010500000000000000000000000100020312110414215362ffda0008");
+    o = _pg_hex(b, o, "010100030902dbe9");
+    o = _pg_hex(b, o, "8aac7c3fcbab6ce48054bd9fffc4001d100002010501010000000000000000000000010211212261");
+    o = _pg_hex(b, o, "9231a1ffda000801");
+    o = _pg_hex(b, o, "01000a3f02ce58c4546fcd6be8c6da4dd5dcb462a9cb27d1ffc4001b110000070100000000000000");
+    o = _pg_hex(b, o, "0000000000000102");
+    o = _pg_hex(b, o, "111214f031ffda0008010201013f0153c8e5d2d9c5958fffc4001b11000201050000000000000000");
+    o = _pg_hex(b, o, "0000000000010314");
+    o = _pg_hex(b, o, "22526191ffda0008010301013f0192c4d3d2e9472e47ffc4001e1001000202010500000000000000");
+    o = _pg_hex(b, o, "0000000100112131");
+    o = _pg_hex(b, o, "5181c1d1f0f1ffda0008010100013f21d3ef4ce73b7a1da62a054566ce2fc1ccf61285168b610c6e");
+    o = _pg_hex(b, o, "10908038b49f493f");
+    o = _pg_hex(b, o, "ffda000c030100020003000000103c1fffc4001d1100020201050000000000000000000000011100");
+    o = _pg_hex(b, o, "215141617191b1ff");
+    o = _pg_hex(b, o, "da0008010201013f102689da4eb8433d9df137bc9fffc4001a110100020301000000000000000000");
+    o = _pg_hex(b, o, "00000100113161a1");
+    o = _pg_hex(b, o, "81ffda0008010301013f10193a1c0be5256ee6a767ffc4001d100100030100020300000000000000");
+    o = _pg_hex(b, o, "0000011121310041");
+    o = _pg_hex(b, o, "71c1e1f0ffda0008010100013f10ae00d181a683a3279e290dc4ae4b05c838969d87a3f53b58c754");
+    o = _pg_hex(b, o, "56950ad65f44a045");
+    o = _pg_hex(b, o, "410f76bbdf8df9efffd9");
+    store64(len_out, 778);
+    return b;
+}
+
+fn _pg_ref_p_bands_420_17x11(): i64 {
+    var b = alloc(748);
+    var o = 0;
+    o = _pg_hex(b, o, "0206b0ff221bb7ff3d1c9eff77409dff914573ffbd8d8dffabc294ff6eb46cff0d5f17ff4f843eff");
+    o = _pg_hex(b, o, "cfbc81ff8f5c47ff");
+    o = _pg_hex(b, o, "e6b8e7ff8d8cc6ff509facff287089ff2b1577ff051187ff3032a3ff5740acff72469dffb177a9ff");
+    o = _pg_hex(b, o, "ba91a1ffc9d4c4ff");
+    o = _pg_hex(b, o, "002b01ff186227ff79ae6aff392900ff9a6c4afff4cae0ff9290b7ff84cbe1ff3d80aaff403093ff");
+    o = _pg_hex(b, o, "0d2d3aff2d405eff");
+    o = _pg_hex(b, o, "60599cff7f6ab5ffa38ac3ffbfa8d6ffe1cff9ff373e4eff4d8363ff86b678ff5a500bffab874bff");
+    o = _pg_hex(b, o, "674424ffb8b4b5ff");
+    o = _pg_hex(b, o, "002e55ff5a90daff4742a8ff356045ff35544cff555e7bff908eb3ff9d9facffeee9fdff776096ff");
+    o = _pg_hex(b, o, "3e3564ff69888bff");
+    o = _pg_hex(b, o, "99b79fff806e48ffcfaa80ff745630ff686657ff18455cff75a4daff6467b4ff30615eff4b7470ff");
+    o = _pg_hex(b, o, "6e837eff889778ff");
+    o = _pg_hex(b, o, "b4c97cffe9f9bbff383745ff625e91ff8b92c6ff46406eff7f5676ffddacbfff997e83ff6a6d62ff");
+    o = _pg_hex(b, o, "295136ff8fbaa9ff");
+    o = _pg_hex(b, o, "7c839fff508982ff709f8fff9ab491ff93a068ffced788ff616f31ff031d1cff53678cffaca5dbff");
+    o = _pg_hex(b, o, "6e4d86ffc98cb8ff");
+    o = _pg_hex(b, o, "ffd3f1ff968a96ff899d94ff476c4dff93b79dff7b8890ff72b78bff74aa79ffabc087ffe0d8b1ff");
+    o = _pg_hex(b, o, "ffe4eaff685f72ff");
+    o = _pg_hex(b, o, "357479ff5c9c9effbfb3bfff743b44ffc27875ff8a584dff9dada0ff9ac4c0ff6f8ea0ff233b53ff");
+    o = _pg_hex(b, o, "93a6b7ff74b57dff");
+    o = _pg_hex(b, o, "85b17effb5b790ffe8c9c4ff8c5687ff493968ff3b8e86ff5baf95ff4c3b33ffa35d55fffaad93ff");
+    o = _pg_hex(b, o, "926b4cff3d674fff");
+    o = _pg_hex(b, o, "00413fff58789eff53618effb7c2d8ff99c296ffcbddc7ffe1c1d8ff743f6dff926091ff4e4b60ff");
+    o = _pg_hex(b, o, "2d855bff72c591ff");
+    o = _pg_hex(b, o, "584139ffc47a7bffffc9b5ff967c63ff5f9e8dff065a5aff7da9c2ff515b7effccbdd4ff282e2cff");
+    o = _pg_hex(b, o, "2d1c2eff723570ff");
+    o = _pg_hex(b, o, "a160a0ffa68dadff61766fff5da86dffa6e2a4ff65493effd694a2fffcc2d1ff8b8088ff539f95ff");
+    o = _pg_hex(b, o, "005f52ff8ec5c2ff");
+    o = _pg_hex(b, o, "898d96ff6c3d4fff522b6eff743b80ffa0458bffa76895ff455b59ff518b65ff719a5eff35420cff");
+    o = _pg_hex(b, o, "8e715fffce9eb8ff");
+    o = _pg_hex(b, o, "956cbbff575a9fff6bc0bdff2d966bffa1e1afff848565ff923b43ff");
+    return b;
+}
+
+fn test_pg_p_bands_420_17x11(): i64 {
+    var lo = 0;
+    _pg_check(_pg_fx_p_bands_420_17x11(&lo), lo, _pg_ref_p_bands_420_17x11(),
+      "p_bands_420_17x11: byte-identical to djpeg");
+    return 0;
+}
+
+# cjpeg -progressive -quality 85 srcg.pgm (the 6-scan greyscale script)
+fn _pg_fx_pgray_17x11(len_out): i64 {
+    var b = alloc(471);
+    var o = 0;
+    o = _pg_hex(b, o, "ffd8ffe000104a46494600010100000100010000ffdb004300050304040403050404040505050607");
+    o = _pg_hex(b, o, "0c08070707070f0b");
+    o = _pg_hex(b, o, "0b090c110f1212110f111113161c1713141a1511111821181a1d1d1f1f1f13172224221e241c1e1f");
+    o = _pg_hex(b, o, "1effc2000b08000b");
+    o = _pg_hex(b, o, "001101011100ffc4001800000203000000000000000000000000000203040506ffda000801010000");
+    o = _pg_hex(b, o, "00010282abccafff");
+    o = _pg_hex(b, o, "c4001c1000020202030000000000000000000000030400010214111215ffda00080101000105020a");
+    o = _pg_hex(b, o, "ba2973588fc58b14");
+    o = _pg_hex(b, o, "9d03559cda6a7fffc400231000020102050501000000000000000000010211000312212331612232");
+    o = _pg_hex(b, o, "34718193ffda0008");
+    o = _pg_hex(b, o, "010100063f0230356ee9a41cfdd40bcaa93b6fd23291f31ed5d868dd676774b6c559ce2881cd6160");
+    o = _pg_hex(b, o, "08b6a02f1a64d795");
+    o = _pg_hex(b, o, "7ff435ffc400201001000104000700000000000000000000011100213141516181a1c1e1f0ffda00");
+    o = _pg_hex(b, o, "08010100013f21e8");
+    o = _pg_hex(b, o, "7a4139ca6c6cdc55dd102dbd8c1bc851c4f26a3eaa6cf4981226db7156885b182aeeb5f6fe6bffda");
+    o = _pg_hex(b, o, "0008010100000010");
+    o = _pg_hex(b, o, "2bffc4001c10010101000203010000000000000000000111210031104151f1ffda0008010100013f");
+    o = _pg_hex(b, o, "10c757c4418706b5");
+    o = _pg_hex(b, o, "291591e138c4e062aa8d09068bc3f0bc75b502205e811f4d7387672ac0199deadbdfc9e387ffd9");
+    store64(len_out, 471);
+    return b;
+}
+
+fn _pg_ref_pgray_17x11(): i64 {
+    var b = alloc(748);
+    var o = 0;
+    o = _pg_hex(b, o, "0d0d0dff242424ff2a2a2aff414141ff6b6b6bff888888ffbebebeffb4b4b4ff353535ff898989ff");
+    o = _pg_hex(b, o, "c3c3c3ff656565ff");
+    o = _pg_hex(b, o, "d4d4d4ff717171ffa7a7a7ff5a5a5aff1a1a1aff1c1c1cff2e2e2eff494949ff5d5d5dff7e7e7eff");
+    o = _pg_hex(b, o, "a4a4a4ffc2c2c2ff");
+    o = _pg_hex(b, o, "202020ff575757ff8a8a8aff2c2c2cff7b7b7bffe2e2e2ff939393ffbcbcbcff7a7a7aff353535ff");
+    o = _pg_hex(b, o, "2d2d2dff434343ff");
+    o = _pg_hex(b, o, "5b5b5bff7a7a7aff8d8d8dffb8b8b8fff0f0f0ff2b2b2bff6e6e6effb0b0b0ff474747ff939393ff");
+    o = _pg_hex(b, o, "2a2a2affa9a9a9ff");
+    o = _pg_hex(b, o, "252525ff848484ff4a4a4aff4c4c4cff4b4b4bff666666ff878787ffb3b3b3ffd5d5d5ff4e4e4eff");
+    o = _pg_hex(b, o, "4e4e4eff848484ff");
+    o = _pg_hex(b, o, "c1c1c1ff525252ffaeaeaeff5b5b5bff767676ff363636ffafafafff676767ff636363ff777777ff");
+    o = _pg_hex(b, o, "838383ff939393ff");
+    o = _pg_hex(b, o, "bbbbbbffeaeaeaff363636ff585858ffa0a0a0ff333333ff7c7c7cffcbcbcbff5b5b5bff8d8d8dff");
+    o = _pg_hex(b, o, "414141ffaeaeaeff");
+    o = _pg_hex(b, o, "7f7f7fff7d7d7dff828282ff979797ffbcbcbcffc9c9c9ff3e3e3eff363636ff737373ffb3b3b3ff");
+    o = _pg_hex(b, o, "454545ff8f8f8fff");
+    o = _pg_hex(b, o, "e1e1e1ff8b8b8bffb6b6b6ff505050ffcfcfcfff898989ffa7a7a7ffa4a4a4ffb7b7b7ffccccccff");
+    o = _pg_hex(b, o, "f5f5f5ff626262ff");
+    o = _pg_hex(b, o, "545454ff898989ffcacacaff555555ff989898ff424242ffaaaaaaffc7c7c7ff7f7f7fff343434ff");
+    o = _pg_hex(b, o, "a6a6a6ffa0a0a0ff");
+    o = _pg_hex(b, o, "bbbbbbffbbbbbbffe3e3e3ff525252ff404040ff757575ffa9a9a9ff262626ff777777ffbababaff");
+    o = _pg_hex(b, o, "555555ff717171ff");
+    o = _pg_hex(b, o, "1e1e1eff878787ff4b4b4bffc2c2c2ffc3c3c3ffcececeffe4e4e4ff484848ff5b5b5bff4d4d4dff");
+    o = _pg_hex(b, o, "848484ffb4b4b4ff");
+    o = _pg_hex(b, o, "363636ff898989ffdededeff737373ff939393ff3c3c3cffa5a5a5ff585858ffcececeff2a2a2aff");
+    o = _pg_hex(b, o, "151515ff3f3f3fff");
+    o = _pg_hex(b, o, "5f5f5fff828282ff747474ffa8a8a8ffcececeff5a5a5affa5a5a5ffdfdfdfff7b7b7bffa4a4a4ff");
+    o = _pg_hex(b, o, "464646ffb7b7b7ff");
+    o = _pg_hex(b, o, "838383ff393939ff363636ff515151ff5a5a5aff696969ff5a5a5aff7e7e7effa2a2a2ff2a2a2aff");
+    o = _pg_hex(b, o, "676767ffb8b8b8ff");
+    o = _pg_hex(b, o, "535353ff707070ffb8b8b8ff747474ffdadadaff7e7e7eff454545ff");
+    return b;
+}
+
+fn test_pg_pgray_17x11(): i64 {
+    var lo = 0;
+    _pg_check(_pg_fx_pgray_17x11(&lo), lo, _pg_ref_pgray_17x11(), "pgray_17x11: byte-identical to djpeg");
+    return 0;
+}
+
+# cjpeg -scans s1.scan -sample 2x2 src.ppm, cut after the FIRST scan's entropy
+# data. s1.scan = DC for Y, then Cb, then Cr, each alone, then AC. Only Y has
+# had its DC scan when the input ends.
+fn _pg_fx_nodc(len_out): i64 {
+    var b = alloc(217);
+    var o = 0;
+    o = _pg_hex(b, o, "ffd8ffe000104a46494600010100000100010000ffdb004300080606070605080707070909080a0c");
+    o = _pg_hex(b, o, "140d0c0b0b0c1912");
+    o = _pg_hex(b, o, "130f141d1a1f1e1d1a1c1c20242e2720222c231c1c2837292c30313434341f27393d38323c2e3334");
+    o = _pg_hex(b, o, "32ffdb0043010909");
+    o = _pg_hex(b, o, "090c0b0c180d0d1832211c2132323232323232323232323232323232323232323232323232323232");
+    o = _pg_hex(b, o, "3232323232323232");
+    o = _pg_hex(b, o, "3232323232323232323232323232ffc2001108000b001103012200021101031101ffc40017000003");
+    o = _pg_hex(b, o, "0100000000000000");
+    o = _pg_hex(b, o, "00000000000002040603ffda0008010100000000cc935a8263");
+    store64(len_out, 217);
+    return b;
+}
+
+# ================================================================
+# The progression rules. cjpeg's default 4:2:0 script, scan by scan:
+#   1  Y,Cb,Cr  DC   Ah 0 Al 1      6  Y   1-63  Ah 2 Al 1
+#   2  Y     1-5     Ah 0 Al 2      7  Y,Cb,Cr DC  Ah 1 Al 0
+#   3  Cr    1-63    Ah 0 Al 1      8  Cr  1-63  Ah 1 Al 0
+#   4  Cb    1-63    Ah 0 Al 1      9  Cb  1-63  Ah 1 Al 0
+#   5  Y     6-63    Ah 0 Al 2     10  Y   1-63  Ah 1 Al 0
+# Each cell edits one scan header of a REAL file and must be refused as
+# CHITRA_ERR_JPEG_SOS. ⚠ In a real file the rules overlap — a later scan, or
+# a table cjpeg only defines for the scan that uses it, refuses the same edit
+# with the same code — so these cells are not each a guard's only witness.
+# The synthetic cells below are: one scan script per rule, each mutation-
+# checked (neuter that one test and its cell decodes).
+# ================================================================
+fn test_pg_refinement_of_an_uncoded_band() {
+    var lo = 0;
+    var b = _pg_fx_p420_17x11(&lo);
+    store8(b + _pg_spec_at(b, lo, 2) + 2, 0x21);          # scan 2: Ah 2 Al 1 on never-coded 1-5
+    _pg_refuses(b, lo, CHITRA_ERR_JPEG_SOS, "a refinement of coefficients no scan has coded is refused");
+    return 0;
+}
+
+fn test_pg_repeated_first_scan() {
+    var lo = 0;
+    var b = _pg_fx_p420_17x11(&lo);
+    store8(b + _pg_spec_at(b, lo, 6) + 2, 0x02);          # scan 6: Ah 0 Al 2 again over coded 1-63
+    _pg_refuses(b, lo, CHITRA_ERR_JPEG_SOS,
+      "a first scan repeated over coded coefficients is refused (the work bound)");
+    return 0;
+}
+
+fn test_pg_dc_refine_before_dc_first() {
+    var lo = 0;
+    var b = _pg_fx_p420_17x11(&lo);
+    store8(b + _pg_spec_at(b, lo, 1) + 2, 0x10);          # scan 1: Ah 1 Al 0 with no DC yet
+    _pg_refuses(b, lo, CHITRA_ERR_JPEG_SOS, "a DC refinement before any DC scan is refused");
+    return 0;
+}
+
+fn test_pg_refinement_must_be_one_bit() {
+    var lo = 0;
+    var b = _pg_fx_p420_17x11(&lo);
+    store8(b + _pg_spec_at(b, lo, 6) + 2, 0x20);          # scan 6: Ah 2 Al 0
+    _pg_refuses(b, lo, CHITRA_ERR_JPEG_SOS, "Al != Ah - 1 is refused");
+    return 0;
+}
+
+fn test_pg_band_order() {
+    var lo = 0;
+    var b = _pg_fx_p420_17x11(&lo);
+    var o = _pg_spec_at(b, lo, 2);
+    store8(b + o, 5);                                     # scan 2: Ss 5 Se 1
+    store8(b + o + 1, 1);
+    _pg_refuses(b, lo, CHITRA_ERR_JPEG_SOS, "Se < Ss is refused");
+    return 0;
+}
+
+fn test_pg_al_ceiling() {
+    var lo = 0;
+    var b = _pg_fx_p420_17x11(&lo);
+    store8(b + _pg_spec_at(b, lo, 2) + 2, 0x0E);          # scan 2: Al 14
+    _pg_refuses(b, lo, CHITRA_ERR_JPEG_SOS, "Al > 13 is refused");
+    return 0;
+}
+
+fn test_pg_interleaved_ac_scan() {
+    var lo = 0;
+    var b = _pg_fx_p420_17x11(&lo);
+    var o = _pg_spec_at(b, lo, 1);
+    store8(b + o, 1);                                     # scan 1 (Y,Cb,Cr): Ss 1 Se 5
+    store8(b + o + 1, 5);
+    _pg_refuses(b, lo, CHITRA_ERR_JPEG_SOS, "an AC scan naming three components is refused");
+    return 0;
+}
+
+# Greyscale script: 1 DC Al 1, 2 AC 1-5 Al 2, 3 AC 6-63 Al 2, 4 AC 1-63 Ah 2
+# Al 1, 5 DC Ah 1 Al 0, 6 AC 1-63 Ah 1 Al 0.
+fn test_pg_ac_before_dc() {
+    var lo = 0;
+    var b = _pg_fx_pgray_17x11(&lo);
+    var o = _pg_spec_at(b, lo, 1);
+    store8(b + o, 1);                                     # scan 1 becomes AC 1-5
+    store8(b + o + 1, 5);
+    _pg_refuses(b, lo, CHITRA_ERR_JPEG_SOS, "an AC scan before its component's DC scan is refused");
+    return 0;
+}
+
+fn test_pg_dc_scan_with_a_band() {
+    var lo = 0;
+    var b = _pg_fx_pgray_17x11(&lo);
+    store8(b + _pg_spec_at(b, lo, 1) + 1, 5);             # scan 1: Ss 0 Se 5
+    _pg_refuses(b, lo, CHITRA_ERR_JPEG_SOS, "a DC scan must be Ss = Se = 0");
+    return 0;
+}
+
+# ================================================================
+# Truncation. Cut before scan 3: every component has its DC (scan 1), so the
+# image decodes from what arrived — lower fidelity, seen_iend = 0 — as djpeg
+# decodes it ("Premature end of JPEG file"). A cut that leaves a component
+# with no DC is refused: zero coefficients are not a partial image.
+# ================================================================
+fn test_pg_truncated_after_dc_decodes_partially() {
+    var lo = 0;
+    var b = _pg_fx_p420_17x11(&lo);
+    var cut = _pg_sos(b, lo, 3);
+    var err = 0;
+    var img = chitra_jpeg_decode(b, cut, &err);
+    assert(img != 0, "progressive cut after 2 of 10 scans still decodes");
+    if (img != 0) {
+        assert_eq(chitra_image_width(img), 17, "partial: width");
+        assert_eq(chitra_image_seen_iend(img), 0, "partial: seen_iend = 0");
+    }
+    # Without its EOI but with every scan: complete pixels, still not closed.
+    img = chitra_jpeg_decode(b, lo - 2, &err);
+    assert(img != 0, "progressive with EOI stripped decodes");
+    if (img != 0) {
+        assert_eq(chitra_image_seen_iend(img), 0, "EOI-stripped: seen_iend = 0");
+        var ref = _pg_ref_p420_17x11();
+        var px = chitra_image_pixels(img);
+        var bad = 0;
+        var i = 0;
+        while (i < 748) {
+            if (load8(px + i) != load8(ref + i)) { bad = bad + 1; }
+            i = i + 1;
+        }
+        assert_eq(bad, 0, "EOI-stripped: every scan arrived, so the pixels are complete");
+    }
+    return 0;
+}
+
+fn test_pg_component_without_dc_refused() {
+    var lo = 0;
+    var b = _pg_fx_nodc(&lo);
+    _pg_refuses(b, lo, CHITRA_ERR_JPEG_SOS, "a file ending before Cb and Cr have any DC is refused");
+    return 0;
+}
+
+# Every block of every buffer goes back through a caller's Allocator: the
+# progressive path's coefficient buffers and state are working buffers too.
+fn _pg_ta_alloc(state, size): i64 {
+    var p = alloc(size);
+    if (p != 0) { store64(state, load64(state) + 1); }
+    return p;
+}
+fn _pg_ta_realloc(state, o, os, ns): i64 { return 0; }
+fn _pg_ta_free(state, ptr): i64 {
+    store64(state, load64(state) - 1);
+    return 0;
+}
+fn _pg_ta_reset(state): i64 { return 0; }
+
+fn test_pg_via_returns_everything() {
+    var st = alloc(8);
+    store64(st, 0);
+    var a = allocator_new(&_pg_ta_alloc, &_pg_ta_realloc, &_pg_ta_free, &_pg_ta_reset, st);
+    var lo = 0;
+    var err = 0;
+    var img = chitra_image_decode_budget_via(a, _pg_fx_p420_17x11(&lo), lo, 1048576, &err);
+    assert(img != 0, "progressive via an Allocator decodes");
+    assert_eq(load64(st), 2, "progressive via: record + pixels live, every working buffer back");
+    chitra_image_free(img);
+    assert_eq(load64(st), 0, "progressive via: nothing live after chitra_image_free");
+    var b = _pg_fx_p420_17x11(&lo);
+    store8(b + _pg_spec_at(b, lo, 6) + 2, 0x02);
+    img = chitra_image_decode_budget_via(a, b, lo, 1048576, &err);
+    assert(img == 0, "progressive via: a refused file");
+    assert_eq(load64(st), 0, "progressive via: a refusal mid-file returns every block");
+    return 0;
+}
+
+# ================================================================
+# A synthetic progressive JPEG, so each progression rule has a file only it
+# refuses. 16 x 16 unless _pg_synth_size says otherwise, 1x1 sampling (four
+# blocks per component at 16), a DC table and
+# an AC table whose only code is the 1-bit "0" -> symbol 0, so every block of
+# every scan kind is exactly one 0 bit: DC category 0, a refinement bit 0, or
+# EOB (r = 0, a run of one block). All coefficients stay zero, so a decode is
+# flat 128. `script` is n scans of 5 i64: Ns (1 = component 0 alone, 3 = all
+# three), Ss, Se, Ah, Al.
+# ================================================================
+var _pg_synth_size = 16;                       # square side, a multiple of 8
+
+fn _pg_synth(ncomp, script, nscans, len_out): i64 {
+    var side = _pg_synth_size;
+    var bpc = (side / 8) * (side / 8);         # blocks per component
+    var b = alloc(256 + nscans * (24 + (bpc * 3 + 7) / 8));
+    var o = 0;
+    var i = 0;
+    store8(b + 0, 0xFF);
+    store8(b + 1, 0xD8);
+    o = 2;
+    store8(b + o, 0xFF);                       # DQT 0, all 1
+    store8(b + o + 1, 0xDB);
+    store8(b + o + 2, 0);
+    store8(b + o + 3, 67);
+    store8(b + o + 4, 0);
+    o = o + 5;
+    while (i < 64) {
+        store8(b + o + i, 1);
+        i = i + 1;
+    }
+    o = o + 64;
+    store8(b + o, 0xFF);                       # SOF2
+    store8(b + o + 1, 0xC2);
+    store8(b + o + 2, 0);
+    store8(b + o + 3, 8 + 3 * ncomp);
+    store8(b + o + 4, 8);
+    store8(b + o + 5, (side >> 8) & 255);
+    store8(b + o + 6, side & 255);
+    store8(b + o + 7, (side >> 8) & 255);
+    store8(b + o + 8, side & 255);
+    store8(b + o + 9, ncomp);
+    o = o + 10;
+    i = 0;
+    while (i < ncomp) {
+        store8(b + o, i + 1);
+        store8(b + o + 1, 17);
+        store8(b + o + 2, 0);
+        o = o + 3;
+        i = i + 1;
+    }
+    var t = 0;
+    while (t < 2) {                            # DHT DC 0, then AC 0
+        store8(b + o, 0xFF);
+        store8(b + o + 1, 0xC4);
+        store8(b + o + 2, 0);
+        store8(b + o + 3, 20);
+        store8(b + o + 4, t * 16);
+        i = 0;
+        while (i < 16) {
+            store8(b + o + 5 + i, 0);
+            i = i + 1;
+        }
+        store8(b + o + 5, 1);
+        store8(b + o + 21, 0);
+        o = o + 22;
+        t = t + 1;
+    }
+    var sc = 0;
+    var ns = 0;
+    var nb = 0;
+    var nbytes = 0;
+    var used = 0;
+    while (sc < nscans) {
+        ns = load64(script + sc * 40);
+        store8(b + o, 0xFF);
+        store8(b + o + 1, 0xDA);
+        store8(b + o + 2, 0);
+        store8(b + o + 3, 6 + 2 * ns);
+        store8(b + o + 4, ns);
+        o = o + 5;
+        i = 0;
+        while (i < ns) {
+            store8(b + o, i + 1);
+            store8(b + o + 1, 0);
+            o = o + 2;
+            i = i + 1;
+        }
+        store8(b + o, load64(script + sc * 40 + 8));
+        store8(b + o + 1, load64(script + sc * 40 + 16));
+        store8(b + o + 2, load64(script + sc * 40 + 24) * 16 + load64(script + sc * 40 + 32));
+        o = o + 3;
+        nb = bpc * ns;                         # one bit per block of every component
+        nbytes = (nb + 7) / 8;
+        i = 0;
+        while (i < nbytes) {
+            store8(b + o + i, 0);
+            i = i + 1;
+        }
+        used = nb - (nbytes - 1) * 8;
+        if (used < 8) { store8(b + o + nbytes - 1, (1 << (8 - used)) - 1); }
+        o = o + nbytes;
+        sc = sc + 1;
+    }
+    store8(b + o, 0xFF);
+    store8(b + o + 1, 0xD9);
+    store64(len_out, o + 2);
+    return b;
+}
+
+fn _pg_scan(script, i, ns, ss, se, ah, al): i64 {
+    store64(script + i * 40, ns);
+    store64(script + i * 40 + 8, ss);
+    store64(script + i * 40 + 16, se);
+    store64(script + i * 40 + 24, ah);
+    store64(script + i * 40 + 32, al);
+    return 0;
+}
+
+fn _pg_synth_decodes(ncomp, script, n, name): i64 {
+    var lo = 0;
+    var b = _pg_synth(ncomp, script, n, &lo);
+    var err = 0;
+    var img = chitra_jpeg_decode(b, lo, &err);
+    assert(img != 0, name);
+    if (img != 0) {
+        assert_eq(chitra_image_seen_iend(img), 1, name);
+        assert_eq(load8(chitra_image_pixels(img) + 4 * 77), 128, name);
+    }
+    return 0;
+}
+
+fn _pg_synth_refused(ncomp, script, n, name): i64 {
+    var lo = 0;
+    var b = _pg_synth(ncomp, script, n, &lo);
+    _pg_refuses(b, lo, CHITRA_ERR_JPEG_SOS, name);
+    return 0;
+}
+
+# The control: a full legal script (DC Al 1, AC 1-63 Al 1, then both refined
+# to bit 0) decodes, so each refusal below is the rule and not the generator.
+fn test_pg_synth_control() {
+    var sc = alloc(400);
+    _pg_scan(sc, 0, 3, 0, 0, 0, 1);
+    _pg_scan(sc, 1, 1, 1, 63, 0, 1);
+    _pg_scan(sc, 2, 3, 0, 0, 1, 0);
+    _pg_scan(sc, 3, 1, 1, 63, 1, 0);
+    _pg_synth_decodes(3, sc, 4, "synthetic: a legal four-scan script decodes, flat 128");
+    _pg_scan(sc, 0, 1, 0, 0, 0, 1);
+    _pg_scan(sc, 2, 1, 0, 0, 1, 0);
+    _pg_synth_decodes(1, sc, 4, "synthetic: the same script, greyscale");
+    return 0;
+}
+
+fn test_pg_synth_each_rule() {
+    var sc = alloc(400);
+    # a first scan repeated over coefficients already coded — the work bound
+    _pg_scan(sc, 0, 1, 0, 0, 0, 0);
+    _pg_scan(sc, 1, 1, 1, 63, 0, 0);
+    _pg_scan(sc, 2, 1, 1, 63, 0, 0);
+    _pg_synth_refused(1, sc, 3, "synthetic: AC 1-63 first scan twice");
+    # a refinement from a bit position the band is not at
+    _pg_scan(sc, 0, 1, 0, 0, 0, 0);
+    _pg_scan(sc, 1, 1, 1, 63, 0, 1);
+    _pg_scan(sc, 2, 1, 1, 63, 2, 1);
+    _pg_synth_refused(1, sc, 3, "synthetic: refining from Ah 2 a band coded to Al 1");
+    # an AC scan before its component's DC
+    _pg_scan(sc, 0, 1, 1, 63, 0, 0);
+    _pg_scan(sc, 1, 1, 0, 0, 0, 0);
+    _pg_synth_refused(1, sc, 2, "synthetic: AC before DC");
+    # Al != Ah - 1
+    _pg_scan(sc, 0, 1, 0, 0, 0, 2);
+    _pg_scan(sc, 1, 1, 0, 0, 2, 0);
+    _pg_synth_refused(1, sc, 2, "synthetic: a refinement of two bits at once");
+    # Se < Ss
+    _pg_scan(sc, 0, 1, 0, 0, 0, 0);
+    _pg_scan(sc, 1, 1, 5, 1, 0, 0);
+    _pg_synth_refused(1, sc, 2, "synthetic: band 5..1");
+    # Al > 13
+    _pg_scan(sc, 0, 1, 0, 0, 0, 14);
+    _pg_synth_refused(1, sc, 1, "synthetic: DC Al 14");
+    # a DC scan with a band
+    _pg_scan(sc, 0, 1, 0, 5, 0, 0);
+    _pg_synth_refused(1, sc, 1, "synthetic: DC scan Ss 0 Se 5");
+    # an AC scan naming three components
+    _pg_scan(sc, 0, 3, 0, 0, 0, 0);
+    _pg_scan(sc, 1, 3, 1, 63, 0, 0);
+    _pg_synth_refused(3, sc, 2, "synthetic: interleaved AC scan");
+    # a component that never had a DC scan (Cb, Cr)
+    _pg_scan(sc, 0, 1, 0, 0, 0, 0);
+    _pg_synth_refused(3, sc, 1, "synthetic: Cb and Cr never coded");
+    return 0;
+}
+
+# The scan ceiling (1.4.0): 256 scans decode, 257 are refused before any
+# buffer exists. Every scan here is a LEGAL step of the progression — DC at
+# Al 13 refined to 0, each AC coefficient alone at Al 13, then refined one
+# bit at a time — so it is the count and not a rule that refuses the 257th.
+# ⚠ Mutation-checked: without the pre-pass test the 257-scan file decodes
+# (the driver's backstop is equivalent while the two walks agree).
+fn _pg_ceiling_script(sc, n): i64 {
+    var i = 0;
+    var al = 13;
+    _pg_scan(sc, 0, 1, 0, 0, 0, 13);
+    i = 1;
+    while (al > 0) {                            # 13 DC refinements: 14 DC scans
+        _pg_scan(sc, i, 1, 0, 0, al, al - 1);
+        al = al - 1;
+        i = i + 1;
+    }
+    var k = 1;
+    while (k <= 63) {                           # 63 AC first scans at Al 13
+        _pg_scan(sc, i, 1, k, k, 0, 13);
+        k = k + 1;
+        i = i + 1;
+    }
+    k = 1;
+    al = 13;
+    while (i < n) {                             # refinements, coefficient by coefficient
+        _pg_scan(sc, i, 1, k, k, al, al - 1);
+        k = k + 1;
+        if (k > 63) {
+            k = 1;
+            al = al - 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# At 256 x 256 the coefficient buffer is 1,024 blocks x 128 B = 128 KB and the
+# plane 64 KB, so "refused before any buffer" is measurable: what a refusal
+# costs is the frame, the tables the header defined (2,048 + 27,904 B) and
+# the ChitraErr — under 32 KB.
+fn test_pg_scan_ceiling() {
+    var sc = alloc(300 * 40);
+    _pg_synth_size = 256;
+    _pg_ceiling_script(sc, 256);
+    _pg_synth_decodes(1, sc, 256, "256 legal progressive scans decode");
+    _pg_ceiling_script(sc, 257);
+    var lo = 0;
+    var b = _pg_synth(1, sc, 257, &lo);
+    var before = alloc_used();
+    _pg_refuses(b, lo, CHITRA_ERR_DIMENSIONS, "the 257th scan is refused: CHITRA_ERR_DIMENSIONS");
+    assert_lte(alloc_used() - before, 32768, "...before the 128 KB coefficient buffer: header tables only");
+    _pg_synth_size = 16;
+    return 0;
+}
+
+# The budget probe reads a SOF2's dimensions (1.4.0: it read only SOF0's, which
+# was enough while SOF2 was refused). An over-budget progressive file is
+# CHITRA_ERR_BUDGET for the price of the ChitraErr; one within budget decodes
+# through the router. ⚠ Checked to fail with 0xC2 removed from
+# _chitra_jpeg_declared_dims (the decode runs, over budget).
+fn test_pg_budget_reads_sof2() {
+    var lo = 0;
+    var b = _pg_fx_p420_17x11(&lo);
+    var err = 0;
+    var before = alloc_used();
+    var img = chitra_image_decode_budget(b, lo, 747, &err);
+    assert(img == 0, "progressive 17x11 (748 B of RGBA) refused under a 747 B budget");
+    if (err != 0) { assert_eq(chitra_err_code(err), CHITRA_ERR_BUDGET, "...as CHITRA_ERR_BUDGET"); }
+    assert_lte(alloc_used() - before, 16, "...for the ChitraErr alone");
+    img = chitra_image_decode_budget(b, lo, 748, &err);
+    assert(img != 0, "...and decodes under a 748 B budget");
+    return 0;
+}
+
+# A cut INSIDE a later scan header is the same truncation as a cut between
+# scans: the image decodes from the scans that arrived, seen_iend = 0, as libjpeg
+# decodes it. ⚠ Checked to fail before the fix (refused as CHITRA_ERR_TRUNCATED,
+# while a cut one byte earlier — between scans — decoded).
+fn test_pg_truncated_inside_a_scan_header() {
+    var lo = 0;
+    var b = _pg_fx_p420_17x11(&lo);
+    var cut = _pg_sos(b, lo, 4) + 6;                 # FF DA, Ls, Ns, then cut
+    var err = 0;
+    var img = chitra_jpeg_decode(b, cut, &err);
+    assert(img != 0, "progressive cut inside scan 4's header decodes from scans 1-3");
+    assert_eq(err, 0, "...with no error");
+    if (img != 0) { assert_eq(chitra_image_seen_iend(img), 0, "...and seen_iend = 0"); }
+    return 0;
+}
+
+fn main(): i64 {
+    test_pg_p420_17x11();
+    test_pg_p444_q1_dqt16_17x11();
+    test_pg_p_sa_rst_17x11();
+    test_pg_p_bands_420_17x11();
+    test_pg_pgray_17x11();
+    test_pg_refinement_of_an_uncoded_band();
+    test_pg_repeated_first_scan();
+    test_pg_dc_refine_before_dc_first();
+    test_pg_refinement_must_be_one_bit();
+    test_pg_band_order();
+    test_pg_al_ceiling();
+    test_pg_interleaved_ac_scan();
+    test_pg_ac_before_dc();
+    test_pg_dc_scan_with_a_band();
+    test_pg_truncated_after_dc_decodes_partially();
+    test_pg_component_without_dc_refused();
+    test_pg_via_returns_everything();
+    test_pg_synth_control();
+    test_pg_synth_each_rule();
+    test_pg_scan_ceiling();
+    test_pg_budget_reads_sof2();
+    test_pg_truncated_inside_a_scan_header();
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

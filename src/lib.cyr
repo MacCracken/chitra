@@ -76,6 +76,7 @@ include "src/jpeg_huffman.cyr"
 include "src/jpeg_idct.cyr"
 include "src/jpeg_markers.cyr"
 include "src/jpeg.cyr"
+include "src/jpeg_prog.cyr"
 
 # BMP (0.4.0 BI_RGB; + RLE8/RLE4 0.5.1; + BITFIELDS/16 bpp/V4-V5 0.5.2).
 # Depends on error.cyr for codes,

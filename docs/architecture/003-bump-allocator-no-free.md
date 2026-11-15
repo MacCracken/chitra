@@ -138,6 +138,31 @@ per-image free:
 Do **not** treat `chitra_image_free` / `_chitra_raw_free` / `_chitra_jpeg_frame_free`
 as memory-pressure relief. They are markers, not collectors.
 
+## Since 1.4.0: a decode can take the caller's allocator
+
+The fact above still holds for every entry point that takes no allocator —
+`chitra_image_decode`, `chitra_image_decode_budget` and the per-format decodes:
+they allocate from the global bump allocator, and `chitra_image_free` is a no-op
+for their images. But two entry points now take a stdlib `Allocator`
+([ADR 0015](../adr/0015-the-decode-context.md)):
+`chitra_image_decode_budget_via` and `chitra_jpeg_decode_cmyk`.
+
+- Every allocation of such a decode goes through `_chitra_alloc(ctx, n)` (every
+  call site in `src/` does, so a new one must too) and is **zeroed**, because
+  the decoders were written against the global allocator's zeroed memory.
+- The decode context records each block, and the entry point returns every one
+  but the image record and its pixels before it returns — all of them on a
+  refusal. So the peak across calls is one decode's working set plus the
+  outputs the caller still holds, not a running sum.
+- The record's `alloc`@56 names the allocator, and `chitra_image_free` returns
+  the pixels and then the record to it. Call it once, after the last use.
+- Two allocations still go elsewhere: the 16-byte `ChitraErr` (from the global
+  allocator — `chitra_err` takes no allocator and has no free), and sankoch's
+  one-time tables.
+
+The "do not treat `chitra_image_free` as memory-pressure relief" advice above
+stands for every image the global allocator made.
+
 ## See also
 
 - [`../adr/0003-mabda-abi-compatibility.md`](../adr/0003-mabda-abi-compatibility.md) — why the

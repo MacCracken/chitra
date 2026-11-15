@@ -42,6 +42,20 @@ fn _chitra_paeth(a, b, c): i64 {
 # ================================================================
 fn _chitra_unfilter_row(prev_row, curr_in, out_row, row_bytes, bpp, filter_type): i64 {
     var i = 0;
+    # 1.4.0 (decode-throughput issue): every predictor's loop is split at
+    # `bpp` — the first pixel has no left neighbour — instead of testing
+    # `i >= bpp` on every byte, and Paeth is computed inline rather than by a
+    # call per byte (_chitra_paeth stays, as the § 9.4 reference). Each loop
+    # still reads in[i] before it writes out[i], so the in-place alias above
+    # holds unchanged.
+    var nfirst = bpp;
+    if (nfirst > row_bytes) { nfirst = row_bytes; }
+    var a = 0;
+    var b = 0;
+    var c = 0;
+    var pa = 0;
+    var pb = 0;
+    var pc = 0;
     if (filter_type == 0) {
         # None — passthrough.
         while (i < row_bytes) {
@@ -52,10 +66,12 @@ fn _chitra_unfilter_row(prev_row, curr_in, out_row, row_bytes, bpp, filter_type)
     }
     if (filter_type == 1) {
         # Sub — out[i] = in[i] + (i<bpp ? 0 : out[i-bpp])
+        while (i < nfirst) {
+            store8(out_row + i, load8(curr_in + i));
+            i = i + 1;
+        }
         while (i < row_bytes) {
-            var left = 0;
-            if (i >= bpp) { left = load8(out_row + i - bpp); }
-            store8(out_row + i, (load8(curr_in + i) + left) & 0xFF);
+            store8(out_row + i, (load8(curr_in + i) + load8(out_row + i - bpp)) & 0xFF);
             i = i + 1;
         }
         return 0;
@@ -63,34 +79,48 @@ fn _chitra_unfilter_row(prev_row, curr_in, out_row, row_bytes, bpp, filter_type)
     if (filter_type == 2) {
         # Up — out[i] = in[i] + prev[i]
         while (i < row_bytes) {
-            var up = load8(prev_row + i);
-            store8(out_row + i, (load8(curr_in + i) + up) & 0xFF);
+            store8(out_row + i, (load8(curr_in + i) + load8(prev_row + i)) & 0xFF);
             i = i + 1;
         }
         return 0;
     }
     if (filter_type == 3) {
         # Average — out[i] = in[i] + floor((left + up) / 2)
+        while (i < nfirst) {
+            store8(out_row + i, (load8(curr_in + i) + (load8(prev_row + i) >> 1)) & 0xFF);
+            i = i + 1;
+        }
         while (i < row_bytes) {
-            var left = 0;
-            if (i >= bpp) { left = load8(out_row + i - bpp); }
-            var up = load8(prev_row + i);
-            store8(out_row + i, (load8(curr_in + i) + ((left + up) / 2)) & 0xFF);
+            store8(out_row + i, (load8(curr_in + i) + ((load8(out_row + i - bpp) + load8(prev_row + i)) >> 1)) & 0xFF);
             i = i + 1;
         }
         return 0;
     }
     if (filter_type == 4) {
-        # Paeth — out[i] = in[i] + paeth(left, up, up-left)
+        # Paeth — out[i] = in[i] + paeth(left, up, up-left). With no left
+        # neighbour (a = c = 0) the predictor is `up`.
+        while (i < nfirst) {
+            store8(out_row + i, (load8(curr_in + i) + load8(prev_row + i)) & 0xFF);
+            i = i + 1;
+        }
         while (i < row_bytes) {
-            var left = 0;
-            var up_left = 0;
-            if (i >= bpp) {
-                left = load8(out_row + i - bpp);
-                up_left = load8(prev_row + i - bpp);
+            a = load8(out_row + i - bpp);
+            b = load8(prev_row + i);
+            c = load8(prev_row + i - bpp);
+            # p = a + b - c: |p - a| = |b - c|, |p - b| = |a - c|,
+            # |p - c| = |a + b - 2c|; ties resolve a, then b, then c.
+            pa = b - c;
+            if (pa < 0) { pa = 0 - pa; }
+            pb = a - c;
+            if (pb < 0) { pb = 0 - pb; }
+            pc = a + b - c - c;
+            if (pc < 0) { pc = 0 - pc; }
+            if (pa <= pb) {
+                if (pa <= pc) { c = a; } else { if (pb <= pc) { c = b; } }
+            } else {
+                if (pb <= pc) { c = b; }
             }
-            var up = load8(prev_row + i);
-            store8(out_row + i, (load8(curr_in + i) + _chitra_paeth(left, up, up_left)) & 0xFF);
+            store8(out_row + i, (load8(curr_in + i) + c) & 0xFF);
             i = i + 1;
         }
         return 0;
@@ -201,7 +231,7 @@ fn _chitra_parse_ihdr(cur, raw): i64 {
     if (width > CHITRA_MAX_DIM || height > CHITRA_MAX_DIM) {
         return chitra_err(CHITRA_ERR_DIMENSIONS);
     }
-    if (width * height > CHITRA_MAX_PIXELS) {
+    if (width * height > _chitra_lim_pixels(_chitra_raw_ctx(raw))) {
         return chitra_err(CHITRA_ERR_DIMENSIONS);
     }
 
@@ -275,7 +305,7 @@ fn _chitra_adam7_inflated_size(width, height, channels, depth): i64 {
 # (fresh zero prev-row), then its pixels are scattered to their full-image
 # positions — byte-copied at depth >= 8, bit-set at sub-byte depths.
 # Returns 0; on failure sets *err_out and returns -1.
-fn _chitra_deinterlace(inflated, pixels, width, height, channels, depth, err_out): i64 {
+fn _chitra_deinterlace(inflated, pixels, width, height, channels, depth, ctx, err_out): i64 {
     var row_bytes_full = _chitra_row_bytes_for(width, channels, depth);
     var bpp_bits = channels * depth;
     var filter_bpp = _chitra_filter_bpp_for(channels, depth);
@@ -288,9 +318,9 @@ fn _chitra_deinterlace(inflated, pixels, width, height, channels, depth, err_out
 
     # Two ping-pong pass-row buffers (reconstructed rows) + a zero prev for
     # each pass's first scanline. Sized to the full row (>= any pass row).
-    var buf_a = alloc(row_bytes_full);
-    var buf_b = alloc(row_bytes_full);
-    var zr = alloc(row_bytes_full);
+    var buf_a = _chitra_alloc(ctx, row_bytes_full);
+    var buf_b = _chitra_alloc(ctx, row_bytes_full);
+    var zr = _chitra_alloc(ctx, row_bytes_full);
     if (buf_a == 0 || buf_b == 0 || zr == 0) {
         store64(err_out, chitra_err(CHITRA_ERR_OOM));
         return 0 - 1;
@@ -367,6 +397,11 @@ fn _chitra_deinterlace(inflated, pixels, width, height, channels, depth, err_out
 # unfilters into the scanline buffer.
 # ================================================================
 fn _chitra_png_parse_raw(src, len, err_out): i64 {
+    return _chitra_png_parse_raw_ctx(src, len, 0, err_out);
+}
+
+# The same parse, held to the decode context `ctx` (1.4.0; 0 = defaults).
+fn _chitra_png_parse_raw_ctx(src, len, ctx, err_out): i64 {
     store64(err_out, 0);
 
     # crc32() needs its slice-by-8 table built first (it does not lazy-
@@ -389,10 +424,11 @@ fn _chitra_png_parse_raw(src, len, err_out): i64 {
         return 0;
     }
 
-    var raw = alloc(CHITRA_PNG_RAW_SIZE);
+    var raw = _chitra_alloc(ctx, CHITRA_PNG_RAW_SIZE);
     if (raw == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
     var z = 0;
     while (z < CHITRA_PNG_RAW_SIZE) { store8(raw + z, 0); z = z + 1; }
+    store64(raw + _CHITRA_RAW_CTX_OFFSET, ctx);
 
     var cur[24];
     _chitra_cur_init(&cur, src, len);
@@ -432,7 +468,7 @@ fn _chitra_png_parse_raw(src, len, err_out): i64 {
                 var type_ptr = _chitra_cur_ptr(&cur);
                 # chunk_len must not exceed the remaining data (after the 4 type
                 # bytes) plus the 4 CRC bytes. Validate before any scan.
-                if (chunk_len > CHITRA_MAX_RAW_BYTES) {
+                if (chunk_len > _chitra_lim_raw(ctx)) {
                     store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
                     return 0;
                 }
@@ -491,7 +527,7 @@ fn _chitra_png_parse_raw(src, len, err_out): i64 {
                     }
                     seen_idat = 1;
                     idat_total = idat_total + chunk_len;
-                    if (idat_total > CHITRA_MAX_RAW_BYTES) {
+                    if (idat_total > _chitra_lim_raw(ctx)) {
                         store64(err_out, chitra_err(CHITRA_ERR_OOM));
                         return 0;
                     }
@@ -629,11 +665,11 @@ fn _chitra_png_parse_raw(src, len, err_out): i64 {
     } else {
         inflated_size = height * (1 + row_bytes);
     }
-    if (inflated_size > CHITRA_MAX_RAW_BYTES) {
+    if (inflated_size > _chitra_lim_raw(ctx)) {
         store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
         return 0;
     }
-    if (pixel_size > CHITRA_MAX_RAW_BYTES) {
+    if (pixel_size > _chitra_lim_raw(ctx)) {
         store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
         return 0;
     }
@@ -657,8 +693,9 @@ fn _chitra_png_parse_raw(src, len, err_out): i64 {
     # passed every cap above but exceeded sankoch's 16 MiB `DECOMPRESS_MAX_OUTPUT` was refused here
     # as `CHITRA_ERR_INFLATE_LIMIT` — about 5.6 megapixels of RGB, so an ordinary photo saved as PNG.
     # The inflate below now names its own ceiling instead (`zlib_decompress_capped`), and every
-    # number that ceiling could be is already bounded: CHITRA_MAX_PIXELS at IHDR, then
-    # CHITRA_MAX_RAW_BYTES and the 1100:1 ratio cap above. ⇒ Code 35 is unreachable from 1.3.0; it
+    # number that ceiling could be is already bounded: the pixel cap at IHDR, then the raw-buffer
+    # cap and the 1100:1 ratio cap above (CHITRA_MAX_PIXELS / CHITRA_MAX_RAW_BYTES, or a budgeted
+    # decode's own — _chitra_lim_pixels / _chitra_lim_raw, 1.4.0). ⇒ Code 35 is unreachable from 1.3.0; it
     # stays defined because the enum's values are frozen.
 
     # ⛔⛔ REFUSE WHAT THE CHUNK LIST HAS ALREADY DECIDED, BEFORE THE FIRST ALLOCATION (png-1 / cc-5,
@@ -717,7 +754,7 @@ fn _chitra_png_parse_raw(src, len, err_out): i64 {
     # streaming decoder, which measured 44-51 % slower than this one-shot call (roadmap).
     var idat_buf = idat_only;
     if (idat_parts > 1) {
-        idat_buf = alloc(idat_total);
+        idat_buf = _chitra_alloc(ctx, idat_total);
         if (idat_buf == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
         var cur2[24];
         _chitra_cur_init(&cur2, src, len);
@@ -745,7 +782,7 @@ fn _chitra_png_parse_raw(src, len, err_out): i64 {
     }
 
     # ---- inflate ----
-    var inflated = alloc(inflated_size);
+    var inflated = _chitra_alloc(ctx, inflated_size);
     if (inflated == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
     # The ceiling is the exact size IHDR implies (1.3.0), in place of sankoch's 16 MiB default: a
     # stream that runs past it fails exactly as one that runs past `dst_cap` always did, so a file
@@ -771,12 +808,12 @@ fn _chitra_png_parse_raw(src, len, err_out): i64 {
     # scatters every pass across the whole image.
     var pixels = inflated;
     if (interlace == 1) {
-        pixels = alloc(pixel_size);
+        pixels = _chitra_alloc(ctx, pixel_size);
         if (pixels == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
-        var dc = _chitra_deinterlace(inflated, pixels, width, height, channels, bit_depth, err_out);
+        var dc = _chitra_deinterlace(inflated, pixels, width, height, channels, bit_depth, ctx, err_out);
         if (dc != 0) { return 0; }     # *err_out already set by deinterlace
     } else {
-        var zero_row = alloc(row_bytes);
+        var zero_row = _chitra_alloc(ctx, row_bytes);
         if (zero_row == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
         var zr = 0;
         while (zr < row_bytes) { store8(zero_row + zr, 0); zr = zr + 1; }

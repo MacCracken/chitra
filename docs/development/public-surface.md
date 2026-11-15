@@ -56,14 +56,19 @@ a promise:
 - **Error strings.** Codes are frozen; `chitra_err_name`'s text is not. Two
   strings changed in 0.9.0 for exactly this reason. Match on
   `chitra_err_code`.
-- **Memory behaviour.** The never-free bump allocator and the no-op
-  `chitra_image_free` are a current fact about the stdlib
+- **Memory behaviour.** The never-free bump allocator behind every entry
+  point that takes no allocator, and `chitra_image_free` being a no-op for
+  their images, are a current fact about the stdlib
   ([`../architecture/003-bump-allocator-no-free.md`](../architecture/003-bump-allocator-no-free.md)),
-  not a guarantee.
+  not a guarantee. What IS promised since 1.4.0: an image from
+  `chitra_image_decode_budget_via` or `chitra_jpeg_decode_cmyk` came from the
+  caller's `Allocator`, and `chitra_image_free` returns its pixels and record to
+  it ([ADR 0015](../adr/0015-the-decode-context.md)).
 
 ## FROZEN
 
-The 29 names covered by the promise above.
+The 31 names covered by the promise above — 29 at 1.0.0, and two decode entry
+points added by 1.4.0 (a minor: additive, nothing renamed or re-laid-out).
 
 ### Decode entry points
 
@@ -73,7 +78,16 @@ chitra_jpeg_decode               chitra_jpeg_decode_rgba8
 chitra_bmp_decode                chitra_bmp_decode_rgba8
 chitra_gif_decode                chitra_gif_decode_rgba8
 chitra_image_decode              chitra_image_decode_budget
+chitra_image_decode_budget_via   chitra_jpeg_decode_cmyk
 ```
+
+`chitra_image_decode_budget_via(a, src, len, max_bytes, err_out)` (1.4.0,
+[ADR 0015](../adr/0015-the-decode-context.md)) is `chitra_image_decode_budget`
+with every allocation from the stdlib `Allocator` `a` (0 = the global one).
+`chitra_jpeg_decode_cmyk(a, src, len, max_bytes, err_out)` (1.4.0,
+[ADR 0014](../adr/0014-cmyk-samples-not-colours.md)) returns a 4-component
+JPEG's C, M, Y, K samples — the one entry whose `ChitraImage` pixels are not
+RGBA; `source_color_type` is `0x104` / `0x144` / `0x164` for it.
 
 ### Signature predicates
 
@@ -117,9 +131,11 @@ starts with `_chitra_` / `_CHITRA_`, and `check-surface.sh` fails on any
 
 Not functions, but part of the same promise:
 
-- **`ChitraImage`** — 56 bytes. Fields are **append-only**: `width`@0,
-  `height`@8, `pixels`@16, `channels`@24, `seen_iend`@32, `src_ctype`@40,
-  `src_depth`@48. Four consumers read the record through the accessors — kii,
+- **`ChitraImage`** — 64 bytes (56 through 1.3.x). Fields are **append-only**:
+  `width`@0, `height`@8, `pixels`@16, `channels`@24, `seen_iend`@32,
+  `src_ctype`@40, `src_depth`@48, and since 1.4.0 `alloc`@56 — the `Allocator`
+  the record and its pixels came from, 0 for the global one; it has no accessor,
+  `chitra_image_free` reads it. Four consumers read the record through the accessors — kii,
   jalwa, aethersafha and crab — and mabda reaches the pixels through
   `chitra_png_decode_rgba8` without touching the record at all, so every field
   added since 0.1.x has gone on the end. `tests/tcyr/surface.tcyr` pins each
@@ -151,4 +167,7 @@ Recorded because they decide what a rename actually costs:
 - **jalwa** — four: `chitra_image_decode`,
   `chitra_image_{width,height,pixels}`.
 
-All five stay inside the FROZEN block.
+All five stay inside the FROZEN block. The 1.4.0 additions were asked for by a
+sixth, **selah** (screenshots and annotation; its Rust → Cyrius port), which
+calls `chitra_image_decode_budget` and `chitra_image_free` today and is the
+first consumer of both new names.

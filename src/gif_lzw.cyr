@@ -87,7 +87,7 @@ fn _chitra_gif_br_bits(st, n): i64 {
 # NOT an error: a stream that hits its End code before filling the frame is
 # well-formed, and the caller decides what an under-filled frame means.
 # ================================================================
-fn _chitra_gif_lzw_decode(data, data_len, min_code_size, out, out_cap, err_out): i64 {
+fn _chitra_gif_lzw_decode(data, data_len, min_code_size, out, out_cap, ctx, err_out): i64 {
     store64(err_out, 0);
     # Spec § 22: the LZW minimum code size is 2..8. Below 2 there are not
     # enough codes for Clear + End; above 8 exceeds a byte of palette index.
@@ -120,12 +120,12 @@ fn _chitra_gif_lzw_decode(data, data_len, min_code_size, out, out_cap, err_out):
     var table_cap = clear_code + 2 + max_new;
     if (table_cap > _CHITRA_GIF_LZW_MAX_CODES) { table_cap = _CHITRA_GIF_LZW_MAX_CODES; }
 
-    var prefix = alloc(table_cap * 8);
+    var prefix = _chitra_alloc(ctx, table_cap * 8);
     if (prefix == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0 - 1; }
-    var suffix = alloc(table_cap * 8);
+    var suffix = _chitra_alloc(ctx, table_cap * 8);
     if (suffix == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0 - 1; }
     # Expansion scratch: a chain can be at most one entry per dictionary slot.
-    var chain = alloc(table_cap);
+    var chain = _chitra_alloc(ctx, table_cap);
     if (chain == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0 - 1; }
 
     var i = 0;

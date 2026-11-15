@@ -43,7 +43,121 @@ var CHITRA_MAX_DIM       = 65535;      # per-side cap
 var CHITRA_MAX_INFLATE_RATIO = 1100;
 
 # ================================================================
-# ChitraPngRaw — the parse -> colour-pass handoff record (104 bytes).
+# The decode context (1.4.0) — what one decode is allowed to spend, and whom
+# it spends it from. Internal; built on the stack of the entry point that
+# owns the decode and reached by every allocation and every size cap through
+# the per-decode record each format already threads (PNG's ChitraPngRaw,
+# JPEG's frame, BMP's header; GIF passes it down directly).
+#
+#   +0   alloc       stdlib Allocator (lib/alloc.cyr vtable), or 0 for the
+#                    global bump `alloc()` every decode used through 1.3.x
+#   +8   max_pixels  the pixel cap this decode is held to
+#   +16  max_raw     the single-buffer cap this decode is held to
+#   +24  nlive       allocations made through `alloc` and still live
+#   +32  live[64]    those allocations, so the entry point can free every
+#                    working buffer before it returns (and everything on a
+#                    refusal) — only the image record and its pixels survive
+#
+# A context pointer of 0 means the 1.3.x defaults: the global allocator and the
+# fixed CHITRA_MAX_PIXELS / CHITRA_MAX_RAW_BYTES. Every pre-1.4.0 entry point
+# passes 0, so nothing they decode or refuse moved.
+#
+# WHY A CONTEXT AND NOT A GLOBAL. Two consumer issues landed together: the
+# fixed 16.7 MP cap refusing a screenshot the caller had budgeted for
+# (fixed-16-mp-cap issue), and every decode's memory being lost for the life
+# of the process (every-decode-leaks issue). Both are per-decode state. A
+# global "current limits / current allocator" would be one line at each
+# entry, and would make two concurrent decodes with different budgets or
+# allocators corrupt each other — chitra has never shared mutable state
+# between decodes, and this keeps it that way.
+#
+# 64 live slots: a decode makes a structurally bounded number of allocations
+# (no format allocates per chunk, per definition or per scan beyond its
+# component count), at most ~16 today. A 65th is refused as CHITRA_ERR_OOM
+# rather than leaked, so the bound is a guard that cannot be outgrown
+# silently.
+# ================================================================
+var _CHITRA_CTX_ALLOC  = 0;
+var _CHITRA_CTX_MAXPIX = 8;
+var _CHITRA_CTX_MAXRAW = 16;
+var _CHITRA_CTX_NLIVE  = 24;
+var _CHITRA_CTX_LIVE   = 32;
+var _CHITRA_CTX_SLOTS  = 64;
+var _CHITRA_CTX_SIZE   = 544;           # 32 + 64 * 8
+
+fn _chitra_ctx_init(ctx, a, max_pixels, max_raw): i64 {
+    store64(ctx + _CHITRA_CTX_ALLOC, a);
+    store64(ctx + _CHITRA_CTX_MAXPIX, max_pixels);
+    store64(ctx + _CHITRA_CTX_MAXRAW, max_raw);
+    store64(ctx + _CHITRA_CTX_NLIVE, 0);
+    return ctx;
+}
+
+fn _chitra_lim_pixels(ctx): i64 {
+    if (ctx == 0) { return CHITRA_MAX_PIXELS; }
+    return load64(ctx + _CHITRA_CTX_MAXPIX);
+}
+
+fn _chitra_lim_raw(ctx): i64 {
+    if (ctx == 0) { return CHITRA_MAX_RAW_BYTES; }
+    return load64(ctx + _CHITRA_CTX_MAXRAW);
+}
+
+fn _chitra_ctx_allocator(ctx): i64 {
+    if (ctx == 0) { return 0; }
+    return load64(ctx + _CHITRA_CTX_ALLOC);
+}
+
+# Allocate n bytes for the decode `ctx` belongs to. Through a caller's
+# Allocator the block is ZEROED, because the global `alloc()` always hands out
+# zeroed memory and decode paths were written against that (GIF's zero-filled
+# unwritten tail is one); a free-list allocator re-issues dirty blocks.
+fn _chitra_alloc(ctx, n): i64 {
+    var a = _chitra_ctx_allocator(ctx);
+    if (a == 0) { return alloc(n); }
+    if (n <= 0) { return 0; }
+    var nl = load64(ctx + _CHITRA_CTX_NLIVE);
+    if (nl >= _CHITRA_CTX_SLOTS) { return 0; }
+    var p = alloc_via(a, n);
+    if (p == 0) { return 0; }
+    var i = 0;
+    var n8 = n / 8;
+    while (i < n8) {
+        store64(p + i * 8, 0);
+        i = i + 1;
+    }
+    i = n8 * 8;
+    while (i < n) {
+        store8(p + i, 0);
+        i = i + 1;
+    }
+    store64(ctx + _CHITRA_CTX_LIVE + nl * 8, p);
+    store64(ctx + _CHITRA_CTX_NLIVE, nl + 1);
+    return p;
+}
+
+# Free every allocation the decode made through its caller's Allocator except
+# `keep1` and `keep2` (the image record and its pixels on success; 0 and 0 on
+# a refusal). A no-op for the global allocator, which cannot free.
+fn _chitra_ctx_release(ctx, keep1, keep2): i64 {
+    var a = _chitra_ctx_allocator(ctx);
+    if (a == 0) { return 0; }
+    var nl = load64(ctx + _CHITRA_CTX_NLIVE);
+    var i = 0;
+    var p = 0;
+    while (i < nl) {
+        p = load64(ctx + _CHITRA_CTX_LIVE + i * 8);
+        if (p != keep1) {
+            if (p != keep2) { free_via(a, p); }
+        }
+        i = i + 1;
+    }
+    store64(ctx + _CHITRA_CTX_NLIVE, 0);
+    return 0;
+}
+
+# ================================================================
+# ChitraPngRaw — the parse -> colour-pass handoff record (112 bytes).
 # Produced by _chitra_png_parse_raw (framing + inflate + unfilter); the
 # canonical-RGBA8 colour pass consumes it. PLTE/tRNS spans are
 # captured here as (offset-into-src, length) pairs — the bytes are NOT
@@ -65,6 +179,7 @@ var CHITRA_MAX_INFLATE_RATIO = 1100;
 #                      0 = clean IEND-less end, spec § 5.3 tolerance —
 #                      surfaced so consumers can warn while still decoding)
 #   +96  interlace    (i64 — 0 = none, 1 = Adam7; chitra 0.2.1)
+#   +104 ctx          (ptr — the decode context, 1.4.0; 0 = defaults)
 # ================================================================
 var _CHITRA_RAW_WIDTH_OFFSET        = 0;
 var _CHITRA_RAW_HEIGHT_OFFSET       = 8;
@@ -79,7 +194,8 @@ var _CHITRA_RAW_TRNS_OFF_OFFSET     = 72;
 var _CHITRA_RAW_TRNS_LEN_OFFSET     = 80;
 var _CHITRA_RAW_SEEN_IEND_OFFSET    = 88;
 var _CHITRA_RAW_INTERLACE_OFFSET    = 96;   # 0 = none, 1 = Adam7 (chitra 0.2.1)
-var CHITRA_PNG_RAW_SIZE     = 104;
+var _CHITRA_RAW_CTX_OFFSET          = 104;  # decode context (1.4.0)
+var CHITRA_PNG_RAW_SIZE     = 112;
 
 # ---- ChitraPngRaw accessors -------------------------------------
 fn _chitra_raw_width(raw): i64       { return load64(raw + _CHITRA_RAW_WIDTH_OFFSET); }
@@ -95,6 +211,7 @@ fn _chitra_raw_trns_off(raw): i64    { return load64(raw + _CHITRA_RAW_TRNS_OFF_
 fn _chitra_raw_trns_len(raw): i64    { return load64(raw + _CHITRA_RAW_TRNS_LEN_OFFSET); }
 fn _chitra_raw_seen_iend(raw): i64   { return load64(raw + _CHITRA_RAW_SEEN_IEND_OFFSET); }
 fn _chitra_raw_interlace(raw): i64   { return load64(raw + _CHITRA_RAW_INTERLACE_OFFSET); }
+fn _chitra_raw_ctx(raw): i64         { return load64(raw + _CHITRA_RAW_CTX_OFFSET); }
 
 # Release a ChitraPngRaw. The stdlib `alloc` is a bump allocator with no
 # per-block free, so this is a no-op kept for API symmetry / a future

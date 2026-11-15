@@ -205,11 +205,17 @@ the last block's last write lands at `cpw·cph − 1` precisely (for 24×16: a
 zero-fill and no containment tripwire: with an exact fit, neither could ever
 fire.
 
-That property is **conditional on the upsampler being a box filter**. Box reads
-exactly `(y·Vi/max_v)·comppw + (x·Hi/max_h)`, never past it. A fancy or triangle
-upsampler reads `x+1`, which would make an edge margin live and reopen a
-read-of-uninitialized class. Anyone changing the upsampler must revisit this
-paragraph, not just the colour pass.
+That property is **conditional on every upsampler read staying inside the
+component's real samples**. Box reads exactly `(y·Vi/max_v)·comppw +
+(x·Hi/max_h)`, never past it. ⭐ **1.4.0 changed the upsampler and revisited this
+paragraph** ([ADR 0012](../adr/0012-interpolated-chroma-upsampling.md)): the
+fancy filters read the neighbouring sample (`c ± 1`) and the row above or below,
+and each neighbour index is **clamped** into `[0, dsw) × [0, dsh)` — § A.1.1's
+real sample dimensions, libjpeg's `downsampled_width / height` — which every
+scan writes in full (the plane is at least `ceil(dsw/8)·8` wide, and coverage
+means every block was decoded first). So the padding margin is still never
+read. An unclamped neighbour would make it live again; anyone changing the
+upsampler must keep that clamp, not just the arithmetic.
 
 Note also that only **one** grid variable exists per scan. An implementation
 carrying a second (a `grid_w` for the block count while `mcu_cols` still sizes
@@ -425,7 +431,7 @@ class) and rejects duplicate component ids — but
 **not** `ΣHi·Vi > 10`, which 0.8.0 moved to `_chitra_jpeg_parse_sos` conditioned on
 `Ns > 1`, because § B.2.3 scopes it to an interleaved MCU and applying it
 frame-wide rejected files libjpeg writes (the live check is
-[`../../src/jpeg.cyr:213`](../../src/jpeg.cyr)); and
+[`../../src/jpeg.cyr:222`](../../src/jpeg.cyr)); and
 `_chitra_jpeg_huff_build` rejects an over-subscribed table (`code >= 1<<L`) — the check
 that stops a malformed DHT from producing out-of-range code values
 ([`../../src/jpeg_huffman.cyr`](../../src/jpeg_huffman.cyr) line 73). The marker
@@ -444,14 +450,34 @@ The 462 assertions in `jpeg.tcyr`, the 238 in `jpeg_noninterleaved.tcyr` and the
 — the byte-identical reference cross-check is correctness evidence, and the fuzz
 harness is the generated coverage that complements it.
 
-**Which reference decoder, and when.** `djpeg -nosmooth` is the primary oracle
-for every JPEG cell. chitra matches it exactly on most files and can differ by at most 1 LSB per IDCT output on any file — `_chitra_jpeg_descale` rounds half away from zero where libjpeg's arithmetic-shift DESCALE rounds half up, which is inside IEEE 1180 tolerance.
-ImageMagick is a valid *independent second* oracle only for grayscale and 4:4:4:
-it upsamples chroma with a fancy (triangle) filter where chitra and
-`djpeg -nosmooth` use box, so on a 4:2:0 file it differs in 937 of 1536 bytes at
-up to 40 per byte. That is a filter difference, not a decode bug — do not chase
-it. CLAUDE.md's blanket "validate against ImageMagick" rule holds for PNG, BMP
-and GIF unqualified, and for JPEG with this narrowing.
+**Which reference decoder, and when.** Since 1.4.0, **`djpeg` without
+`-nosmooth`**, and chitra is **byte-identical** to it — baseline and
+progressive, every sampling (a 180-file baseline corpus and 93 progressive
+files). Two changes got it there: the fancy upsampler above, and
+`_chitra_jpeg_descale` rounding ties UP as libjpeg's arithmetic-shift DESCALE
+does (a biased logical shift, since Cyrius `>>` is logical and `>>>` is newer
+than consumers' toolchains); through 1.3.x it rounded ties away from zero and 13
+of those 180 files differed by 1 LSB. ImageMagick agrees on subsampled files
+too, now. Through 1.3.x the oracle was `djpeg -nosmooth` and ImageMagick was
+valid only for grayscale and 4:4:4. CMYK / YCCK output is held to libjpeg asked
+for `JCS_CMYK` directly.
+
+**Progressive (1.4.0)** leaves `_chitra_jpeg_decode_scans` for
+`_chitra_jpeg_decode_progressive` (`src/jpeg_prog.cyr`) after GATE 0 and the
+structural GATE 2 — the structural walk runs to EOI for a progressive frame and
+also counts its scans (≤ 256). Each component gets a coefficient buffer over the
+interleaved block grid (`mcu_cols·Hi × mcu_rows·Vi` blocks, 128 B each), the
+four Annex G scan kinds update it, and one dequantize + IDCT pass fills planes
+of exactly the baseline shape, so `_chitra_jpeg_build_image` is shared. See
+[ADR 0013](../adr/0013-progressive-jpeg.md).
+
+**The bit reader is a word buffer since 1.4.0** (`_chitra_jpeg_br_fill` keeps up
+to 56 bits; a 9-bit lookahead table per Huffman table resolves most codes). It
+fabricates bits only on demand — `_CHITRA_BR_EOD` at the consumer that asks for
+more than the buffer holds — and a whole unconsumed data byte in the buffer
+(`cnt ≥ 8`) is what the old byte reader saw as "the byte at pos is data", at a
+restart and at the scan's tail. The refill stops AT a marker, so prefetching
+never consumes one the old reader would have stopped in front of.
 
 ## See also
 

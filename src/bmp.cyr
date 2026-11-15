@@ -161,22 +161,31 @@ fn _chitra_bmp_mask_contiguous(m): i64 {
     return 0;
 }
 
-# Scale a `width`-bit field to a full 8-bit sample. A field NARROWER than 8
-# bits is widened by BIT REPLICATION: shift the field left and fill the
-# vacated low bits with copies of its own high bits, until eight bits are
-# covered. (Wider than 8 bits: see the second note below.)
+# Scale a `width`-bit field to a full 8-bit sample.
 #
-# The obvious alternative — `v * 255 / max` — is wrong, and wrong in a way that
-# only a reference decoder catches. A plain left-shift is worse still: it tops
-# out at 248 for a 5-bit channel, making white impossible. Round-to-nearest
-# division gets closer but still disagrees: a 6-bit value of 48 is 194.3/255,
-# which rounding makes 194 while replication gives 195 — and 195 is what every
-# reference decoder produces, because replication is what the hardware mapping
-# actually is. Checked against ImageMagick across 5- and 6-bit channels at
-# several values; replication matches all of them, division does not.
+# NARROWER THAN 8 BITS ROUNDS TO THE NEAREST LEVEL (bmp-sub-8-bit-rounding,
+# 1.4.0). A `w`-bit value `v` stands for the fraction v / (2^w - 1) of full
+# scale, so its exact 8-bit value is v * 255 / max and the nearest sample is
+# that rounded: floor(v * 255 / max + 1/2) = (v * 510 + max) / (2 * max).
+# max is odd, so 510 * v never equals an odd multiple of max and no exact tie
+# exists. This is the "most accurate" rescale PNG § 13.13 names for sBIT
+# samples, and the same rule the wide-field branch below applies to 16 bits.
 #
-# The loop form handles any narrower width: widths below 4 need the field
-# repeated more than twice to cover eight bits.
+# Through 1.3.x chitra widened by BIT REPLICATION (shift left, refill the low
+# bits from the field's own high bits), because ImageMagick does and its
+# comment called replication "what the hardware mapping actually is". That
+# is a compatibility fact about one decoder, not a statement of what the file
+# means: replication is an approximation of v * 255 / max, and a worse one —
+# up to 0.677 of a level off at 5 bits and 0.714 at 6, where rounding is
+# never more than 0.5 off. They differ on 4 of 32 five-bit levels (3, 7, 24,
+# 28) and 10 of 64 six-bit levels (11..15, 48..52): a 6-bit 48 is exactly
+# 194.29, which rounding makes 194 and replication made 195. For 1-4 and 7
+# bits the two agree on every level. Skia and Rust's `image` round;
+# ImageMagick replicates, so on those 14 levels chitra now differs from
+# ImageMagick by exactly 1 (ADR 0011).
+#
+# A plain left shift stays wrong under either rule: it tops out at 248 for a
+# 5-bit channel, making white impossible.
 #
 # WIDER THAN 8 BITS IS A DIFFERENT QUESTION (bmp-wide-mask-rounding, 1.1.1).
 # Replication only ever ran one pass there, which reduced to `v >> (width-8)`:
@@ -202,13 +211,8 @@ fn _chitra_bmp_scale_to_8(v, width): i64 {
         if (width <= 16) { x16 = v << (16 - width); } else { x16 = v >> (width - 16); }
         return (x16 * 2 + 257) / 514;          # round(x16 / 257)
     }
-    var r = 0;
-    var bits = 0;
-    while (bits < 8) {
-        r = (r << width) | v;
-        bits = bits + width;
-    }
-    return (r >> (bits - 8)) & 255;
+    var mx = (1 << width) - 1;
+    return (v * 510 + mx) / (2 * mx);          # round(v * 255 / max)
 }
 
 # ================================================================
@@ -254,6 +258,14 @@ fn _chitra_bmp_hdr_bpp(h): i64    { return load64(h + _CHITRA_BH_BPP); }
 # another, and the derived sizes are capped before anything is allocated.
 # ================================================================
 fn _chitra_bmp_parse_header(src, len, err_out): i64 {
+    return _chitra_bmp_parse_header_ctx(src, len, 0, err_out);
+}
+
+# The same parse, held to the decode context `ctx` (1.4.0; 0 = defaults). The
+# context is not stored in the header record — chitra_bmp_decode is one
+# function and keeps it in a local — so the record, and with it the 128-byte
+# cost of a budget refusal (ADR 0008), did not grow.
+fn _chitra_bmp_parse_header_ctx(src, len, ctx, err_out): i64 {
     if (chitra_bmp_check_signature(src, len) == 0) {
         store64(err_out, chitra_err(CHITRA_ERR_SIGNATURE));
         return 0;
@@ -414,7 +426,7 @@ fn _chitra_bmp_parse_header(src, len, err_out): i64 {
         store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
         return 0;
     }
-    if (w * h > CHITRA_MAX_PIXELS) {
+    if (w * h > _chitra_lim_pixels(ctx)) {
         store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
         return 0;
     }
@@ -443,9 +455,11 @@ fn _chitra_bmp_parse_header(src, len, err_out): i64 {
     # Always >= 4 (guards-unreachable, 1.1.1): w >= 1 and bpp >= 1 from above.
     var stride = ((w * bpp + 31) / 32) * 4;
     # Cannot fire while the ceilings keep their 1.1.0 values (gate-4, 1.1.1):
-    # stride <= 4*w, so stride*h <= 4*CHITRA_MAX_PIXELS = 64 MB < 256 MB. It
-    # stays as the statement of this buffer's own ceiling if those are retuned.
-    if (stride * h > CHITRA_MAX_RAW_BYTES) {
+    # stride <= 4*w, so stride*h <= 4*CHITRA_MAX_PIXELS = 64 MB < 256 MB — and
+    # a budgeted decode's raw cap is at least twice its pixel cap's RGBA bytes
+    # (1.4.0), so the same holds there. It stays as the statement of this
+    # buffer's own ceiling if those are retuned.
+    if (stride * h > _chitra_lim_raw(ctx)) {
         store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
         return 0;
     }
@@ -536,7 +550,7 @@ fn _chitra_bmp_parse_header(src, len, err_out): i64 {
 
     # Defaults for the packed depths when no usable mask was declared. Both are
     # documented layouts, not inventions: 16 bpp BI_RGB is X1R5G5B5, and 32 bpp
-    # BI_RGB is X8R8G8B8 with the top byte undefined (see the alpha note in
+    # BI_RGB is X8R8G8B8 with the top byte unused (see the alpha note in
     # chitra_bmp_decode).
     # Gated on is_bitfields: these defaults exist for BI_RGB, which declares no
     # masks at all. Applying them to a BI_BITFIELDS file that declared all-zero
@@ -656,7 +670,7 @@ fn _chitra_bmp_parse_header(src, len, err_out): i64 {
         }
     }
 
-    var hdr = alloc(_CHITRA_BMP_HDR_SIZE);
+    var hdr = _chitra_alloc(ctx, _CHITRA_BMP_HDR_SIZE);
     if (hdr == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
     store64(hdr + _CHITRA_BH_WIDTH, w);
     store64(hdr + _CHITRA_BH_HEIGHT, h);
@@ -893,8 +907,13 @@ fn _chitra_bmp_decode_rle(src, len, data_off, w, h, is_rle4, idx, err_out, consu
 # ================================================================
 # @public
 fn chitra_bmp_decode(src, len, err_out): i64 {
+    return _chitra_bmp_decode_ctx(src, len, 0, err_out);
+}
+
+# The BMP decode held to the decode context `ctx` (1.4.0; 0 = defaults).
+fn _chitra_bmp_decode_ctx(src, len, ctx, err_out): i64 {
     store64(err_out, 0);
-    var hdr = _chitra_bmp_parse_header(src, len, err_out);
+    var hdr = _chitra_bmp_parse_header_ctx(src, len, ctx, err_out);
     if (hdr == 0) { return 0; }
 
     var w = load64(hdr + _CHITRA_BH_WIDTH);
@@ -913,7 +932,7 @@ fn chitra_bmp_decode(src, len, err_out): i64 {
     var compression = load64(hdr + _CHITRA_BH_COMPRESSION);
 
     var out_size = w * h * 4;
-    if (out_size > CHITRA_MAX_RAW_BYTES) {
+    if (out_size > _chitra_lim_raw(ctx)) {
         store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
         return 0;
     }
@@ -953,7 +972,7 @@ fn chitra_bmp_decode(src, len, err_out): i64 {
             store64(err_out, chitra_err(CHITRA_ERR_DIMENSIONS));
             return 0;
         }
-        rle_idx = alloc(w * h);
+        rle_idx = _chitra_alloc(ctx, w * h);
         if (rle_idx == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
         var zz = 0;
         while (zz < w * h) { store8(rle_idx + zz, 0); zz = zz + 1; }
@@ -977,20 +996,24 @@ fn chitra_bmp_decode(src, len, err_out): i64 {
         }
     }
 
-    var rgba = alloc(out_size);
+    var rgba = _chitra_alloc(ctx, out_size);
     if (rgba == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
 
-    # 32-bpp alpha. When the header DECLARES an alpha mask (V3+ or
-    # BI_ALPHABITFIELDS), chitra reads it — 0.5.2 retires the heuristic below
-    # for exactly those files, which is the point of implementing masks.
+    # 32-bpp alpha is read ONLY when the file declares it: an alpha mask under
+    # BI_BITFIELDS (V3+ header) or BI_ALPHABITFIELDS. 32-bpp BI_RGB declares no
+    # alpha — Microsoft: "the high byte in each DWORD is not used" — so that
+    # image is OPAQUE, whatever the fourth byte holds (bmp-bi-rgb-32bpp-alpha,
+    # 1.4.0; ADR 0011).
     #
-    # For 32-bpp BI_RGB the fourth byte remains formally UNDEFINED, and no mask
-    # says otherwise, so the heuristic still governs there: writers disagree,
-    # some storing real alpha and others leaving padding zeros. Trusting it
-    # blindly renders the padding-zero files fully transparent; ignoring it
-    # discards real alpha. So: look first. If EVERY fourth byte is zero the
-    # field is padding and the image is opaque; otherwise it is alpha.
-    # ImageMagick resolves it the same way.
+    # Through 1.3.x a heuristic ran here, as ImageMagick's does: if ANY fourth
+    # byte was non-zero, ALL of them were alpha. That trades the format's
+    # meaning for a guess about the writer, and the guess fails exactly where
+    # the byte is what the spec says it is — unused: a writer that leaves
+    # uninitialised memory or a reused stride buffer in it produced an opaque
+    # image decoded with invented transparency (selah's noise fixture: 559 of
+    # 561 pixels non-opaque). It is the same guess ADR 0009 refuses for an
+    # undeclared JPEG colour space. A file that wants alpha says so, and that
+    # path is untouched.
     var sh_r = _chitra_bmp_mask_shift(mask_r);
     var sh_g = _chitra_bmp_mask_shift(mask_g);
     var sh_b = _chitra_bmp_mask_shift(mask_b);
@@ -1013,33 +1036,6 @@ fn chitra_bmp_decode(src, len, err_out): i64 {
     var use_alpha = 0;
     if (mask_a != 0) {
         use_alpha = 2;                          # declared: read the alpha mask
-    }
-    if (use_alpha == 0) {
-        # No alpha mask. At 32 bpp BI_RGB the fourth byte is formally
-        # UNDEFINED, so the padding heuristic governs there and only there.
-        if (bpp == 32) {
-            var ay = 0;
-            var probe = 0;
-            while (ay < h) {
-                var arow = data + ay * stride;
-                var ax = 0;
-                while (ax < w) {
-                    if (load8(arow + ax * 4 + 3) != 0) { probe = 1; ax = w; }
-                    ax = ax + 1;
-                }
-                if (probe == 1) { ay = h; }
-                ay = ay + 1;
-            }
-            use_alpha = probe;
-        }
-    }
-    # A bitfields file that declared no alpha mask is opaque BY DECLARATION,
-    # not by inspection — the padding heuristic must not speak for it.
-    if (compression == _CHITRA_BMP_BI_BITFIELDS) {
-        if (mask_a == 0) { use_alpha = 0; }
-    }
-    if (compression == _CHITRA_BMP_BI_ALPHABITFIELDS) {
-        if (mask_a == 0) { use_alpha = 0; }
     }
 
     var y = 0;
@@ -1099,11 +1095,7 @@ fn chitra_bmp_decode(src, len, err_out): i64 {
                 store8(o + 2, _chitra_bmp_scale_to_8((pix & mask_b) >> sh_b, wd_b));
                 if (use_alpha == 2) {
                     store8(o + 3, _chitra_bmp_scale_to_8((pix & mask_a) >> sh_a, wd_a));
-                }
-                if (use_alpha == 1) {
-                    store8(o + 3, load8(srow + x * 4 + 3));
-                }
-                if (use_alpha == 0) {
+                } else {
                     store8(o + 3, 255);
                 }
             }
@@ -1134,29 +1126,22 @@ fn chitra_bmp_decode(src, len, err_out): i64 {
         y = y + 1;
     }
 
-    var img = alloc(CHITRA_IMAGE_SIZE);
-    if (img == 0) { store64(err_out, chitra_err(CHITRA_ERR_OOM)); return 0; }
-    store64(img + _CHITRA_IMAGE_WIDTH_OFFSET, w);
-    store64(img + _CHITRA_IMAGE_HEIGHT_OFFSET, h);
-    store64(img + _CHITRA_IMAGE_PIXELS_OFFSET, rgba);
-    store64(img + _CHITRA_IMAGE_CHANNELS_OFFSET, 4);
     # BMP has no stream terminator to have seen — no IEND, no EOI, no trailer.
     # The whole `data_off + stride * height` span is validated against the input
     # length before a single pixel is read, so if the decode got this far the
     # pixel data was entirely present. 1 is therefore the honest answer here,
     # not a placeholder: unlike the JPEG and GIF paths before 0.7.0, there is no
-    # incomplete-but-decoded state for this field to be hiding.
-    store64(img + _CHITRA_IMAGE_SEEN_IEND_OFFSET, 1);
+    # incomplete-but-decoded state for this field to be hiding. (seen_iend = 1
+    # below.)
     # src_ctype sentinel: 0x200 | bpp — so 0x201/0x204/0x208 indexed,
     # 0x218 for 24 bpp, 0x220 for 32 bpp. Distinct from PNG's raw color_type
     # (0/2/3/4/6) and JPEG's 0x100 | ncomp.
-    store64(img + _CHITRA_IMAGE_SRC_CTYPE_OFFSET, 512 + bpp);
     # Bits per CHANNEL as stored, not bits per pixel. 8 for 24/32 bpp and for
     # palette entries (which are BGRA bytes whatever the index width); for the
     # packed 16-bpp layouts it is the widest declared channel, so 5-5-5 reports
     # 5 and 5-6-5 reports 6. That is the number a caller needs to know how much
-    # precision the RGBA8 output was widened FROM — bit replication (0.5.2)
-    # cannot invent detail that was never stored.
+    # precision the RGBA8 output was widened FROM — widening (0.5.2; rounding
+    # since 1.4.0) cannot invent detail that was never stored.
     # Keyed on the mask WIDTHS rather than on `is_bitfields`, which lives in
     # _chitra_bmp_parse_header and is not in scope here. They say the same thing and
     # the widths say it more directly: a declared mask means packed channels,
@@ -1168,8 +1153,7 @@ fn chitra_bmp_decode(src, len, err_out): i64 {
         if (wd_g > src_depth) { src_depth = wd_g; }
         if (wd_b > src_depth) { src_depth = wd_b; }
     }
-    store64(img + _CHITRA_IMAGE_SRC_DEPTH_OFFSET, src_depth);
-    return img;
+    return _chitra_image_new(ctx, w, h, rgba, 1, 512 + bpp, src_depth, err_out);
 }
 
 # ================================================================

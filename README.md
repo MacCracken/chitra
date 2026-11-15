@@ -1,6 +1,6 @@
 # chitra
 
-Version: 1.3.1
+Version: 1.4.0
 
 **chitra** (चित्र — Sanskrit: *image / picture*) is a pure-Cyrius CPU
 raster image decoder, a sibling AGNOS package in the mould of `sakshi` /
@@ -18,13 +18,15 @@ always 4 channels, always at the source dimensions, whatever went in.
 | Format | Coverage |
 |---|---|
 | **PNG** | Every spec-legal bit depth × color type: 1/2/4/8/16 across types 0/2/3/4/6 (§ 11.2.2 Table 11.1), plus **Adam7 interlace** for every cell. PLTE palettes, tRNS transparency (keyed and per-entry). IDAT inflate via `sankoch`. |
-| **JPEG** | JFIF **baseline** (SOF0 sequential Huffman, 8-bit): grayscale + YCbCr, chroma subsampling 4:4:4 / 4:2:2 / 4:2:0 and general `Hi,Vi` box upsampling, DRI / RST0–7 restart markers, RGB components via the Adobe APP14 transform, and the full T.81 § A.2 scan model — interleaved, **non-interleaved and partially interleaved**, single- or multi-scan (0.8.0). Verified against **`djpeg -nosmooth`**: exact on most files, and never more than 1 LSB per IDCT output apart — `_chitra_jpeg_descale` rounds half away from zero where libjpeg's arithmetic-shift DESCALE rounds half up, which is inside IEEE 1180 tolerance. |
-| **BMP** | `BI_RGB` at 1 / 4 / 8 bpp (palette), 16 / 24 / 32 bpp, plus **`BI_RLE8` / `BI_RLE4`** run-length and **`BI_BITFIELDS`** channel masks; CORE / **OS/2 2.x CORE2** / INFO / V2 / V3 / **V4** / **V5** headers (accepted DIB sizes 12/40/52/56/64/108/124); bottom-up **and** top-down. Verified **identical to ImageMagick**. |
+| **JPEG** | JFIF **baseline** (SOF0) and **progressive** (SOF2, 1.4.0 — spectral selection, successive approximation, 16-bit quant tables), 8-bit Huffman: grayscale + YCbCr, chroma subsampling 4:4:4 / 4:2:2 / 4:2:0 / 4:4:0 and general `Hi,Vi`, upsampled with libjpeg-turbo's **interpolated ("fancy") filters** (1.4.0), DRI / RST0–7 restart markers, RGB components via the Adobe APP14 transform, and the full T.81 § A.2 scan model — interleaved, **non-interleaved and partially interleaved**, single- or multi-scan. **CMYK / YCCK** through its own entry, as CMYK samples (1.4.0). Verified **byte-identical to `djpeg`** (and to libjpeg's own CMYK output) on a 397-file corpus. |
+| **BMP** | `BI_RGB` at 1 / 4 / 8 bpp (palette), 16 / 24 / 32 bpp, plus **`BI_RLE8` / `BI_RLE4`** run-length and **`BI_BITFIELDS`** channel masks; CORE / **OS/2 2.x CORE2** / INFO / V2 / V3 / **V4** / **V5** headers (accepted DIB sizes 12/40/52/56/64/108/124); bottom-up **and** top-down. Verified against ImageMagick, and deliberately different in two places since 1.4.0 ([ADR 0011](docs/adr/0011-bmp-samples-mean-what-the-format-says.md)): a channel narrower than 8 bits rounds to the nearest level where ImageMagick bit-replicates (1 level, on 14 of the 96 five- and six-bit levels), and a 32-bpp `BI_RGB` image is opaque, its unused fourth byte not read as alpha. |
 | **GIF** | GIF87a/89a, LZW, global **and** local color tables, 4-pass row interlace, transparency from a Graphic Control Extension. **First frame only** — see [ADR 0005](docs/adr/0005-gif-first-frame-only.md). Verified against two independent decoders. |
 
 ```
 fn chitra_image_decode(src, len, err_out): i64
 fn chitra_image_decode_budget(src, len, max_bytes, err_out): i64
+fn chitra_image_decode_budget_via(a, src, len, max_bytes, err_out): i64     # 1.4.0
+fn chitra_jpeg_decode_cmyk(a, src, len, max_bytes, err_out): i64            # 1.4.0
 ```
 
 One entry point sniffs the signature — PNG magic, then JPEG SOI, then BMP
@@ -37,8 +39,21 @@ The budgeted variant (0.6.1) refuses **before beginning** any decode whose
 RGBA8 output would exceed `max_bytes` — a refusal allocates 16 bytes, the `ChitraErr` itself, for PNG, JPEG and GIF, and 128 for BMP. It bounds
 the output, not the peak, and the function's own comment says exactly what it
 does not cover, because a memory guarantee that is not exact is not a
-guarantee. It matters more than it sounds: the bump allocator never frees, so
-without it a caller decoding untrusted input has no ceiling at all.
+guarantee. Since 1.4.0 **the budget governs size**: under it, an image past the
+fixed 4096 × 4096 cap — an 8K screenshot, three 4K monitors side by side —
+decodes if its output fits the budget, while `chitra_image_decode` keeps the
+fixed caps.
+
+`chitra_image_decode_budget_via` (1.4.0) is the same decode with every
+allocation taken from a caller's stdlib `Allocator` (a free-list, a
+per-request arena): every working buffer goes back before it returns, and
+`chitra_image_free` returns the image and its pixels. Through 1.3.x every
+decode's memory was lost for the life of the process — the bump allocator
+never frees — which a long-running service cannot live with.
+`chitra_jpeg_decode_cmyk` returns a CMYK or YCCK JPEG's **C, M, Y, K
+samples** (YCCK converted exactly as libjpeg converts it), with the same
+allocator-and-budget shape; turning them into RGB is a colour-management
+decision chitra leaves to the caller ([ADR 0014](docs/adr/0014-cmyk-samples-not-colours.md)).
 
 The one place that uniformity costs something: an **animated** GIF returns its
 first frame, with no indication that more existed. If frame 1 is a background
@@ -50,9 +65,10 @@ and the shape a future multi-frame surface would take are in ADR 0005.
 chitra **rejects loud rather than half-decoding**. A decoder that mis-renders
 one cell of its matrix is worse than one that declines it cleanly, so every
 unsupported mode gets its own `CHITRA_ERR_*` code instead of a guess:
-progressive / arithmetic / 12-bit / hierarchical / CMYK JPEG; an unrecognised
-BMP DIB header size; and any illegal PNG depth × color-type pair. BMP's
-deferral list is now empty — everything it once postponed decodes.
+arithmetic / 12-bit / hierarchical / lossless JPEG; CMYK JPEG through the RGBA
+entries (it has its own); an unrecognised BMP DIB header size; and any illegal
+PNG depth × color-type pair. BMP's deferral list is empty — everything it once
+postponed decodes.
 
 That list used to include a **valid** file: a baseline JPEG whose scans do not
 each carry every frame component (what `cjpeg -scans` emits). It was deferred
@@ -67,9 +83,10 @@ Several refusals are permanent rather than deferred: **encoding** (chitra is
 decode-only, in both directions of that sentence); **`BI_JPEG` / `BI_PNG`
 inside a BMP**, which would have a decoder re-enter itself through
 attacker-controlled data; and — reclassified from "deferred" by the 0.6.1
-sweep — arithmetic-coded, hierarchical/lossless/differential, CMYK/YCCK,
-12-bit and DNL-deferred-height JPEG. That leaves **progressive JPEG** as the
-only genuine deferral in the tree.
+sweep — arithmetic-coded, hierarchical/lossless/differential, 12-bit and
+DNL-deferred-height JPEG. **Progressive JPEG**, the one genuine deferral left,
+decodes since 1.4.0, when a consumer (selah) demonstrated the need the roadmap
+asked for ([ADR 0013](docs/adr/0013-progressive-jpeg.md)).
 
 ## Hardening
 
@@ -118,20 +135,22 @@ deliberately — is in [`CHANGELOG.md`](CHANGELOG.md).
 ## Stability
 
 **The public API and ABI are frozen as of 1.0.0.** The
-[29 names](docs/development/public-surface.md) — ten decode entry points, four
-signature predicates, eight `ChitraImage` accessors, six error-API functions
-and `chitra_version` — plus the 56-byte `ChitraImage` and 16-byte `ChitraErr`
-layouts and the `ChitraErrCode` numeric values, cannot change without a major
-bump and an ADR. Since 1.2.0 the public prefix *is* the promise: the bundle's
-`chitra_*` functions are exactly those 29, everything internal is `_chitra_*`,
+[31 names](docs/development/public-surface.md) — twelve decode entry points
+(two added in 1.4.0, which is what made it a minor), four signature
+predicates, eight `ChitraImage` accessors, six error-API functions and
+`chitra_version` — plus the `ChitraImage` record (append-only: 64 bytes since
+1.4.0) and 16-byte `ChitraErr` layouts and the `ChitraErrCode` numeric values,
+cannot change without a major bump and an ADR. Since 1.2.0 the public prefix
+*is* the promise: the bundle's `chitra_*` functions are exactly those, everything internal is `_chitra_*`,
 and `scripts/check-surface.sh` fails the build if a non-frozen `chitra_*` name
 appears, a frozen one disappears, any top-level function or global lacks a
 chitra prefix, or a `ChitraErrCode` member lacks a name or a literal value pin.
 
 Four things are deliberately outside the promise: the internal names, the
 human-readable `chitra_err_name` strings (the *codes* are frozen — match on
-those), bit-exact output across releases, and memory behaviour — the bump
-allocator never frees and `chitra_image_free` is a documented no-op. The output contract is *correct*
+those), bit-exact output across releases, and memory behaviour — the global
+bump allocator never frees, and `chitra_image_free` is a no-op except for an
+image from a `_via` / CMYK decode. The output contract is *correct*
 RGBA8 held to external oracles, so a repair that moves bytes toward the oracle
 is a bug fix — the § 13.13 depth-16 rescaling change in 0.7.x changed every
 16-bit PNG's output and was one. Full edges in
@@ -166,8 +185,7 @@ is a bug fix — the § 13.13 depth-16 rescaling change in 0.7.x changed every
   the consumer already links a sankoch bundle of its own, which then wins
   (one sankoch bundle per program).
 
-All deps are pinned in `cyrius.cyml`; the toolchain pin is
-`cyrius = "6.7.9"`.
+All deps are pinned in `cyrius.cyml`, the toolchain pin with them.
 
 ## Quick Start
 
@@ -195,9 +213,9 @@ current surface, sizes and decode matrix, then:
 - [`docs/architecture/`](docs/architecture/) — the non-obvious constraints
   (why `lib/` must not be a symlink, why domain modules stay flat for
   `distlib`, why the bump allocator never frees, how the JPEG pipeline fits
-  together). Note the bump allocator is not a footnote: `chitra_image_free`
-  is a documented no-op, so decode cost is cumulative for the process — which
-  is why the amplification caps exist.
+  together). Note the bump allocator is not a footnote: on every entry point
+  but the `_via` / CMYK ones `chitra_image_free` is a no-op, so decode cost is
+  cumulative for the process — which is why the amplification caps exist.
 - [`docs/adr/`](docs/adr/) — the decisions and their alternatives (forking
   kii's decoder, the security model, mabda ABI compatibility, the JPEG decode
   model, GIF first-frame-only).

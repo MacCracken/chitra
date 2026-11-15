@@ -120,7 +120,18 @@ returns an owned `ChitraImage`:
 ```
 fn chitra_image_decode(src, len, err_out): i64
 fn chitra_image_decode_budget(src, len, max_bytes, err_out): i64
+fn chitra_image_decode_budget_via(a, src, len, max_bytes, err_out): i64   # 1.4.0
 ```
+
+**Long-running consumers** (a server, an MCP tool — anything that decodes an
+unbounded number of images in one process) should use
+`chitra_image_decode_budget_via` with a stdlib `Allocator` (`allocator_new`
+over a free-list, or an arena reset per request): every working buffer goes
+back to it before the call returns, and `chitra_image_free(img)` returns the
+image and its pixels — call it once, after the last use of the pixels. With
+`a = 0` it is exactly `chitra_image_decode_budget`. Under any budget, the
+budget governs size: an image past 4096 × 4096 decodes if its RGBA8 output
+fits `max_bytes`.
 
 If you already know the format, the format-specific decoders have the
 identical shape: `chitra_png_decode`, `chitra_jpeg_decode`,
@@ -163,14 +174,15 @@ directly:
   (`0x101` grayscale, `0x103` YCbCr, `0x113` RGB — 0.6.1); for BMP it is
   `0x200 | bpp` (`0x201`/`0x204`/`0x208` palette, `0x210` 16 bpp, `0x218`
   24 bpp, `0x220` 32 bpp); for
-  GIF it is `0x300 | min_code_size`
+  GIF it is `0x300 | min_code_size`; for `chitra_jpeg_decode_cmyk` it is
+  `0x104`, `0x144` or `0x164` (1.4.0 — see above)
 - `chitra_image_source_depth(img)` — **bits per channel in the source**
   (0.9.0). The output is always 8 bits per channel, so without this a
   depth-16 PNG and a depth-8 one are indistinguishable in the result even
   though § 13.13 rescaling discarded precision. It is the IHDR depth for
   PNG (1/2/4/8/16), `8` for baseline JPEG and for GIF palette entries, and
   for BMP the widest declared channel (`8` at 24/32 bpp, `5` or `6` for the
-  packed 16-bpp layouts) — the number the RGBA8 output was bit-replicated
+  packed 16-bpp layouts) — the number the RGBA8 output was widened (rounded, since 1.4.0)
   *up from*
 
 A minimal usage sketch (you supply `bytes`/`n` from however you read
@@ -208,12 +220,24 @@ failure. The detailed `ChitraErr` is not surfaced on this path — reach
 for `chitra_image_decode` / `chitra_png_decode` / `chitra_jpeg_decode` /
 `chitra_bmp_decode` / `chitra_gif_decode` when you need the error.
 
-`chitra_image_free(img)` exists for API symmetry but is a documented
-no-op: the stdlib `alloc` is a bump allocator with no per-block free —
-see [architecture note 003](../architecture/003-bump-allocator-no-free.md).
+`chitra_image_free(img)` frees an image that came from
+`chitra_image_decode_budget_via` or `chitra_jpeg_decode_cmyk` with a caller
+`Allocator`; for every other image it is the no-op it always was — the
+stdlib `alloc` is a bump allocator with no per-block free — see
+[architecture note 003](../architecture/003-bump-allocator-no-free.md).
+
+**CMYK and YCCK JPEGs** are refused by every RGBA entry
+(`CHITRA_ERR_JPEG_COMPONENTS`): converting them to RGB needs a colour
+decision chitra does not make. `chitra_jpeg_decode_cmyk(a, src, len,
+max_bytes, err_out)` returns their **C, M, Y, K samples** instead — YCCK
+converted as libjpeg converts it — and `chitra_image_source_color_type` says
+which: `0x104` (no Adobe marker), `0x144` (Adobe CMYK, whose values follow
+Adobe's inverted convention: 255 = no ink) or `0x164` (Adobe YCCK, converted).
+An uncalibrated preview of an Adobe file is `R = C·K/255` (and so on); the
+accurate conversion is the file's ICC profile, which chitra does not read.
 
 You can probe the linked version at runtime with `chitra_version()`,
-which returns `10002` for 1.0.2 (`major*10000 + minor*100 + patch`).
+which returns `10400` for 1.4.0 (`major*10000 + minor*100 + patch`).
 `make version-check` gates that literal against `VERSION`, so it cannot
 drift silently again.
 
@@ -261,7 +285,7 @@ the pixels. A *malformed* IEND (e.g. non-zero length) is a hard error.
 | `CHITRA_ERR_JPEG_DHT` | 16 | Malformed DHT / Huffman-table build failure |
 | `CHITRA_ERR_JPEG_SOS` | 17 | Invalid scan header |
 | `CHITRA_ERR_JPEG_ENTROPY` | 18 | Entropy-coded data violates a decode bound |
-| `CHITRA_ERR_JPEG_PROGRESSIVE` | 19 | Progressive JPEG (SOF2) — not decoded, rejected |
+| `CHITRA_ERR_JPEG_PROGRESSIVE` | 19 | Unreachable since 1.4.0, which decodes progressive JPEG (SOF2); kept because the enum's values are frozen. A consumer arm for it can stay, harmlessly |
 | `CHITRA_ERR_JPEG_ARITHMETIC` | 20 | Arithmetic-coded JPEG — not decoded, rejected |
 | `CHITRA_ERR_JPEG_PRECISION` | 21 | Sample precision other than 8-bit |
 | `CHITRA_ERR_JPEG_MODE` | 22 | Hierarchical / lossless / differential mode, extended-sequential SOF1, and the JPG / DHP / EXP / JPGn markers (`0xC8`, `0xDE`, `0xDF`, `0xF0`–`0xFD`). Since 1.1.1 a SOF1 file reports this even when its 16-bit DQT precedes the SOF, as cjpeg writes it |
@@ -316,19 +340,20 @@ Table 11.1 (e.g. color type 3 at bit depth 16).
 
 **Baseline JPEG** is feature-complete as of 0.8.0:
 
-- JFIF baseline (SOF0) sequential Huffman, 8-bit precision
+- JFIF baseline (SOF0) and **progressive** (SOF2, 1.4.0) Huffman, 8-bit precision
 - Grayscale (1 component), YCbCr (3 components) and **RGB** (3 components with
   an Adobe APP14 `transform=0`, 0.6.1) → RGBA8
 - The complete **T.81 § A.2 scan model** (0.8.0): interleaved, non-interleaved,
   partially interleaved, single- and multi-scan
-- Chroma subsampling 4:4:4 / 4:2:2 / 4:2:0 and general per-component
-  Hi/Vi (box upsampling)
+- Chroma subsampling 4:4:4 / 4:2:2 / 4:2:0 / 4:4:0 and general per-component
+  Hi/Vi, upsampled with libjpeg-turbo's interpolated filters (1.4.0)
 - DRI / RST0–7 restart markers
 - Huffman entropy decode, the integer `jpeg_idct_islow` IDCT, and
-  full-range BT.601 YCbCr→RGB — verified byte-identical to ImageMagick on
-  a real baseline JPEG
-- Non-baseline modes (progressive, arithmetic, 12-bit, hierarchical /
-  lossless, CMYK) are rejected with distinct error codes
+  full-range BT.601 YCbCr→RGB — byte-identical to `djpeg` (and ImageMagick)
+  on every file of a 273-file baseline + progressive corpus
+- CMYK / YCCK as samples, through `chitra_jpeg_decode_cmyk` (1.4.0)
+- Arithmetic, 12-bit, hierarchical / lossless and SOF1 frames are rejected
+  with distinct error codes
 
 ### Not yet — and never
 
@@ -337,9 +362,10 @@ Table 11.1 (e.g. color type 3 at bit depth 16).
   whose first frame is a background plate decodes to that plate. A future
   multi-frame surface would be a *separate* entry point returning a frame list,
   leaving `chitra_gif_decode` untouched — additive, not a reversal.
-- **Progressive JPEG** — deferred, not supported. Every non-baseline mode
+- **Arithmetic, 12-bit, hierarchical / lossless and SOF1 JPEG** — every one
   rejects with a distinct `CHITRA_ERR_JPEG_*` code rather than half-decoding
-  ([ADR 0004](../adr/0004-jpeg-decode-model.md)).
+  ([ADR 0004](../adr/0004-jpeg-decode-model.md)). Progressive decodes since
+  1.4.0 ([ADR 0013](../adr/0013-progressive-jpeg.md)).
 - **`BI_JPEG` / `BI_PNG` inside a BMP** — refused permanently: honouring them
   would have a decoder re-enter itself through attacker-controlled data.
 - **Encoding** — chitra is a decoder. Writing PNG (or any format) is

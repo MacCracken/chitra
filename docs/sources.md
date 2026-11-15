@@ -129,14 +129,30 @@ within each, by the module/function that consumes them.
   <https://github.com/libjpeg-turbo/libjpeg-turbo/blob/main/jdcolor.c>
   *(Implementation guide.)* Used by: `src/jpeg.cyr`.
 - **ITU-T T.81 § A.2.3 + JFIF chroma-positioning convention** — chroma
-  subsampling layout; chitra uses box/nearest replication upsampling (the
-  conformant-simple choice; interpolation is out of scope). Used by:
-  `src/jpeg.cyr` — chroma upsample pass. Two consequences worth carrying: a
-  4:2:0 decode differs from **ImageMagick**, which upsamples with a fancy
-  (triangle) filter — 937 of 1536 bytes at up to 40/byte on a 24x16 fixture —
-  so `djpeg -nosmooth` is the oracle for subsampled JPEG; and the box filter is
-  what makes the 0.6.0 exact-fit plane property safe, since it never reads
-  `x+1`.
+  subsampling layout; JFIF sites a subsampled chroma sample at the CENTRE of
+  the block it covers. Since 1.4.0 chitra upsamples with **libjpeg-turbo's
+  `jdsample.c` fancy filters** (`h2v1` / `h1v2` / `h2v2_fancy_upsample`, box
+  for every other ratio, edge samples replicated), which reconstruct that
+  siting; through 1.3.x it used box, which puts each sample at the block's
+  corner and was measurably further from the encoded pixels. Used by:
+  `src/jpeg.cyr` `_chitra_jpeg_upsample_row`. Neighbour reads are clamped to
+  the component's real samples, which keeps the exact-fit plane property.
+  <https://github.com/libjpeg-turbo/libjpeg-turbo/blob/main/src/jdsample.c>
+  [ADR 0012](adr/0012-interpolated-chroma-upsampling.md).
+- **ITU-T T.81 Annex G (progressive DCT-based mode)** — § G.1.1.1 the
+  spectral-selection / successive-approximation scan parameters and their
+  restrictions, § G.1.2 the four procedures (DC first and refinement, AC first
+  with EOBRUN, AC refinement with correction bits). Used by:
+  `src/jpeg_prog.cyr`, `_chitra_jpeg_parse_sos`. Implementation reference:
+  libjpeg-turbo `jdphuff.c`; quantization tables latched per component at its
+  first scan as `jdinput.c` latches them.
+  [ADR 0013](adr/0013-progressive-jpeg.md).
+- **Adobe "JPEG Technical Note #5116"** — the APP14 segment and its
+  `transform` flag (0 = RGB / CMYK, 1 = YCbCr, 2 = YCCK) and Adobe's inverted
+  CMYK convention. Used by: `src/jpeg_markers.cyr` `_chitra_jpeg_parse_app14`,
+  the 4-component branch of `_chitra_jpeg_build_image`; the YCCK → CMYK
+  arithmetic is libjpeg `jdcolor.c` `ycck_cmyk_convert`.
+  [ADR 0014](adr/0014-cmyk-samples-not-colours.md).
 
 ### JPEG decoder CVE corpus (security hardening)
 
@@ -218,11 +234,14 @@ whole crate. The full guard-to-source mapping is in
   <https://learn.microsoft.com/en-us/windows/win32/gdi/bitmap-storage>
   Used by: `src/bmp.cyr` throughout. Three notes on what the format does
   **not** pin down, each of which drove a decision:
-  - The fourth byte of a 32-bpp `BI_RGB` pixel is **undefined** — alpha is
-    only official under `BI_BITFIELDS` / the V4 masks. Where a mask is
-    declared, 0.5.2 reads it; where none is (plain `BI_RGB`), chitra treats an
-    all-zero alpha plane as padding and otherwise honours it. ImageMagick
-    agrees, which is what settled the heuristic.
+  - The fourth byte of a 32-bpp `BI_RGB` pixel is **not used** (*"the high
+    byte in each DWORD is not used"*) — alpha is only official under
+    `BI_BITFIELDS` / the V4 masks. Where a mask is declared, 0.5.2 reads it;
+    where none is (plain `BI_RGB`), the image is **opaque since 1.4.0**.
+    Through 1.3.x chitra read the byte as alpha whenever any of it was
+    non-zero, ImageMagick's heuristic, which invented transparency in opaque
+    files with noise there
+    ([ADR 0011](adr/0011-bmp-samples-mean-what-the-format-says.md)).
     Two corollaries 0.5.3 had to repair, both of which read the *"valid only
     if the compression member is set to `BI_BITFIELDS`"* clause too loosely:
     the V4/V5 mask fields must be **ignored** under `BI_RGB` — real writers
@@ -234,10 +253,12 @@ whole crate. The full guard-to-source mapping is in
     conventional — and declared outright under `BI_BITFIELDS`. Supported since
     0.5.2; the 0.4.0 deferral was on the grounds that the mask machinery did
     not yet exist to read the declaration.
-  - Widening a sub-8-bit channel to 8 bits is **bit replication**, not
-    `v * 255 / max`. Both arithmetic forms disagree with every reference
-    decoder (a 6-bit 48 is 195, not 194), and the error is a whole-image color
-    shift rather than an edge case. Used by: `src/bmp.cyr` `_bmp_scale_to_8`.
+  - Widening a sub-8-bit channel to 8 bits **rounds to the nearest level**,
+    `round(v · 255 / max)` (1.4.0) — PNG § 13.13's "most accurate" rescale.
+    Through 1.3.x it was bit replication, ImageMagick's approximation, which is
+    up to 0.714 of a level off (a 6-bit 48 is 194.29: rounding gives 194,
+    replication 195). Used by: `src/bmp.cyr` `_chitra_bmp_scale_to_8`.
+    [ADR 0011](adr/0011-bmp-samples-mean-what-the-format-says.md).
   - `BI_JPEG` / `BI_PNG` embed a whole other format inside the DIB. Refused
     outright: honouring them re-enters the decoder.
 - **CompuServe GIF89a specification** —

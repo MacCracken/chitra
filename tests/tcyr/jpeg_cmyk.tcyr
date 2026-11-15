@@ -1,0 +1,600 @@
+# tests/tcyr/jpeg_cmyk.tcyr — chitra_jpeg_decode_cmyk (1.4.0, ADR 0014): a
+# 4-component JPEG's C, M, Y, K samples, YCCK converted, with no colour guess.
+# Standalone CPU suite; fixtures embedded as hex.
+#
+# THE ORACLE is libjpeg itself: a 20-line C program asks it for
+# out_color_space = JCS_CMYK and writes the scanlines raw. Every fixture below
+# matches it byte for byte, and out of tree so do 124 more — plain Adobe CMYK,
+# CMYK with no Adobe marker and YCCK, each at 1x1 / 2x2 / 2x1 / 1x2 for the
+# first (and, for YCCK, last) component, baseline and progressive, from 1x1
+# to 64x40 pixels, plus ImageMagick's own YCCK writer. (djpeg cannot be the
+# oracle here: its PPM writer turns CMYK into RGB.)
+#
+# ⚠ Checked to fail against 1.3.1: the whole suite (chitra_jpeg_decode_cmyk
+# did not exist, and every one of these files was CHITRA_ERR_JPEG_COMPONENTS).
+#
+# REGENERATION. The fixtures are written by a libjpeg encoder (jenc: in
+# JCS_CMYK, jpeg_set_colorspace to JCS_CMYK or JCS_YCCK, write_Adobe_marker
+# off for the no-Adobe file, quality 85) from C = (37x + 11y) mod 256,
+# M = (5x^2 + 29y) mod 256, Y = (255 - 23x + 7y^2) mod 256,
+# K = (13x xor 17y) mod 256.
+
+include "src/lib.cyr"
+include "lib/assert.cyr"
+
+var _CK_BIG = 1073741824;
+
+fn _ck_hexval(c): i64 {
+    if (c >= 48 && c <= 57) { return c - 48; }
+    if (c >= 97 && c <= 102) { return c - 87; }
+    return c - 55;
+}
+
+fn _ck_hex(b, off, s): i64 {
+    var i = 0;
+    var n = strlen(s);
+    while (i + 1 < n) {
+        store8(b + off, _ck_hexval(load8(s + i)) * 16 + _ck_hexval(load8(s + i + 1)));
+        off = off + 1;
+        i = i + 2;
+    }
+    return off;
+}
+
+fn _ck_code(err): i64 {
+    if (err == 0) { return 0 - 1; }
+    return chitra_err_code(err);
+}
+
+fn _ck_check(jpg, n, want, ctype, name): i64 {
+    var err = 0;
+    var img = chitra_jpeg_decode_cmyk(0, jpg, n, _CK_BIG, &err);
+    assert(img != 0, name);
+    assert_eq(err, 0, name);
+    if (img == 0) { return 0; }
+    assert_eq(chitra_image_width(img), 17, name);
+    assert_eq(chitra_image_height(img), 11, name);
+    assert_eq(chitra_image_channels(img), 4, name);
+    assert_eq(chitra_image_seen_iend(img), 1, name);
+    assert_eq(chitra_image_source_color_type(img), ctype, name);
+    var px = chitra_image_pixels(img);
+    var bad = 0;
+    var i = 0;
+    while (i < 748) {
+        if (load8(px + i) != load8(want + i)) { bad = bad + 1; }
+        i = i + 1;
+    }
+    assert_eq(bad, 0, name);
+    return 0;
+}
+
+# Offset of the Adobe APP14 transform byte, or -1.
+fn _ck_adobe_transform_at(b, lo): i64 {
+    var i = 2;
+    while (i + 15 < lo) {
+        if (load8(b + i) == 0xFF) {
+            if (load8(b + i + 1) == 0xEE) { return i + 15; }
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+# jenc 17 11 cmyk: Adobe APP14 transform 0, 1x1, baseline. source_color_type 0x144.
+fn _ck_fx_cmyk_17x11(len_out): i64 {
+    var b = alloc(1047);
+    var o = 0;
+    o = _ck_hex(b, o, "ffd8ffee000e41646f626500640000000000ffdb0043000503040404030504040405050506070c08");
+    o = _ck_hex(b, o, "070707070f0b0b09");
+    o = _ck_hex(b, o, "0c110f1212110f111113161c1713141a1511111821181a1d1d1f1f1f13172224221e241c1e1f1eff");
+    o = _ck_hex(b, o, "c0001408000b0011");
+    o = _ck_hex(b, o, "044311004d11005911004b1100ffc4001f0000010501010101010100000000000000000102030405");
+    o = _ck_hex(b, o, "060708090a0bffc4");
+    o = _ck_hex(b, o, "00b5100002010303020403050504040000017d010203000411051221314106135161072271143281");
+    o = _ck_hex(b, o, "91a1082342b1c115");
+    o = _ck_hex(b, o, "52d1f02433627282090a161718191a25262728292a3435363738393a434445464748494a53545556");
+    o = _ck_hex(b, o, "5758595a63646566");
+    o = _ck_hex(b, o, "6768696a737475767778797a838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3");
+    o = _ck_hex(b, o, "b4b5b6b7b8b9bac2");
+    o = _ck_hex(b, o, "c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3e4e5e6e7e8e9eaf1f2f3f4f5f6f7f8f9faffda00");
+    o = _ck_hex(b, o, "0e0443004d005900");
+    o = _ck_hex(b, o, "4b00003f00ccf07dadaf853f67ed7aeae218649750b13a5dbc324e22695ee479476641dcc88cf26d");
+    o = _ck_hex(b, o, "032446dd06488b4d");
+    o = _ck_hex(b, o, "f03ffc2b8f0d8fecf4f275fd6e6fecfd37636d922dc3f7b3ae1d5c79699c3ae76c8f16460d6ad96a");
+    o = _ck_hex(b, o, "5acddf876eb41f12");
+    o = _ck_hex(b, o, "c52f8d1b4a8b61d5f42bd86f2e7078892e137805b0b27ef4b82db46559b739f185d2bfe10d963b9f");
+    o = _ck_hex(b, o, "b3fdb77af97f62dd");
+    o = _ck_hex(b, o, "e5edcffcb5dfcff771b703ae723a99bc4f67fd8ff0334ed0a2fb179dafea56f6f24329fde9822fdf");
+    o = _ck_hex(b, o, "3491ae41f9648e15");
+    o = _ck_hex(b, o, "27040126382c0d4f05e5aa4d23278861b1d2ed8fcd1122ee37b289d2d84903143b9648575297cb8b");
+    o = _ck_hex(b, o, "240776c1215eb17c");
+    o = _ck_hex(b, o, "1966de09f116a575e16d4f4ad6ac758956cae747bd98d85cdd4cb9f24c2264126e0d290308cadb99");
+    o = _ck_hex(b, o, "71b802bf4cfc13b0");
+    o = _ck_hex(b, o, "fed2f857a678cbccd9b9a79366ccf9fe5ceebe5678dbbb6637638f4ec5bff086ff00d32fd2b93ff8");
+    o = _ck_hex(b, o, "67bffa71ff00c76b");
+    o = _ck_hex(b, o, "d1fecda57fd091e3effc17dbff00f1faeb7fe12cff00a957ff002a9ffd7a8be27dd4d0e87f0eb448");
+    o = _ck_hex(b, o, "d956c2eee6eaea78");
+    o = _ck_hex(b, o, "b60f9e5856158db38c8c2cf28c0383bb9ce0622f84faceaf736baef8a6ff0054bdd475ad2f45ba96");
+    o = _ck_hex(b, o, "caf2fe76ba921314");
+    o = _ck_hex(b, o, "5249181e696ca87cb6d3919278e4d790fc68b997c3f63796760229a2795a52d7f12df499200c079c");
+    o = _ck_hex(b, o, "3b05e07ca0e33938");
+    o = _ck_hex(b, o, "c9396fc36b680f8867b2f2c7d9cdaf9bb01fe23205ce7af41577e21dd4d37c54f07689232b585a68");
+    o = _ck_hex(b, o, "8b75045b07c92cd3");
+    o = _ck_hex(b, o, "c8b2367193958221827036f18c9cfa37812dedf50d3b54b4bcb7865874c482d6cd7cb03cb88e8d73");
+    o = _ck_hex(b, o, "315c8e4fef2691b2");
+    o = _ck_hex(b, o, "727e6c74000ecee6d63b4f863e0dd7a292e1aedbc3f67298e5b8796db2f6ab902ddc9842fcc70bb3");
+    o = _ck_hex(b, o, "0bc6d03031f2ff00");
+    o = _ck_hex(b, o, "ed024bfed157574d8335c5d69f14ad8fbca6d23c8c74ec2bd93ec96dff003c56be73ff0084f3c7bf");
+    o = _ck_hex(b, o, "f43e78b7ff000797");
+    o = _ck_hex(b, o, "5ffc72bcb7fe126d4bfe7868ff00f827b4ff00e375d4ff0062e9bff3c1ff00eff3ff008d7fffd9");
+    store64(len_out, 1047);
+    return b;
+}
+
+fn _ck_ref_cmyk_17x11(): i64 {
+    var b = alloc(748);
+    var o = 0;
+    o = _ck_hex(b, o, "0000fe022909e9094b15d51b6e2db42e9951a630b57d8e44e0b4744e03f362582040476b579c2f6d");
+    o = _ck_hex(b, o, "70f21e868d5e0093");
+    o = _ck_hex(b, o, "cbcef192db52d9aa01d5b5b92b5fa3c450018ed00e1b000f2f1dfa214e2fce067a4ac635906db125");
+    o = _ck_hex(b, o, "d199884ceed28065");
+    o = _ck_hex(b, o, "0d12624f3b5b567657aa2d6371152094b0790ba0b9f2ea93f96ad5b717e9cca8308eb4ce5b1d97c1");
+    o = _ck_hex(b, o, "113d1d1f3a49052d");
+    o = _ck_hex(b, o, "6046f237916dd70aab85b618c9bbae66f8f39a650f2d767a3d7a604c62d64d568e2e36a4a99319a8");
+    o = _ck_hex(b, o, "d0070fb6f28fed90");
+    o = _ck_hex(b, o, "1708dd93479db9e8663baaf229593f313b5326437066092c8c8cf811b6a3e802ddd4cb71f70bb085");
+    o = _ck_hex(b, o, "3548986745958a60");
+    o = _ck_hex(b, o, "7af174458f4652abbeb247c1d53026b0079b129b3232f57a41b7ebed7157cfe3266f6c48587d5941");
+    o = _ck_hex(b, o, "79924c5b99a22769");
+    o = _ck_hex(b, o, "bcc51971e6eeef0a0328ed012a6bd12250afb125760b9d31956c8acbc4d06dc7f1405ed40ac641ed");
+    o = _ck_hex(b, o, "2b4d27fd5dd61b89");
+    o = _ck_hex(b, o, "7d75fd943892aa59619b9857799e7e4fa6b96070d7e5555ced044715144324203c85090f65d9ff3a");
+    o = _ck_hex(b, o, "8c23d720a883c4d2");
+    o = _ck_hex(b, o, "cdecb6e1ef6597cd14dc8af93c616ae465fa548e87903f853badff6a6ab4e3648ec1d081b0d5b146");
+    o = _ck_hex(b, o, "cfffa14ffe2e7d2f");
+    o = _ck_hex(b, o, "296376203fa55b3962e7381088453514b5a31be3dc11f5e9fe76e9f128fcd2d14b7ebdcf6a179fa8");
+    o = _ck_hex(b, o, "92af8ab64fcd5a77");
+    o = _ck_hex(b, o, "72cb377b99df276cbdfc184ce41af9440043e5372d82cc3752bdb4317a13a51b995e7c09c3ba77f1");
+    o = _ck_hex(b, o, "e12d5bf5079a3ff2");
+    o = _ck_hex(b, o, "311c28de4ea212be782effb29dcbe6a757e8c18d7de89c889eff9985cb0b7ab5ee375bb8116d54ca");
+    o = _ck_hex(b, o, "409437cc58dc1acb");
+    o = _ck_hex(b, o, "7e2c06eab07feff4c7dddd11f443bb0716b5ac1035348e2b5eb7843b82515f47a8e84f586900338f");
+    o = _ck_hex(b, o, "8a0c2d92b41a0097");
+    o = _ck_hex(b, o, "c53feab4f752e0b8237ebed831b9a6d16bfd9eca914282eaa19360f3d9fa5717fd5a350b10dd2114");
+    o = _ck_hex(b, o, "4b59121a6bd2ee38");
+    o = _ck_hex(b, o, "956ce661b303c74a6b29beaf8f3598a9b6278fa3e1477b95037d6a9c289e42e24dce36e7711c17ec");
+    o = _ck_hex(b, o, "976402c6bdc0f0e1");
+    o = _ck_hex(b, o, "df12c926098bbd282cedb1334d6b900d70fd6c2396845d5ebe244b79");
+    return b;
+}
+
+fn test_ck_cmyk_17x11(): i64 {
+    var lo = 0;
+    _ck_check(_ck_fx_cmyk_17x11(&lo), lo, _ck_ref_cmyk_17x11(), 324, "cmyk_17x11: byte-identical to libjpeg JCS_CMYK");
+    return 0;
+}
+
+# jenc 17 11 ycck 2 2: Adobe transform 2, Y and K at 2x2, baseline. source_color_type 0x164.
+fn _ck_fx_ycck_420_17x11(len_out): i64 {
+    var b = alloc(1009);
+    var o = 0;
+    o = _ck_hex(b, o, "ffd8ffee000e41646f626500640000000002ffdb0043000503040404030504040405050506070c08");
+    o = _ck_hex(b, o, "070707070f0b0b09");
+    o = _ck_hex(b, o, "0c110f1212110f111113161c1713141a1511111821181a1d1d1f1f1f13172224221e241c1e1f1eff");
+    o = _ck_hex(b, o, "db00430105050507");
+    o = _ck_hex(b, o, "06070e08080e1e1411141e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e");
+    o = _ck_hex(b, o, "1e1e1e1e1e1e1e1e");
+    o = _ck_hex(b, o, "1e1e1e1e1e1e1e1e1e1e1e1effc0001408000b001104012200021101031101042200ffc4001f0000");
+    o = _ck_hex(b, o, "0105010101010101");
+    o = _ck_hex(b, o, "00000000000000000102030405060708090a0bffc400b5100002010303020403050504040000017d");
+    o = _ck_hex(b, o, "0102030004110512");
+    o = _ck_hex(b, o, "2131410613516107227114328191a1082342b1c11552d1f02433627282090a161718191a25262728");
+    o = _ck_hex(b, o, "292a343536373839");
+    o = _ck_hex(b, o, "3a434445464748494a535455565758595a636465666768696a737475767778797a83848586878889");
+    o = _ck_hex(b, o, "8a92939495969798");
+    o = _ck_hex(b, o, "999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2");
+    o = _ck_hex(b, o, "e3e4e5e6e7e8e9ea");
+    o = _ck_hex(b, o, "f1f2f3f4f5f6f7f8f9faffc4001f0100030101010101010101010000000000000102030405060708");
+    o = _ck_hex(b, o, "090a0bffc400b511");
+    o = _ck_hex(b, o, "00020102040403040705040400010277000102031104052131061241510761711322328108144291");
+    o = _ck_hex(b, o, "a1b1c109233352f0");
+    o = _ck_hex(b, o, "156272d10a162434e125f11718191a262728292a35363738393a434445464748494a535455565758");
+    o = _ck_hex(b, o, "595a636465666768");
+    o = _ck_hex(b, o, "696a737475767778797a82838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4");
+    o = _ck_hex(b, o, "b5b6b7b8b9bac2c3");
+    o = _ck_hex(b, o, "c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae2e3e4e5e6e7e8e9eaf2f3f4f5f6f7f8f9faffda000e0401");
+    o = _ck_hex(b, o, "0002110311040000");
+    o = _ck_hex(b, o, "3f00975af117fc26bf102d8bc8534bd34fdbef4491931911fcc919ca95c3b85054e32bbf0780298a");
+    o = _ck_hex(b, o, "b35feb666b8d26ea");
+    o = _ck_hex(b, o, "5bb820691274531ecb9914b98e601b00ab35b2ee723251474dcb5d0ea1a669ff00da0f610d9c16b6");
+    o = _ck_hex(b, o, "b71796d0cb0da20b");
+    o = _ck_hex(b, o, "7474924c3e4478e48551bbaf039ae32f9ded61b9bb824749efafa66b970c72e52fa0453ed855038c");
+    o = _ck_hex(b, o, "67bd63878d3fab42");
+    o = _ck_hex(b, o, "3463cb4eb7baa3d2f6e6bbb34d6b7f82d6d2ddd6b8197d6a74aad25caa529cd6af4e4ba8ed6d79a2");
+    o = _ck_hex(b, o, "dbf2b2bbe9e30ba5");
+    o = _ck_hex(b, o, "7fc21b2c773f67fb6ef5f2fec5bbcbdb9ff96bbf9feee36e075ce4753f4cfc13b0fed2f857a678cb");
+    o = _ck_hex(b, o, "ccd9b9a79366ccf9");
+    o = _ck_hex(b, o, "fe5ceebe5678dbbb6637638f4ec7abf86d6d01f10cf65e58fb39b5f37603fc4640b9cf5e82be5ffd");
+    o = _ck_hex(b, o, "a0497fda2aeae9b0");
+    o = _ck_hex(b, o, "66b8bad3e295b1f794da47918e9d85749ff0b79bfe82107fdf67fc28adaff846fc39ff0042f691ff");
+    o = _ck_hex(b, o, "008031ff00f13457");
+    o = _ck_hex(b, o, "07fabb84fe5fc59f0bfeb665bff3e25f7a3ea2ff0084b3fea55ffcaa7ff5e8af06fec5d37fe783ff");
+    o = _ck_hex(b, o, "00dfe7ff001a2bff");
+    o = _ck_hex(b, o, "d9");
+    store64(len_out, 1009);
+    return b;
+}
+
+fn _ck_ref_ycck_420_17x11(): i64 {
+    var b = alloc(748);
+    var o = 0;
+    o = _ck_hex(b, o, "1a08ac02280cae09461bb31b642fa52e955e95309f858e44a4c5b24e78b685581655066b628b2f6d");
+    o = _ck_hex(b, o, "babf6586785d2e93");
+    o = _ck_hex(b, o, "ecbbdb928282b4aa3fb5b9b90a7f91c4221d7bd00401720f3c2fa5215231b306885dc8359a6ea325");
+    o = _ck_hex(b, o, "ab93a34cc5d5d465");
+    o = _ck_hex(b, o, "00260b4f3e6f2d7670923e63484600949d7b4da0ffc7dd93a896c6b76cc2e3a82680b2ce382d93c1");
+    o = _ck_hex(b, o, "1d3a421f1e2d4e2d");
+    o = _ck_hex(b, o, "7366b6377860b60aa28cbd18d1bcdd66f8e2ff652e26357a596f494c95a868565b4c07a4b18352a8");
+    o = _ck_hex(b, o, "7a302fb6d4a1cc90");
+    o = _ck_hex(b, o, "021e72936387f7e85641b6f221543531395d5343545b782c9a8fb911bfadc502d7c4da715e497485");
+    o = _ck_hex(b, o, "564c6e6776827e60");
+    o = _ck_hex(b, o, "bbc6a84579663babc39973c1844c3bb07d5b6b9b3b4b877a7f97eded6c5dbae32c6f68484e827641");
+    o = _ck_hex(b, o, "7288715b9c967c69");
+    o = _ck_hex(b, o, "c6a88e71fff7ec0a1e314001466987227e95b7252e344a3183746fcbd9c8b4c786896ed4647f5ced");
+    o = _ck_hex(b, o, "1e5629fd78a89089");
+    o = _ck_hex(b, o, "7d87a094439485595295765780a86a4fa9af7170e2bf9f5c68514915174248203872880faac3ec3a");
+    o = _ck_hex(b, o, "58537b20a58998d2");
+    o = _ck_hex(b, o, "ecdbd4e1729577cd74ad80f942743fe4a0c69f8e768a89855db7836a76c6876493cf7981bfd59546");
+    o = _ck_hex(b, o, "ffe2e74f7d66832f");
+    o = _ck_hex(b, o, "29596720528e9839a0b1c51060486014c78c9ee37e5758e9a1c8adf18dc2b2d16a7090cf47426ba8");
+    o = _ck_hex(b, o, "96a8b4b668b48377");
+    o = _ck_hex(b, o, "7ab6807babca876cd5d1ac4c8259794454426c374380793773b6a4313c3b431b96677909e69eaaf1");
+    o = _ck_hex(b, o, "7f5652f54d785af2");
+    o = _ck_hex(b, o, "003327de7272a8be5f4c8cb2babfd3a79ec1ba8dc6cdc688f6c4c3858e4357b599598db84c3e58ca");
+    o = _ck_hex(b, o, "45935fcc71bb7ecb");
+    o = _ck_hex(b, o, "5b3e42eabe738af4ffcdc711957b6207679a7110165b3f2b839dac3b605b7b47d0bacf583229588f");
+    o = _ck_hex(b, o, "3b16429280214b97");
+    o = _ck_hex(b, o, "b95881b4a77da5b8606d73d86cb472d1a2d995ca76504feacb7f9df3f9bfd5179d91910b609c7a14");
+    o = _ck_hex(b, o, "0c5d341aa6d7c138");
+    o = _ck_hex(b, o, "82868561723d514a591e92af8c42a3a9a33e7aa3ac678495445c5e9c518c76e27ea578e7313c12ec");
+    o = _ck_hex(b, o, "7f625cc6daacd0e1");
+    o = _ck_hex(b, o, "865bb4264f4b97288ad1cb332a8b580d91d79b23848c655e903a4579");
+    return b;
+}
+
+fn test_ck_ycck_420_17x11(): i64 {
+    var lo = 0;
+    _ck_check(_ck_fx_ycck_420_17x11(&lo), lo, _ck_ref_ycck_420_17x11(), 356,
+      "ycck_420_17x11: byte-identical to libjpeg JCS_CMYK");
+    return 0;
+}
+
+# jenc 17 11 noadobe 1 2 prog: no APP14, Y at 1x2, progressive. source_color_type 0x104.
+fn _ck_fx_noadobe_prog_17x11(len_out): i64 {
+    var b = alloc(1186);
+    var o = 0;
+    o = _ck_hex(b, o, "ffd8ffdb0043000503040404030504040405050506070c08070707070f0b0b090c110f1212110f11");
+    o = _ck_hex(b, o, "1113161c1713141a");
+    o = _ck_hex(b, o, "1511111821181a1d1d1f1f1f13172224221e241c1e1f1effc2001408000b0011044312004d110059");
+    o = _ck_hex(b, o, "11004b1100ffc400");
+    o = _ck_hex(b, o, "1a000001050100000000000000000000000002000304050601ffda000e0443004d0059004b000000");
+    o = _ck_hex(b, o, "018aa10819d9bfc6");
+    o = _ck_hex(b, o, "f6d910b5ffc4001d100002020105000000000000000000000001020405000306121314ffda000801");
+    o = _ck_hex(b, o, "430001050286ab17");
+    o = _ck_hex(b, o, "6fc94e9a3f1e59b11a160c4daf15cfffc4001a100002020300000000000000000000000002030004");
+    o = _ck_hex(b, o, "010513ffda000801");
+    o = _ck_hex(b, o, "4d00010502a4caa6aae24dc77d44ffc4001810010003010000000000000000000000000300041415");
+    o = _ck_hex(b, o, "ffda000801590001");
+    o = _ck_hex(b, o, "0502b7632091672e984fffc4001a100002020300000000000000000000000002050304000115ffda");
+    o = _ck_hex(b, o, "0008014b00010502");
+    o = _ck_hex(b, o, "ac8b4721301593746c67ffc400241000010301070500000000000000000000010203110012213132");
+    o = _ck_hex(b, o, "6181b104051391e1");
+    o = _ck_hex(b, o, "ffda0008014300063f027d4a009711e2482626d5df76a6d81625f712920e302f91b81eeb0aedcc8c");
+    o = _ck_hex(b, o, "8a529446a223935d");
+    o = _ck_hex(b, o, "1b272259b406a499e05615ffc4002010000201040105000000000000000000000102030011123121");
+    o = _ck_hex(b, o, "1434418191ffda00");
+    o = _ck_hex(b, o, "08014d00063f027e9a13046aa5a46db103c0a72a4029b1c817c72b71b16007b6aec64fa2bfffc400");
+    o = _ck_hex(b, o, "2110000201030305");
+    o = _ck_hex(b, o, "0000000000000000000001020300112104125123323381a1ffda0008015900063f0268e63248a3b5");
+    o = _ck_hex(b, o, "6fbadece6a3d645d");
+    o = _ck_hex(b, o, "159d03b08f823838af0b7cafffc40021100000050305010000000000000000000000020311120113");
+    o = _ck_hex(b, o, "3104212332a1d2ff");
+    o = _ck_hex(b, o, "da0008014b00063f028a2bda33660e29a03217d42d69cf28bbef81d4be7c8fffc4001e1001000202");
+    o = _ck_hex(b, o, "0105000000000000");
+    o = _ck_hex(b, o, "0000000001009111613110214151e1ffda0008014300013f21eeed894bc1ed05c369721c4a1a0fd7");
+    o = _ck_hex(b, o, "49f20c6ee44aaba3");
+    o = _ck_hex(b, o, "e427c6e065554d59ffc4001c1001000201050000000000000000000000011121310010417191ffda");
+    o = _ck_hex(b, o, "0008014d00013f21");
+    o = _ck_hex(b, o, "84d9ba0a570c5199f350d70920a66ca78d7bb60bffc4001d10010002010501000000000000000000");
+    o = _ck_hex(b, o, "0001112100314171");
+    o = _ck_hex(b, o, "91d1f1ffda0008015900013f216aa41841c1d3432842706e6033a496f69cf93e73ffc4001a100003");
+    o = _ck_hex(b, o, "0100030000000000");
+    o = _ck_hex(b, o, "0000000000000111310041a1f1ffda0008014b00013f21478278486b92baca282150564c6a96b7bd");
+    o = _ck_hex(b, o, "afffda000e044300");
+    o = _ck_hex(b, o, "4d0059004b00000010bf3bffc4001910010101010101000000000000000000000111312100f0ffda");
+    o = _ck_hex(b, o, "0008014300013f10");
+    o = _ck_hex(b, o, "4604025efb1e1a15302a6cfa0f7b807a06204710fbe67a430e7dc09483831d58490c39f742568e2c");
+    o = _ck_hex(b, o, "312b7d9fffc4001b");
+    o = _ck_hex(b, o, "1001010001050000000000000000000000011121003151c1f0ffda0008014d00013f109538e4ab80");
+    o = _ck_hex(b, o, "27714d9c928178a0");
+    o = _ck_hex(b, o, "34099102145cdf49d6bfffc4001a100003010003000000000000000000000001112131004151ffda");
+    o = _ck_hex(b, o, "0008015900013f10");
+    o = _ck_hex(b, o, "60d011e56e620c8f5c331432219c5a07d840d7c69fffc40018100101010101000000000000000000");
+    o = _ck_hex(b, o, "00000111210031ff");
+    o = _ck_hex(b, o, "da0008014b00013f10737fb092890366eb3dd9cc758c6c656502612d5361d93fffd9");
+    store64(len_out, 1186);
+    return b;
+}
+
+fn _ck_ref_noadobe_prog_17x11(): i64 {
+    var b = alloc(748);
+    var o = 0;
+    o = _ck_hex(b, o, "001288082913e5154b20d8156e3cc32c995ea52cb58d8f4ae0bb7a4d03886058204b477157a7356f");
+    o = _ck_hex(b, o, "707f1e8e8d730799");
+    o = _ck_hex(b, o, "cbdbf395db61d6b401e3beaf2b75adc8501094c90e1e700f2f25b4204e31c21b7a4ccd26906dae25");
+    o = _ck_hex(b, o, "d19b9c53eead8258");
+    o = _ck_hex(b, o, "0d746b5f3b5b546857b34168716f2692b081129eb9a9bc9ff96dc2ac17b2cba73082b6d15b1e9ed2");
+    o = _ck_hex(b, o, "11373e1e3a475235");
+    o = _ck_hex(b, o, "60549725916bdf18ab8bc016c9b7b463f891926c0f4c816d3d7b6c5762ca575a8e4e3798a99d29a9");
+    o = _ck_hex(b, o, "d0464cb4f285999b");
+    o = _ck_hex(b, o, "1751e595479dc6e2663bb2e32955412f3b623544706f78368c87c029b6a8a623ddb5b957f772975e");
+    o = _ck_hex(b, o, "3548845b45999049");
+    o = _ck_hex(b, o, "7aa979478f4b5baabeb94dbbd5252dc207a27ca9322ec9a541b8a9d37158b5d42678774458735c4d");
+    o = _ck_hex(b, o, "7982644d999f6e56");
+    o = _ck_hex(b, o, "bcc55f4ae695a82c034e902c2a68732750b6bf40764fa32e956391c7c4d37ed6f1485ccb0ac369d4");
+    o = _ck_hex(b, o, "2b4977d35dd45ea3");
+    o = _ck_hex(b, o, "7d75a5a438999758618e7d56799e6260a6be4d65d7c05f59ed71a61e144a8f1b3c86731965b2bd31");
+    o = _ck_hex(b, o, "8c2da11da88093da");
+    o = _ck_hex(b, o, "cdb09ce5ef647dd714c268e63c6755e565b25d948792a5953bb5a06b6ab197608ec26f6eb0e35e55");
+    o = _ck_hex(b, o, "cf99a54dfe49b32a");
+    o = _ck_hex(b, o, "2962912a3fa38130628c8c1e88417211b59e5de5dc4ca7e8fe788fe5289d79dc4b8561d86a53a7a5");
+    o = _ck_hex(b, o, "92afb4a64fae9b7b");
+    o = _ck_hex(b, o, "72b1917299c26d7bbdc07c67e479bc650045ad582d7e8c5952c07f5f7a6a6648995e6f48c3be58b6");
+    o = _ck_hex(b, o, "e12aa1b4079489b7");
+    o = _ck_hex(b, o, "317a77ac4ea37ba97832c3979dabaf98578188867d8c6b8b9e9e5986cb54a89aee5ea59d116596a4");
+    o = _ck_hex(b, o, "409c7da558dd69a5");
+    o = _ck_hex(b, o, "7e494cb1b0809abec7df804df4488a4616b66c4c355961535ebda156824eb26aa8879568695c8d94");
+    o = _ck_hex(b, o, "8a646b9bb4776192");
+    o = _ck_hex(b, o, "c52bababf7598ab2238179d531b466d26bb94cd3914332dda19abff4d9baa51cfd618f1610d1721b");
+    o = _ck_hex(b, o, "4b5364216bd4a728");
+    o = _ck_hex(b, o, "95699659b3617a5b6b3caca38f388fa1b64c81a0e144859903686da2289856e74dc546dd715127e7");
+    o = _ck_hex(b, o, "975519cdbda8dee7");
+    o = _ck_hex(b, o, "df4ec4200975ae212ce59a264d687c1370e68c1e967f7164be375c6f");
+    return b;
+}
+
+fn test_ck_noadobe_prog_17x11(): i64 {
+    var lo = 0;
+    _ck_check(_ck_fx_noadobe_prog_17x11(&lo), lo, _ck_ref_noadobe_prog_17x11(), 260,
+      "noadobe_prog_17x11: byte-identical to libjpeg JCS_CMYK");
+    return 0;
+}
+
+# jenc 17 11 ycck 2 1 prog: Adobe transform 2, Y and K at 2x1, progressive. source_color_type 0x164.
+fn _ck_fx_ycck_prog_17x11(len_out): i64 {
+    var b = alloc(1303);
+    var o = 0;
+    o = _ck_hex(b, o, "ffd8ffee000e41646f626500640000000002ffdb0043000503040404030504040405050506070c08");
+    o = _ck_hex(b, o, "070707070f0b0b09");
+    o = _ck_hex(b, o, "0c110f1212110f111113161c1713141a1511111821181a1d1d1f1f1f13172224221e241c1e1f1eff");
+    o = _ck_hex(b, o, "db00430105050507");
+    o = _ck_hex(b, o, "06070e08080e1e1411141e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e");
+    o = _ck_hex(b, o, "1e1e1e1e1e1e1e1e");
+    o = _ck_hex(b, o, "1e1e1e1e1e1e1e1e1e1e1e1effc2001408000b001104012100021101031101042100ffc4001b0000");
+    o = _ck_hex(b, o, "0202030100000000");
+    o = _ck_hex(b, o, "000000000000000005010702030406ffc400160101010100000000000000000000000000030506ff");
+    o = _ck_hex(b, o, "da000e0401000210");
+    o = _ck_hex(b, o, "03100400000001ca0d3c5d9bd24a06c6f4d5922af7e3631a9fffc4001e1000010304030000000000");
+    o = _ck_hex(b, o, "0000000000000300");
+    o = _ck_hex(b, o, "020401051314152122ffda0008010100010502348ddb876f372e8831e47f9a6b475fffc400191100");
+    o = _ck_hex(b, o, "0300030000000000");
+    o = _ck_hex(b, o, "00000000000000000102142132ffda000801020101050252a271993cecffc4001911000300030000");
+    o = _ck_hex(b, o, "0000000000000000");
+    o = _ck_hex(b, o, "0000000313022132ffda0008010301010502e72888d9661fffc4001c100000060300000000000000");
+    o = _ck_hex(b, o, "0000000000000102");
+    o = _ck_hex(b, o, "051314030636ffda00080104000105028a99b22246ab61b5256360e8a1c63fffc400231000020004");
+    o = _ck_hex(b, o, "0505000000000000");
+    o = _ck_hex(b, o, "00000000010200031121122231419223333461a2ffda0008010100063f025bf4a5e77a8b5b68ab4a");
+    o = _ck_hex(b, o, "62c056ba663b1f98");
+    o = _ck_hex(b, o, "ee08c0102ab3a82172ea7d4330377738b988f1e57011ffc4001b1100020203010000000000000000");
+    o = _ck_hex(b, o, "0000000001023141");
+    o = _ck_hex(b, o, "6191b1ffda0008010201063f0270c785a23b2df59fffc4001a110001050100000000000000000000");
+    o = _ck_hex(b, o, "0000000210113261");
+    o = _ck_hex(b, o, "81ffda0008010301063f02eb2674b1ffc40024100000050205050000000000000000000000010211");
+    o = _ck_hex(b, o, "12033104223441a1");
+    o = _ck_hex(b, o, "51718192a3ffda0008010400063f0225467b42de453c63f53eec761a5fa8343658bf214add4aa647");
+    o = _ck_hex(b, o, "ea42dc8fffc40020");
+    o = _ck_hex(b, o, "1001000201030501000000000000000000010011213151a1416191c1e1f0ffda0008010100013f21");
+    o = _ck_hex(b, o, "ce29e580d1596b1b");
+    o = _ck_hex(b, o, "5c0bf6e09805eaf4516ec7725feb2d0dc5d13270331aec3eaf5a33827e5bd4ffc400201100010206");
+    o = _ck_hex(b, o, "0301000000000000");
+    o = _ck_hex(b, o, "0000000001001121314181d1f05191a1f1ffda0008010201013f210060cbd52e25acbef1c2325faa");
+    o = _ck_hex(b, o, "3d7965bb22ffc400");
+    o = _ck_hex(b, o, "1c11000202020300000000000000000000000011012161d17191b1ffda0008010301013f214886b4");
+    o = _ck_hex(b, o, "b38144b2fba33bb9");
+    o = _ck_hex(b, o, "3fffc4001f1000010304030100000000000000000000010011312141617110518191ffda00080104");
+    o = _ck_hex(b, o, "00013f21174024a3");
+    o = _ck_hex(b, o, "6f2143672d35e8d1da785a28b342a8f9a3b0acff00b5ffda000e040100020003000400000010a87a");
+    o = _ck_hex(b, o, "c8ffc4001d100101");
+    o = _ck_hex(b, o, "00020105000000000000000000000111002141103161d1f1ffda0008010100013f10a5664d146caa");
+    o = _ck_hex(b, o, "830a974ba0c46879");
+    o = _ck_hex(b, o, "d58c081a24a976c3e8fd644c8571cb23681cb46f06770d56dbc40352f3d1c7ffc4001a1101010003");
+    o = _ck_hex(b, o, "0101000000000000");
+    o = _ck_hex(b, o, "0000000001110021314151ffda0008010201013f10dd995234500f68147d02ca9c12adbe9adf6997");
+    o = _ck_hex(b, o, "aa1b84f1c9827fff");
+    o = _ck_hex(b, o, "c4001d11010100020105000000000000000000000111002151314161c1f0ffda0008010301013f10");
+    o = _ck_hex(b, o, "be8214f335c88897");
+    o = _ck_hex(b, o, "5a4eec93cb0de55115aad355dba06f8cfa4f79ffc400201000020103040300000000000000000000");
+    o = _ck_hex(b, o, "0111310021415161");
+    o = _ck_hex(b, o, "71f0a1c1f1ffda0008010400013f10f2ab239f65825b1279492f36db06cb6983d3ea8f5cd6672067");
+    o = _ck_hex(b, o, "3028ca8141a47051");
+    o = _ck_hex(b, o, "815d37dd7fffd9");
+    store64(len_out, 1303);
+    return b;
+}
+
+fn _ck_ref_ycck_prog_17x11(): i64 {
+    var b = alloc(748);
+    var o = 0;
+    o = _ck_hex(b, o, "2000f8022e00e3094e15bc1b672f9e2e8e60a03098898e44a5cb924e7cb96c5817501b6b578c466d");
+    o = _ck_hex(b, o, "9ed053865c711293");
+    o = _ck_hex(b, o, "e3bfdb928c7bc2aa57a5cbb9236fa1c42f1583d00e00610f402e9a214b34ba067d60d4359370aa25");
+    o = _ck_hex(b, o, "b091a14cdfcac765");
+    o = _ck_hex(b, o, "111f004f2e792676659645636d2d1194c6606ea0ffc1f4939a9cccb75dcdcfa81e8999ce3b2e8ac1");
+    o = _ck_hex(b, o, "2b42001f26321c2d");
+    o = _ck_hex(b, o, "7264c537745cd40a9f8cc318cac2cf66e5f1ef650f3a1c7a33853b4c77b95f56584f00a4c37a4fa8");
+    o = _ck_hex(b, o, "9e1d2fb6f590c890");
+    o = _ck_hex(b, o, "141861936789e2e85842aef21f591f3139604143565b712c9d8eb911bfabce02e7b9ea718f2c8785");
+    o = _ck_hex(b, o, "7a367f67618b8960");
+    o = _ck_hex(b, o, "96d7ac45716b39abc39c63c17f5519b07165559b2253a27a659dffed5b61d3e322775a484d885c41");
+    o = _ck_hex(b, o, "808a435ba79b4769");
+    o = _ck_hex(b, o, "bbb56771f8ffea0a102d7d01425cd3228a86e7253b2a603183756ccbd3cda9c7858970d4697e57ed");
+    o = _ck_hex(b, o, "2f530bfd86a38589");
+    o = _ck_hex(b, o, "7f7cd5944a8b9d595a8c8b578aa07a4fb5a77670f1b9945c79512015284a0020407a4a0fa5c1ff3a");
+    o = _ck_hex(b, o, "4853a32090939ad2");
+    o = _ck_hex(b, o, "dfe3cae17d8e7ccd7ea785f92e8133e488d97a8e7599428550add96a67bde06481c6d581b6ced246");
+    o = _ck_hex(b, o, "ffdadc4f97605d2f");
+    o = _ck_hex(b, o, "365848205295723999c1821059572714cb8c97e3894c76e9b1b5e2f194b3ecd15e6dc2cf394484a8");
+    o = _ck_hex(b, o, "96aaa9b664c14f77");
+    o = _ck_hex(b, o, "71c83d7b9ae5286cbde8724c685dac443e3cc137387cad3776acce314e267e1bae52a509fa95a5f1");
+    o = _ck_hex(b, o, "935139f5676e4df2");
+    o = _ck_hex(b, o, "0b2c17de6d7b86be4c5a75b2a4c7e3a75cea988d8aefb588c6dad185744f60b5a25b6db8623c25ca");
+    o = _ck_hex(b, o, "5a9328cc7cbe54cb");
+    o = _ck_hex(b, o, "584332eab37697f4ffc9f9118e71a9076b88c2101c4d782b829ea93b4f6e4447abdf70588f00388f");
+    o = _ck_hex(b, o, "85003b92a7057597");
+    o = _ck_hex(b, o, "c04abcb4967dd1b844749ad854b8a0d18adebaca585c5beab5907ef3f7d18017a6a1290b67a82614");
+    o = _ck_hex(b, o, "0c640d1a99d7e438");
+    o = _ck_hex(b, o, "7e79d561911ab44a6e1392af9f37a6a9b63381a3b46384953865509c3f9b5ce272b05be72c4400ec");
+    o = _ck_hex(b, o, "7c6845c6daafc2e1");
+    o = _ck_hex(b, o, "8a5bac2654479f288dc9eb332d856f0d97d78d238b8e4b5e9a373c79");
+    return b;
+}
+
+fn test_ck_ycck_prog_17x11(): i64 {
+    var lo = 0;
+    _ck_check(_ck_fx_ycck_prog_17x11(&lo), lo, _ck_ref_ycck_prog_17x11(), 356,
+      "ycck_prog_17x11: byte-identical to libjpeg JCS_CMYK");
+    return 0;
+}
+
+# The RGBA entries still refuse every 4-component file: turning C, M, Y, K into
+# R, G, B is the colour-space guess ADR 0009 forbids, and 1.4.0 did not change
+# that. Through 1.3.x this was the only answer chitra had for these files.
+fn test_ck_rgba_entries_still_refuse() {
+    var lo = 0;
+    var b = _ck_fx_ycck_420_17x11(&lo);
+    var err = 0;
+    assert(chitra_jpeg_decode(b, lo, &err) == 0, "chitra_jpeg_decode refuses a YCCK file");
+    assert_eq(_ck_code(err), CHITRA_ERR_JPEG_COMPONENTS, "...as CHITRA_ERR_JPEG_COMPONENTS");
+    assert(chitra_image_decode(b, lo, &err) == 0, "the router refuses it");
+    assert_eq(_ck_code(err), CHITRA_ERR_JPEG_COMPONENTS, "...as CHITRA_ERR_JPEG_COMPONENTS");
+    assert(chitra_image_decode_budget_via(0, b, lo, _CK_BIG, &err) == 0, "the budget entry refuses it");
+    assert_eq(_ck_code(err), CHITRA_ERR_JPEG_COMPONENTS, "...as CHITRA_ERR_JPEG_COMPONENTS");
+    return 0;
+}
+
+# A 3-component file is not CMYK: chitra_image_decode is its entry. A 24x16
+# 4:2:0 JFIF built by the budget suite's recipe would do; this mutates the
+# CMYK fixture's SOF component count instead, which the walk checks first.
+fn test_ck_refuses_what_is_not_cmyk() {
+    var lo = 0;
+    var b = _ck_fx_cmyk_17x11(&lo);
+    var i = 2;
+    var sof = 0 - 1;
+    while (i + 1 < lo) {
+        if (sof < 0) {
+            if (load8(b + i) == 0xFF) {
+                if (load8(b + i + 1) == 0xC0) { sof = i; }
+            }
+        }
+        i = i + 1;
+    }
+    store8(b + sof + 9, 3);                       # Nf 4 -> 3
+    var err = 0;
+    assert(chitra_jpeg_decode_cmyk(0, b, lo, _CK_BIG, &err) == 0, "a 3-component frame is refused by the CMYK entry");
+    assert_eq(_ck_code(err), CHITRA_ERR_JPEG_COMPONENTS, "...as CHITRA_ERR_JPEG_COMPONENTS");
+    var png[8];
+    store8(&png, 0x89);
+    assert(chitra_jpeg_decode_cmyk(0, &png, 8, _CK_BIG, &err) == 0, "not a JPEG");
+    assert_eq(_ck_code(err), CHITRA_ERR_SIGNATURE, "...as CHITRA_ERR_SIGNATURE");
+    return 0;
+}
+
+# An Adobe transform that names no 4-component space is declined, not guessed
+# (libjpeg warns and assumes YCCK). ⚠ Mutation-checked: without the 4-component
+# arm of _chitra_jpeg_colour_evidence_ok both files decode.
+fn test_ck_undefined_transform_declined() {
+    var lo = 0;
+    var b = _ck_fx_cmyk_17x11(&lo);
+    var t = _ck_adobe_transform_at(b, lo);
+    var err = 0;
+    store8(b + t, 1);
+    assert(chitra_jpeg_decode_cmyk(0, b, lo, _CK_BIG, &err) == 0, "Adobe transform 1 on four components is declined");
+    assert_eq(_ck_code(err), CHITRA_ERR_UNSUPPORTED, "...as CHITRA_ERR_UNSUPPORTED");
+    store8(b + t, 3);
+    assert(chitra_jpeg_decode_cmyk(0, b, lo, _CK_BIG, &err) == 0, "Adobe transform 3 is declined");
+    assert_eq(_ck_code(err), CHITRA_ERR_UNSUPPORTED, "...as CHITRA_ERR_UNSUPPORTED");
+    return 0;
+}
+
+# The budget: 17 x 11 x 4 = 748 bytes of output.
+fn test_ck_budget() {
+    var lo = 0;
+    var b = _ck_fx_cmyk_17x11(&lo);
+    var err = 0;
+    var before = alloc_used();
+    assert(chitra_jpeg_decode_cmyk(0, b, lo, 747, &err) == 0, "747 B budget refuses a 748 B output");
+    assert_eq(_ck_code(err), CHITRA_ERR_BUDGET, "...as CHITRA_ERR_BUDGET");
+    assert_lte(alloc_used() - before, 16, "...for the ChitraErr alone");
+    assert(chitra_jpeg_decode_cmyk(0, b, lo, 748, &err) != 0, "748 B budget decodes");
+    assert(chitra_jpeg_decode_cmyk(0, b, lo, 0, &err) == 0, "a zero budget refuses");
+    assert_eq(_ck_code(err), CHITRA_ERR_BUDGET, "...as CHITRA_ERR_BUDGET");
+    return 0;
+}
+
+# Through a caller's Allocator: two blocks live, then none; a refusal leaves none.
+fn _ck_ta_alloc(state, size): i64 {
+    var p = alloc(size);
+    if (p != 0) { store64(state, load64(state) + 1); }
+    return p;
+}
+fn _ck_ta_realloc(state, o, os, ns): i64 { return 0; }
+fn _ck_ta_free(state, ptr): i64 {
+    store64(state, load64(state) - 1);
+    return 0;
+}
+fn _ck_ta_reset(state): i64 { return 0; }
+
+fn test_ck_via_allocator() {
+    var st = alloc(8);
+    store64(st, 0);
+    var a = allocator_new(&_ck_ta_alloc, &_ck_ta_realloc, &_ck_ta_free, &_ck_ta_reset, st);
+    var lo = 0;
+    var err = 0;
+    var img = chitra_jpeg_decode_cmyk(a, _ck_fx_ycck_prog_17x11(&lo), lo, _CK_BIG, &err);
+    assert(img != 0, "CMYK via an Allocator decodes");
+    assert_eq(load64(st), 2, "CMYK via: record + pixels live");
+    chitra_image_free(img);
+    assert_eq(load64(st), 0, "CMYK via: nothing live after chitra_image_free");
+    var b = _ck_fx_cmyk_17x11(&lo);
+    store8(b + _ck_adobe_transform_at(b, lo), 1);
+    assert(chitra_jpeg_decode_cmyk(a, b, lo, _CK_BIG, &err) == 0, "CMYK via: a declined file");
+    assert_eq(load64(st), 0, "CMYK via: a refusal returns every block");
+    return 0;
+}
+
+fn main(): i64 {
+    test_ck_cmyk_17x11();
+    test_ck_ycck_420_17x11();
+    test_ck_noadobe_prog_17x11();
+    test_ck_ycck_prog_17x11();
+    test_ck_rgba_entries_still_refuse();
+    test_ck_refuses_what_is_not_cmyk();
+    test_ck_undefined_transform_declined();
+    test_ck_budget();
+    test_ck_via_allocator();
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);
