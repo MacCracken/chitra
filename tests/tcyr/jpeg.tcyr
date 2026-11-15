@@ -4327,7 +4327,43 @@ fn test_gate0_still_names_a_headerless_bomb() {
     return 0;
 }
 
+# 1.4.1: a block with no AC coefficient skips the IDCT for _chitra_jpeg_dc_fill,
+# which claims to produce exactly what _chitra_jpeg_idct_nat produces for that
+# block. Held for EVERY dequantized DC from -8192 to 8191 — far past both clamp
+# edges and through every rounding tie of DESCALE(4 * dc, 5) — against the full
+# transform. ⚠ Mutation-checked: the fill's +16 rounding term as +15 fails it
+# (it survived every fixture-based suite: no fixture has a DC-only block on a
+# tie).
+fn test_dc_fill_equals_the_idct() {
+    var coef = alloc(512);
+    var i = 0;
+    while (i < 64) {
+        store64(coef + i * 8, 0);
+        i = i + 1;
+    }
+    var a = alloc(64);
+    var b = alloc(64);
+    var bad = 0;
+    var dc = 0 - 8192;
+    while (dc < 8192) {
+        store64(coef, dc);
+        _chitra_jpeg_idct_nat(coef, a, 8);
+        store64(coef, dc);
+        _chitra_jpeg_dc_fill(coef, b, 8);
+        if (load64(coef) != 0) { bad = bad + 1; }       # the all-zero invariant
+        i = 0;
+        while (i < 64) {
+            if (load8(a + i) != load8(b + i)) { bad = bad + 1; }
+            i = i + 1;
+        }
+        dc = dc + 1;
+    }
+    assert_eq(bad, 0, "DC-only fill equals the full IDCT for every DC in -8192..8191");
+    return 0;
+}
+
 fn main() {
+    test_dc_fill_equals_the_idct();
     test_gate0_still_names_a_headerless_bomb();
     test_dqt_table_id_past_the_store_rejected();
     test_dht_symbol_count_past_the_table_rejected();

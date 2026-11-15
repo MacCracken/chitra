@@ -9,6 +9,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 _Nothing yet._
 
+## [1.4.1] - 2026-11-14 — PNG and JPEG decode speed, the part that is chitra's
+
+A patch: faster, and **no output changed** — every file in every reference corpus decodes to
+the same bytes as 1.4.0. Continues the decode-throughput issue (selah), which stays open for
+PNG: what is left of a large PNG decode is mostly sankoch's inflate.
+
+### Changed — PNG
+
+- **The unfilter goes a word at a time.** None and Up move 8 bytes per step for any bpp (Up as
+  a SWAR byte-wise add); Sub and Average take one pixel per step at 3 and 4 bytes per pixel
+  (RGB8, RGBA8); Paeth does too on rows whose row above looks flat, through two exact
+  whole-pixel shortcuts (`up == up-left` → left; `left == up-left` → up), and stays a byte per
+  step elsewhere, where the pixel path measured ~10 % slower. A branch-free Paeth select was
+  tried and measured 1.8× **slower**. The in-place alias holds word by word: a group is loaded
+  in full before it is stored, and every word access stays inside its row, so Adam7's
+  exact-size row buffers are never overread (`--poison=ab` and `--bounds` fuzz runs agree).
+- **The colour pass**: a palette is expanded once into 256 RGBA words (one compare, one load,
+  one store per pixel); 8-bit RGB without a colour key is one 32-bit store per pixel; 8-bit
+  RGBA copies two pixels per step.
+- ⚠ **Each predictor is its own function.** The same per-byte Paeth loop ran ~40 % slower as
+  the fifth branch of one large function than as the body of its own — Cyrius does not align
+  loops — which first made the issue's own benchmark file 19 % *slower*. Measured, bisected
+  and fixed before release; CLAUDE.md now carries the rule.
+
+### Changed — JPEG
+
+- **A block with no AC coefficient skips the IDCT**: all 64 samples are
+  `DESCALE(4·dc, 5) + 128`, exactly what libjpeg's two all-zero shortcuts produce, written as
+  eight 8-byte stores. Most of a screenshot's blocks are such blocks.
+- **Colour conversion through `jdcolor.c`'s own tables**, built once per decode on the stack
+  (no binary growth, nothing to dangle across an `alloc_reset`), with a clamp table; the
+  fancy upsampler runs bounds-free except on its last column and writes output pairs with one
+  16-bit store. Both loops now sit in their own functions.
+
+### Measured — interleaved A/B against 1.4.0, same host, minimum of 5 rounds
+
+| file | 1.4.0 | 1.4.1 | |
+|---|---:|---:|---|
+| PNG 512×512 RGBA8 (the issue's file; Paeth) | 14.20 ms | 13.74 ms | 0.97× |
+| PNG 1920×1080 screenshot, palette | 27.61 ms | 17.20 ms | 0.62× |
+| PNG 1920×1080 screenshot, RGB8 | 61.30 ms | 40.29 ms | 0.66× |
+| PNG 1920×1080 screenshot, RGBA8 | 65.60 ms | 46.64 ms | 0.71× |
+| PNG 1920×1080 screenshot, RGBA8 all-Paeth | 102.39 ms | 51.30 ms | 0.50× |
+| PNG 1920×1080 photo, RGBA8 all-Paeth | 468.52 ms | 468.93 ms | 1.00× (inflate-bound) |
+| JPEG 512×512 4:4:4 (the issue's file) | 14.97 ms | 13.92 ms | 0.93× |
+| JPEG 1920×1080 screenshot 4:2:0 | 62.01 ms | 36.37 ms | 0.59× |
+| JPEG 1920×1080 screenshot 4:4:4 | 59.29 ms | 29.09 ms | 0.49× |
+| JPEG 1920×1080 photo 4:2:0 | 98.29 ms | 84.02 ms | 0.85× |
+| JPEG 1920×1080 photo, progressive | 145.51 ms | 134.04 ms | 0.92× |
+| JPEG 3840×2160 photo 4:2:0 | 389.44 ms | 332.47 ms | 0.85× |
+
+Against Rust's `image`, the issue's JPEG is ~5.5× (inside the 2.5–7× range selah measured for
+its other paths) and its PNG ~10.5×: of a
+1080p RGBA screenshot's 46.6 ms, 39 ms is sankoch's inflate, which copies matches a byte per
+iteration and decodes each literal through a call.
+
+### Verification
+
+- **Byte-identical** to 1.4.0 and to the oracles: 180 baseline + 93 progressive JPEGs to
+  `djpeg`, 124 CMYK / YCCK files to libjpeg's `JCS_CMYK`, and 1,415 PNGs to ImageMagick —
+  a generated corpus of every filter × 1 / 2 / 3 / 4 / 6 / 8 bytes per pixel × widths 1–33 ×
+  noise / flat / ramp rows (1,152), their Adam7 versions (192), the 58-file corpus and the
+  13 benchmark files.
+- Two new cells, each mutation-checked: `png.tcyr` holds `_chitra_unfilter_row` to a
+  byte-at-a-time PNG § 9 reference written in the test (every filter, every bpp, widths 1–17,
+  own buffer and the in-place layout — 4,080 cases); `jpeg.tcyr` holds `_chitra_jpeg_dc_fill`
+  to the full IDCT for every DC from −8192 to 8191. The fill's rounding mutant had survived
+  every fixture-based suite. **4,463 assertions across 18 suites**; fuzzing unchanged and
+  green (12,130,693), also under `--poison=ab` and `--bounds` for PNG and JPEG.
+
 ## [1.4.0] - 2026-11-14 — eight consumer issues, closed
 
 A minor, not a patch: two decode entry points join the frozen surface (29 → 31

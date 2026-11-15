@@ -77,7 +77,7 @@ decode. Each maps to a `ChitraErrCode`
   Failure → `CHITRA_ERR_TRUNCATED`.
 - ✅ **Per-chunk CRC-32 validation** — every chunk (IHDR included) is verified
   with `sankoch`'s `crc32` against its trailing CRC (e.g. the IHDR check at
-  [`src/png_filter.cyr:184`](src/png_filter.cyr)); a mismatch aborts the decode
+  [`src/png_filter.cyr:442`](src/png_filter.cyr)); a mismatch aborts the decode
   rather than accepting corrupt or tampered data. Failure → `CHITRA_ERR_CRC`.
 - ✅ **Dimension caps before any multiply** — IHDR `width`/`height` are rejected
   if zero/negative or over the per-side cap `CHITRA_MAX_DIM = 65535`, *before*
@@ -88,7 +88,7 @@ decode. Each maps to a `ChitraErrCode`
 - ✅ **Decompression-bomb ratio cap** — the ratio of inflated output to
   compressed IDAT input is bounded by `CHITRA_MAX_INFLATE_RATIO = 1100`
   (constant in [`src/png_chunks.cyr:43`](src/png_chunks.cyr); checked at
-  [`src/png_filter.cyr:687`](src/png_filter.cyr)), just above DEFLATE's
+  [`src/png_filter.cyr:945`](src/png_filter.cyr)), just above DEFLATE's
   theoretical 1032:1 maximum (RFC 1951 § 3.2.5), so a zip-bomb-style input is
   rejected instead of expanded. Failure → `CHITRA_ERR_DIMENSIONS`.
   ⚠️ **Accepted risk, stated rather than quietly fixed**: this ratio bounds
@@ -154,12 +154,12 @@ decode. Each maps to a `ChitraErrCode`
   32-byte bit reader on every call — and chitra reported that as `CHITRA_ERR_INFLATE`, which a caller reads
   as a damaged file: a valid PNG decoded under memory pressure could be refused,
   and cached, as corrupt. It now maps to `CHITRA_ERR_OOM`
-  ([`src/png_filter.cyr:798`](src/png_filter.cyr)); every other negative return
+  ([`src/png_filter.cyr:1056`](src/png_filter.cyr)); every other negative return
   is still the stream's fault. With that, the clause above is true of every
   allocating sankoch entry point chitra calls. The IHDR-derived inflated/pixel buffer sizes over the ceiling
-  fail as `CHITRA_ERR_DIMENSIONS` ([`src/png_filter.cyr:668-675`](src/png_filter.cyr));
+  fail as `CHITRA_ERR_DIMENSIONS` ([`src/png_filter.cyr:926-933`](src/png_filter.cyr));
   the IDAT-accumulator over the ceiling and any allocation that returns null
-  fail as `CHITRA_ERR_OOM` ([`src/png_filter.cyr:530`](src/png_filter.cyr)).
+  fail as `CHITRA_ERR_OOM` ([`src/png_filter.cyr:788`](src/png_filter.cyr)).
 - ✅ **Inflate exact-size second line of defense** — the inflated stream size
   must match exactly the size derived from IHDR (`height × (1 + row_bytes)`);
   any mismatch from `sankoch` aborts the decode. Failure →
@@ -171,26 +171,26 @@ decode. Each maps to a `ChitraErrCode`
   color-type-3 at depth 16). Failure → `CHITRA_ERR_UNSUPPORTED` (unknown color
   type or non-zero compression/filter method), `CHITRA_ERR_INTERLACE`
   (interlace value ∉ {0,1}), or `CHITRA_ERR_BIT_DEPTH` (illegal depth × color-type
-  combination) — see [`src/png_filter.cyr:204-224`](src/png_filter.cyr).
+  combination) — see [`src/png_filter.cyr:462-482`](src/png_filter.cyr).
 - ✅ **Per-row filter-byte validation** — every scanline's filter type is
   checked against `{0,1,2,3,4}` (spec § 9) on both the non-interlaced and the
-  Adam7 paths (`_chitra_unfilter_row`, [`src/png_filter.cyr:43`](src/png_filter.cyr)); an out-of-range
+  Adam7 paths (`_chitra_unfilter_row`, [`src/png_filter.cyr:347`](src/png_filter.cyr)); an out-of-range
   byte aborts before unfilter. Failure → `CHITRA_ERR_FILTER`.
 - ✅ **Palette-index bounds checks** — every palette pixel index, on both the
   sub-byte and the depth-8 path, is rejected if it points past the PLTE entry
   count, and per-entry tRNS reads are bounded by the tRNS array length
-  ([`src/png_color.cyr:197`](src/png_color.cyr),
-  [`src/png_color.cyr:327`](src/png_color.cyr)). Palette images with a
+  ([`src/png_color.cyr:225`](src/png_color.cyr),
+  [`src/png_color.cyr:371`](src/png_color.cyr)). Palette images with a
   missing/short PLTE are rejected. Failure → `CHITRA_ERR_BAD_CHUNK`.
 - ✅ **PLTE / tRNS structural guards** — PLTE is rejected if duplicated, if it
   appears after IDAT, if its length exceeds 768 bytes, or if it is not a
   multiple of 3; tRNS spans are re-validated within `(src, len)` in the color
   pass and must have the correct length for the color type
-  ([`src/png_color.cyr:125`](src/png_color.cyr)). Failure →
+  ([`src/png_color.cyr:150`](src/png_color.cyr)). Failure →
   `CHITRA_ERR_BAD_CHUNK`.
   ⚠ **Since 1.1.1 the facts the chunk list has already settled are refused
   before the first allocation**, at the end of the chunk walk
-  ([`src/png_filter.cyr:718-747`](src/png_filter.cyr)): colour type 3 with no
+  ([`src/png_filter.cyr:976-1005`](src/png_filter.cyr)): colour type 3 with no
   (or an empty) PLTE, a palette tRNS longer than the palette, and a colour-type
   0 / 2 tRNS that is not 2 / 6 bytes. Through 1.1.0 the colour pass refused them
   only after the IDAT concatenation, the inflate buffer, the scanlines and the
@@ -289,7 +289,7 @@ conformance, resource and defence-in-depth rather than exploit fixes:
   bitmask** — a component may be decoded exactly once, so a file gets at most
   `Nf` scans and every scan must name something new (refused in
   `_chitra_jpeg_parse_sos`, [`src/jpeg.cyr:188`](src/jpeg.cyr), set at `:195`; the
-  driver `_chitra_jpeg_decode_scans` at `:1256` reads the mask at `:1370`). That is what makes the scan walk
+  driver `_chitra_jpeg_decode_scans` at `:1315` reads the mask at `:1429`). That is what makes the scan walk
   terminate; no scan counter and no resume tripwire were added, because neither
   could fire before coverage does. **Within** one scan the components must
   follow frame order (T.81 § B.2.3, refused at `:173` since 1.1.1 — libjpeg
@@ -315,7 +315,7 @@ conformance, resource and defence-in-depth rather than exploit fixes:
   for a single scan. The sum is byte-structural, so an allocation-free pre-pass
   (`_chitra_jpeg_structural_espan`) now computes it from the scan headers and the
   segment lengths alone and GATE 2 refuses **before any plane exists**
-  ([`src/jpeg.cyr:1303-1309`](src/jpeg.cyr)); the post-decode GATE 2 stays as
+  ([`src/jpeg.cyr:1362-1368`](src/jpeg.cyr)); the post-decode GATE 2 stays as
   the exact backstop. Padding no longer buys the planes back: each of those
   files now refuses for the 22,160-byte per-frame table cost.
 - ✅ **The refusal path is cheap (0.6.1).** A JPEG refused for good reason cost

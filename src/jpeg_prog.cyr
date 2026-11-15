@@ -609,6 +609,7 @@ fn _chitra_jpeg_decode_progressive(frame, src, len, err_out): i64 {
     var by = 0;
     var blk = 0;
     var n = 0;
+    var acor = 0;
     while (ci < CHITRA_MAX_COMPONENTS) {
         store64(&planes + ci * 8, 0);
         store64(&comppw + ci * 8, 0);
@@ -638,12 +639,26 @@ fn _chitra_jpeg_decode_progressive(frame, src, len, err_out): i64 {
             bx = 0;
             while (bx < bw) {
                 blk = buf + (by * bw + bx) * 128;
-                n = 0;
-                while (n < 64) {
-                    store64(zz + n * 8, _chitra_jpeg_i16(load16(blk + n * 2)) * load64(q + n * 8));
-                    n = n + 1;
+                # 1.4.1: a block with no AC coefficient (all 63 after the DC
+                # zero — 16 words, the first with its DC lane masked) is a flat
+                # fill of its DC, as in the baseline loop.
+                acor = load64(blk) & (0 - 65536);
+                n = 8;
+                while (n < 128) {
+                    acor = acor | load64(blk + n);
+                    n = n + 8;
                 }
-                _chitra_jpeg_idct_nat(zz, plane + by * 8 * pw + bx * 8, pw);
+                if (acor == 0) {
+                    store64(zz, _chitra_jpeg_i16(load16(blk)) * load64(q));
+                    _chitra_jpeg_dc_fill(zz, plane + by * 8 * pw + bx * 8, pw);
+                } else {
+                    n = 0;
+                    while (n < 64) {
+                        store64(zz + n * 8, _chitra_jpeg_i16(load16(blk + n * 2)) * load64(q + n * 8));
+                        n = n + 1;
+                    }
+                    _chitra_jpeg_idct_nat(zz, plane + by * 8 * pw + bx * 8, pw);
+                }
                 bx = bx + 1;
             }
             by = by + 1;

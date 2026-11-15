@@ -40,14 +40,159 @@ fn _chitra_paeth(a, b, c): i64 {
 # in[i - (curr_in - out_row)], which is already consumed. `prev_row` must not
 # overlap `out_row`. `_chitra_unfilter_image` relies on both.
 # ================================================================
-fn _chitra_unfilter_row(prev_row, curr_in, out_row, row_bytes, bpp, filter_type): i64 {
+# 1 when the previous row looks flat enough for the pixel-step Paeth path:
+# of 16 evenly spaced pixels (bpp 3 or 4), at least 4 equal their left
+# neighbour. Reads prev_row[bpp .. row_bytes) only.
+fn _chitra_paeth_row_flat(prev_row, row_bytes, bpp): i64 {
+    var npx = row_bytes / bpp;
+    if (npx < 2) { return 0; }
+    var j = 0;
+    var hits = 0;
+    var px = 0;
+    var o = 0;
+    while (j < 16) {
+        px = 1 + (j * (npx - 1)) / 16;           # 1 .. npx-1
+        o = px * bpp;
+        if (bpp == 4) {
+            if (load32(prev_row + o) == load32(prev_row + o - 4)) { hits = hits + 1; }
+        } else {
+            if (load16(prev_row + o) == load16(prev_row + o - 3)) {
+                if (load8(prev_row + o + 2) == load8(prev_row + o - 1)) { hits = hits + 1; }
+            }
+        }
+        j = j + 1;
+    }
+    if (hits >= 4) { return 1; }
+    return 0;
+}
+
+# ---- one function per predictor (1.4.1) ------------------------------------
+# Each hot loop is the whole of a small function. Measured: the SAME per-byte
+# Paeth loop ran ~40 % slower as the fifth branch of one large function than
+# as the body of its own — Cyrius does not align loops, so where a loop lands
+# decides its speed, and a small function puts it at a stable place.
+
+# None — passthrough, 8 bytes per step.
+fn _chitra_unfilter_none(curr_in, out_row, row_bytes): i64 {
     var i = 0;
-    # 1.4.0 (decode-throughput issue): every predictor's loop is split at
-    # `bpp` — the first pixel has no left neighbour — instead of testing
-    # `i >= bpp` on every byte, and Paeth is computed inline rather than by a
-    # call per byte (_chitra_paeth stays, as the § 9.4 reference). Each loop
-    # still reads in[i] before it writes out[i], so the in-place alias above
-    # holds unchanged.
+    while (i + 8 <= row_bytes) {
+        store64(out_row + i, load64(curr_in + i));
+        i = i + 8;
+    }
+    while (i < row_bytes) {
+        store8(out_row + i, load8(curr_in + i));
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Up — out[i] = in[i] + prev[i]: eight lanes per step, a SWAR byte-wise add
+# ((x & 7F..) + (y & 7F..)) ^ ((x ^ y) & 80..) — no carry crosses a lane.
+fn _chitra_unfilter_up(prev_row, curr_in, out_row, row_bytes): i64 {
+    var i = 0;
+    var x = 0;
+    var y = 0;
+    var lo7 = 9187201950435737471;               # 0x7F7F7F7F7F7F7F7F
+    var hi8 = 0 - 9187201950435737472;           # 0x8080808080808080
+    while (i + 8 <= row_bytes) {
+        x = load64(curr_in + i);
+        y = load64(prev_row + i);
+        store64(out_row + i, ((x & lo7) + (y & lo7)) ^ ((x ^ y) & hi8));
+        i = i + 8;
+    }
+    while (i < row_bytes) {
+        store8(out_row + i, (load8(curr_in + i) + load8(prev_row + i)) & 0xFF);
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Sub — out[i] = in[i] + out[i-bpp]. A pixel per step at bpp 4 and 3, the
+# left pixel carried in a local; a byte per step otherwise.
+fn _chitra_unfilter_sub(curr_in, out_row, row_bytes, bpp): i64 {
+    var i = 0;
+    var a = 0;
+    var x = 0;
+    if (bpp == 4) {
+        while (i + 4 <= row_bytes) {
+            x = load32(curr_in + i);
+            a = ((x & 2139062143) + (a & 2139062143)) ^ ((x ^ a) & 2155905152);
+            store32(out_row + i, a);
+            i = i + 4;
+        }
+        return 0;                                # row_bytes is a multiple of 4
+    }
+    if (bpp == 3) {
+        while (i + 3 <= row_bytes) {
+            x = load16(curr_in + i) | (load8(curr_in + i + 2) << 16);
+            a = ((x & 8355711) + (a & 8355711)) ^ ((x ^ a) & 8421504);
+            store16(out_row + i, a & 65535);
+            store8(out_row + i + 2, a >> 16);
+            i = i + 3;
+        }
+        return 0;
+    }
+    var nfirst = bpp;
+    if (nfirst > row_bytes) { nfirst = row_bytes; }
+    while (i < nfirst) {
+        store8(out_row + i, load8(curr_in + i));
+        i = i + 1;
+    }
+    while (i < row_bytes) {
+        store8(out_row + i, (load8(curr_in + i) + load8(out_row + i - bpp)) & 0xFF);
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Average — out[i] = in[i] + floor((left + up) / 2). Per lane that floor is
+# (l & u) + (((l ^ u) & FE..) >> 1), which never carries across a lane.
+fn _chitra_unfilter_avg(prev_row, curr_in, out_row, row_bytes, bpp): i64 {
+    var i = 0;
+    var a = 0;
+    var b = 0;
+    var x = 0;
+    var y = 0;
+    if (bpp == 4) {
+        while (i + 4 <= row_bytes) {
+            x = load32(curr_in + i);
+            b = load32(prev_row + i);
+            y = (a & b) + (((a ^ b) & 4278124286) >> 1);
+            a = ((x & 2139062143) + (y & 2139062143)) ^ ((x ^ y) & 2155905152);
+            store32(out_row + i, a);
+            i = i + 4;
+        }
+        return 0;
+    }
+    if (bpp == 3) {
+        while (i + 3 <= row_bytes) {
+            x = load16(curr_in + i) | (load8(curr_in + i + 2) << 16);
+            b = load16(prev_row + i) | (load8(prev_row + i + 2) << 16);
+            y = (a & b) + (((a ^ b) & 16711422) >> 1);
+            a = ((x & 8355711) + (y & 8355711)) ^ ((x ^ y) & 8421504);
+            store16(out_row + i, a & 65535);
+            store8(out_row + i + 2, a >> 16);
+            i = i + 3;
+        }
+        return 0;
+    }
+    var nfirst = bpp;
+    if (nfirst > row_bytes) { nfirst = row_bytes; }
+    while (i < nfirst) {
+        store8(out_row + i, (load8(curr_in + i) + (load8(prev_row + i) >> 1)) & 0xFF);
+        i = i + 1;
+    }
+    while (i < row_bytes) {
+        store8(out_row + i, (load8(curr_in + i) + ((load8(out_row + i - bpp) + load8(prev_row + i)) >> 1)) & 0xFF);
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Paeth, a byte per step — the § 9.4 predictor inline, ties a, then b, then c.
+# With no left neighbour (a = c = 0) the predictor is `up`.
+fn _chitra_unfilter_paeth(prev_row, curr_in, out_row, row_bytes, bpp): i64 {
+    var i = 0;
     var nfirst = bpp;
     if (nfirst > row_bytes) { nfirst = row_bytes; }
     var a = 0;
@@ -56,74 +201,187 @@ fn _chitra_unfilter_row(prev_row, curr_in, out_row, row_bytes, bpp, filter_type)
     var pa = 0;
     var pb = 0;
     var pc = 0;
-    if (filter_type == 0) {
-        # None — passthrough.
-        while (i < row_bytes) {
-            store8(out_row + i, load8(curr_in + i));
-            i = i + 1;
-        }
-        return 0;
+    while (i < nfirst) {
+        store8(out_row + i, (load8(curr_in + i) + load8(prev_row + i)) & 0xFF);
+        i = i + 1;
     }
-    if (filter_type == 1) {
-        # Sub — out[i] = in[i] + (i<bpp ? 0 : out[i-bpp])
-        while (i < nfirst) {
-            store8(out_row + i, load8(curr_in + i));
-            i = i + 1;
+    while (i < row_bytes) {
+        a = load8(out_row + i - bpp);
+        b = load8(prev_row + i);
+        c = load8(prev_row + i - bpp);
+        # p = a + b - c: |p - a| = |b - c|, |p - b| = |a - c|,
+        # |p - c| = |a + b - 2c|.
+        pa = b - c;
+        if (pa < 0) { pa = 0 - pa; }
+        pb = a - c;
+        if (pb < 0) { pb = 0 - pb; }
+        pc = a + b - c - c;
+        if (pc < 0) { pc = 0 - pc; }
+        if (pa <= pb) {
+            if (pa <= pc) { c = a; } else { if (pb <= pc) { c = b; } }
+        } else {
+            if (pb <= pc) { c = b; }
         }
-        while (i < row_bytes) {
-            store8(out_row + i, (load8(curr_in + i) + load8(out_row + i - bpp)) & 0xFF);
-            i = i + 1;
-        }
-        return 0;
+        store8(out_row + i, (load8(curr_in + i) + c) & 0xFF);
+        i = i + 1;
     }
-    if (filter_type == 2) {
-        # Up — out[i] = in[i] + prev[i]
-        while (i < row_bytes) {
-            store8(out_row + i, (load8(curr_in + i) + load8(prev_row + i)) & 0xFF);
-            i = i + 1;
-        }
-        return 0;
-    }
-    if (filter_type == 3) {
-        # Average — out[i] = in[i] + floor((left + up) / 2)
-        while (i < nfirst) {
-            store8(out_row + i, (load8(curr_in + i) + (load8(prev_row + i) >> 1)) & 0xFF);
-            i = i + 1;
-        }
-        while (i < row_bytes) {
-            store8(out_row + i, (load8(curr_in + i) + ((load8(out_row + i - bpp) + load8(prev_row + i)) >> 1)) & 0xFF);
-            i = i + 1;
-        }
-        return 0;
-    }
-    if (filter_type == 4) {
-        # Paeth — out[i] = in[i] + paeth(left, up, up-left). With no left
-        # neighbour (a = c = 0) the predictor is `up`.
-        while (i < nfirst) {
-            store8(out_row + i, (load8(curr_in + i) + load8(prev_row + i)) & 0xFF);
-            i = i + 1;
-        }
-        while (i < row_bytes) {
-            a = load8(out_row + i - bpp);
-            b = load8(prev_row + i);
-            c = load8(prev_row + i - bpp);
-            # p = a + b - c: |p - a| = |b - c|, |p - b| = |a - c|,
-            # |p - c| = |a + b - 2c|; ties resolve a, then b, then c.
-            pa = b - c;
-            if (pa < 0) { pa = 0 - pa; }
-            pb = a - c;
-            if (pb < 0) { pb = 0 - pb; }
-            pc = a + b - c - c;
-            if (pc < 0) { pc = 0 - pc; }
-            if (pa <= pb) {
-                if (pa <= pc) { c = a; } else { if (pb <= pc) { c = b; } }
+    return 0;
+}
+
+# Paeth a pixel per step at bpp 4 (bpp 3: `_chitra_unfilter_paeth_px3`), for
+# rows whose row above looks flat (_chitra_paeth_row_flat). in, up and the
+# carried left / up-left pixels are words; each lane's predictor is chosen,
+# then the lanes are added to `in` at once. Two whole-pixel shortcuts are
+# exact, and flat regions (most of a screenshot) take one of them:
+#   up == up-left   -> every lane has b == c, so pa = 0: LEFT;
+#   left == up-left -> every lane has a == c, so pb = 0 and the choice is b
+#                      (or a = b = c): UP.
+fn _chitra_unfilter_paeth_px4(prev_row, curr_in, out_row, row_bytes): i64 {
+    var i = 0;
+    var x = 0;
+    var lp = 0;                                  # left pixel (output)
+    var ulp = 0;                                 # up-left pixel
+    var up = 0;
+    var pred = 0;
+    var sh = 0;
+    var a = 0;
+    var b = 0;
+    var c = 0;
+    var pa = 0;
+    var pb = 0;
+    var pc = 0;
+    while (i + 4 <= row_bytes) {
+        x = load32(curr_in + i);
+        up = load32(prev_row + i);
+        if (up == ulp) {
+            pred = lp;
+        } else {
+            if (lp == ulp) {
+                pred = up;
             } else {
-                if (pb <= pc) { c = b; }
+                pred = 0;
+                sh = 0;
+                while (sh < 32) {
+                    a = (lp >> sh) & 255;
+                    b = (up >> sh) & 255;
+                    c = (ulp >> sh) & 255;
+                    pa = b - c;
+                    if (pa < 0) { pa = 0 - pa; }
+                    pb = a - c;
+                    if (pb < 0) { pb = 0 - pb; }
+                    pc = a + b - c - c;
+                    if (pc < 0) { pc = 0 - pc; }
+                    if (pa <= pb) {
+                        if (pa <= pc) { c = a; } else { if (pb <= pc) { c = b; } }
+                    } else {
+                        if (pb <= pc) { c = b; }
+                    }
+                    pred = pred | (c << sh);
+                    sh = sh + 8;
+                }
             }
-            store8(out_row + i, (load8(curr_in + i) + c) & 0xFF);
-            i = i + 1;
         }
-        return 0;
+        lp = ((x & 2139062143) + (pred & 2139062143)) ^ ((x ^ pred) & 2155905152);
+        store32(out_row + i, lp);
+        ulp = up;
+        i = i + 4;
+    }
+    return 0;
+}
+
+# The same, three lanes per pixel (RGB8).
+fn _chitra_unfilter_paeth_px3(prev_row, curr_in, out_row, row_bytes): i64 {
+    var i = 0;
+    var x = 0;
+    var lp = 0;
+    var ulp = 0;
+    var up = 0;
+    var pred = 0;
+    var sh = 0;
+    var a = 0;
+    var b = 0;
+    var c = 0;
+    var pa = 0;
+    var pb = 0;
+    var pc = 0;
+    while (i + 3 <= row_bytes) {
+        x = load16(curr_in + i) | (load8(curr_in + i + 2) << 16);
+        up = load16(prev_row + i) | (load8(prev_row + i + 2) << 16);
+        if (up == ulp) {
+            pred = lp;
+        } else {
+            if (lp == ulp) {
+                pred = up;
+            } else {
+                pred = 0;
+                sh = 0;
+                while (sh < 24) {
+                    a = (lp >> sh) & 255;
+                    b = (up >> sh) & 255;
+                    c = (ulp >> sh) & 255;
+                    pa = b - c;
+                    if (pa < 0) { pa = 0 - pa; }
+                    pb = a - c;
+                    if (pb < 0) { pb = 0 - pb; }
+                    pc = a + b - c - c;
+                    if (pc < 0) { pc = 0 - pc; }
+                    if (pa <= pb) {
+                        if (pa <= pc) { c = a; } else { if (pb <= pc) { c = b; } }
+                    } else {
+                        if (pb <= pc) { c = b; }
+                    }
+                    pred = pred | (c << sh);
+                    sh = sh + 8;
+                }
+            }
+        }
+        lp = ((x & 8355711) + (pred & 8355711)) ^ ((x ^ pred) & 8421504);
+        store16(out_row + i, lp & 65535);
+        store8(out_row + i + 2, lp >> 16);
+        ulp = up;
+        i = i + 3;
+    }
+    return 0;
+}
+
+fn _chitra_unfilter_row(prev_row, curr_in, out_row, row_bytes, bpp, filter_type): i64 {
+    # 1.4.0 (decode-throughput issue): every predictor's loop is split at
+    # `bpp` — the first pixel has no left neighbour — instead of testing
+    # `i >= bpp` on every byte, and Paeth is computed inline rather than by a
+    # call per byte (_chitra_paeth stays, as the § 9.4 reference).
+    #
+    # 1.4.1: WORD AT A TIME, one small function per predictor (above). None and
+    # Up move 8 bytes per step for any bpp; Sub and Average at bpp 3 and 4
+    # (RGB8, RGBA8 — every 8-bit colour screenshot) take one PIXEL per step;
+    # Paeth at bpp 3 and 4 does so on rows whose row above looks flat, where
+    # two exact whole-pixel shortcuts make it 2x faster, and a byte per step
+    # elsewhere, where the pixel path measured ~10 % slower. A branch-free
+    # Paeth select was tried and measured 1.8x SLOWER (Cyrius pays for every
+    # extra operation more than for a mispredict).
+    #
+    # ⚠ THE IN-PLACE ALIAS still holds word by word (`_chitra_unfilter_image`):
+    # out_row starts at or before curr_in, every group is LOADED in full before
+    # its result is STORED, and a store covering out[i .. i+n) lands on
+    # in[i-d .. i-d+n) with d >= 0 — bytes this step or an earlier one has
+    # already read. Every word access stays inside [0, row_bytes) of its row:
+    # a group runs only while i + n <= row_bytes, and the tail goes a byte at
+    # a time, so an exactly-sized row buffer (Adam7's) is never overread.
+    if (filter_type == 0) { return _chitra_unfilter_none(curr_in, out_row, row_bytes); }
+    if (filter_type == 2) { return _chitra_unfilter_up(prev_row, curr_in, out_row, row_bytes); }
+    if (filter_type == 1) { return _chitra_unfilter_sub(curr_in, out_row, row_bytes, bpp); }
+    if (filter_type == 3) { return _chitra_unfilter_avg(prev_row, curr_in, out_row, row_bytes, bpp); }
+    if (filter_type == 4) {
+        if (bpp == 4) {
+            if (_chitra_paeth_row_flat(prev_row, row_bytes, 4) == 1) {
+                return _chitra_unfilter_paeth_px4(prev_row, curr_in, out_row, row_bytes);
+            }
+        }
+        if (bpp == 3) {
+            if (_chitra_paeth_row_flat(prev_row, row_bytes, 3) == 1) {
+                return _chitra_unfilter_paeth_px3(prev_row, curr_in, out_row, row_bytes);
+            }
+        }
+        return _chitra_unfilter_paeth(prev_row, curr_in, out_row, row_bytes, bpp);
     }
     return 0 - 1;
 }

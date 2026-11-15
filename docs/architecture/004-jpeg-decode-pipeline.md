@@ -471,6 +471,13 @@ four Annex G scan kinds update it, and one dequantize + IDCT pass fills planes
 of exactly the baseline shape, so `_chitra_jpeg_build_image` is shared. See
 [ADR 0013](../adr/0013-progressive-jpeg.md).
 
+**A block with no AC coefficient skips the IDCT (1.4.1).** `_chitra_jpeg_decode_coefs`
+reports whether it stored any AC term; if not, `_chitra_jpeg_dc_fill` writes the
+64 samples as one value, `DESCALE(4·dc, 5) + 128` — exactly what the IDCT's two
+all-zero shortcuts produce (`jpeg.tcyr` holds it to the full transform for every
+DC in −8192..8191) — and re-zeroes the coefficient block. The progressive final
+pass makes the same test on the coefficient buffer.
+
 **The bit reader is a word buffer since 1.4.0** (`_chitra_jpeg_br_fill` keeps up
 to 56 bits; a 9-bit lookahead table per Huffman table resolves most codes). It
 fabricates bits only on demand — `_CHITRA_BR_EOD` at the consumer that asks for

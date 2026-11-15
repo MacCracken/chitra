@@ -339,6 +339,31 @@ fn _chitra_jpeg_idct_nat(coef, dst, stride): i64 {
 }
 
 # ================================================================
+# _chitra_jpeg_dc_fill — the 2-D IDCT of a block whose AC coefficients are all
+# zero, without the transform (1.4.1). Every column then takes libjpeg's pass-1
+# shortcut (in0 << PASS1_BITS) and every row its pass-2 shortcut, so all 64
+# samples are DESCALE(4 * coef[0], PASS1_BITS + 3) + 128, clamped — the value
+# _chitra_jpeg_idct_nat computes for such a block, bit for bit. Written as eight
+# 8-byte stores, and coef[0] is re-zeroed (the all-zero invariant).
+# ================================================================
+fn _chitra_jpeg_dc_fill(coef, dst, stride): i64 {
+    var v = ((load64(coef) * 4 + 16 + _CHITRA_IDCT_BIAS) >> 5) - (_CHITRA_IDCT_BIAS >> 5) + 128;
+    if (v < 0) { v = 0; }
+    if (v > 255) { v = 255; }
+    v = v * 72340172838076673;                   # the byte in all 8 lanes (0x0101..01)
+    store64(coef, 0);
+    store64(dst, v);
+    store64(dst + stride, v);
+    store64(dst + stride * 2, v);
+    store64(dst + stride * 3, v);
+    store64(dst + stride * 4, v);
+    store64(dst + stride * 5, v);
+    store64(dst + stride * 6, v);
+    store64(dst + stride * 7, v);
+    return 0;
+}
+
+# ================================================================
 # _chitra_jpeg_idct_to — dequantize + de-zig-zag `zz` (64 i64, zig-zag order)
 # with `quant` (64 i64, zig-zag order), then _chitra_jpeg_idct_nat into bytes
 # at dst + row*stride + col. The unit-level entry; the decoder dequantizes

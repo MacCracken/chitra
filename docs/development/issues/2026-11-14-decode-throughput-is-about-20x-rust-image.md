@@ -1,9 +1,10 @@
-# PNG and JPEG decoding run about 20× slower than Rust's `image`, which puts a 4K screenshot at about 2 s — partly fixed in 1.4.0, open for PNG
+# PNG and JPEG decoding run about 20× slower than Rust's `image`, which puts a 4K screenshot at about 2 s — JPEG fixed (1.4.0, 1.4.1), open for PNG
 
-**Status:** 🟡 **PARTLY FIXED in 1.4.0, still OPEN for PNG** — JPEG is 2.6–3.4× faster and now ~5.4× Rust's
-`image`, inside the 2.5–7× range this report measured for selah's other ported paths. PNG is 1.25× faster but still
-~11×, and on a large file the remaining time is mostly sankoch's inflate. Not archived until PNG is in range; what
-remains is on the roadmap (1.4.x maintenance).
+**Status:** 🟡 **JPEG FIXED, PNG still OPEN** (1.4.0, 1.4.1) — the issue's JPEG is ~5.5× Rust's `image`, inside the
+2.5–7× range this report measured for selah's other ported paths; its PNG is ~10.5×. 1.4.1 made 1080p screenshots
+decode 1.4–2× faster in both formats, and what is left of a PNG decode is now mostly sankoch's inflate (39 of 46.6 ms
+on a 1080p RGBA screenshot), which is sankoch's code, not chitra's. Not archived until PNG is in range; what remains
+is on the roadmap (1.4.x maintenance).
 **Filed:** 2026-11-14, by **selah** (Rust → Cyrius port, M3 benches: `selah/docs/benchmarks-rust-v-cyrius.md`).
 **Affects:** every decode. selah decodes a whole screenshot on every annotate, redact and convert call.
 **Severity:** Medium for selah: its MCP tools answer an agent interactively, and a 4K JPEG now takes seconds.
@@ -64,3 +65,24 @@ Measured on this report's 512×512 pattern (same host, minimum of 10):
 - Not closed to Rust's numbers: Cyrius has no inlining and keeps every local in memory, so ~1 ns per
   simple operation is the floor here. The remaining JPEG cuts (a DC-only block path, the progressive
   driver) are on the roadmap.
+
+## Resolution, continued (1.4.1)
+
+The split this report asked for, measured stage by stage on four kinds of file (the issue's 512² pattern, 1080p
+screenshots as palette / RGB / RGBA PNG and 4:2:0 / 4:4:4 JPEG, and a photo):
+
+- **PNG** — sankoch's inflate is the largest stage everywhere it matters: 42.6 of 67.6 ms on the RGBA screenshot
+  at 1.4.0, 1,268 of 1,495 ms on a 4K photo. chitra's share was the unfilter (8–20 ms on 1080p) and the colour
+  pass (6–19 ms). 1.4.1 cut both: None / Up 8 bytes per step, Sub / Average / flat-row Paeth a pixel per step at
+  3 and 4 bytes per pixel, a palette table, word stores. Screenshot decodes went 27.6 → 17.2 ms (palette),
+  61.3 → 40.3 (RGB), 65.6 → 46.6 (RGBA), 102.4 → 51.3 (all-Paeth RGBA); the issue's file 14.2 → 13.7 ms.
+- **JPEG** — on a screenshot, entropy decoding was 4.8 ms of 59; upsampling (18 ms) and colour conversion (25 ms)
+  were the cost, and most blocks had no AC coefficient. 1.4.1 skips the IDCT for those blocks, converts colour
+  through `jdcolor.c`'s tables, and runs the upsampler bounds-free: 62.0 → 36.4 ms (4:2:0), 59.3 → 29.1 ms (4:4:4);
+  a 4K photo 389 → 332 ms; the issue's file 15.0 → 13.9 ms.
+- Every corpus is byte-identical to 1.4.0 and to its oracle (`djpeg`, libjpeg `JCS_CMYK`, ImageMagick).
+
+**What is left for PNG** is sankoch's `_deflate_decode_block`: it copies each match one byte per iteration and
+decodes every literal through a function call, which on a highly compressible screenshot is most of the time.
+That is a sankoch change (CLAUDE.md: DEFLATE is sankoch's job), and the next step for this issue.
+

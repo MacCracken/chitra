@@ -44,16 +44,25 @@ Patch-sized, independent, any order.
     into the RGBA8 output would remove it — a design question before a patch.
   1.4.0 makes this bite harder: under a budget a PNG may now be far larger than
   4096², and the working set scales with it (~4× the output for Adam7 16-bit).
-- **PNG decode speed is now mostly sankoch's inflate.** 1.4.0 cut chitra's own
-  share (unfilter, colour pass); on a 3840×2160 photo-like PNG the inflate is
-  1,258 of 1,350 ms (~10 MB/s of compressed input). Measure against sankoch's
-  own benchmarks before filing anything there — "narrow deps, not upstream
-  blame" applies to speed as much as to size.
-- **JPEG speed, what 1.4.0 left.** 4:4:4 512² is ~5.4× Rust's `image`
-  (zune-jpeg). The IDCT is ~45 % of what remains and is codegen-bound (no
-  inlining, one memory op per local); skipping the IDCT entirely for a block
-  whose AC terms are all zero (a flat fill of its DC) is the next measurable cut. The progressive driver
-  calls a function per block per scan and was not tuned.
+- **PNG decode speed is now mostly sankoch's inflate.** 1.4.0 and 1.4.1 cut
+  chitra's own share (unfilter word at a time, palette table, word stores); what
+  is left is the inflate — 39 of 46.6 ms on a 1080p RGBA screenshot, 1,258 of
+  1,350 ms on a 4K photo. sankoch 2.8.9's `_deflate_decode_block` copies a match
+  one byte per iteration and decodes every literal through a call, which is
+  where a highly compressible screenshot spends its time. That is sankoch's code
+  (CLAUDE.md: DEFLATE is sankoch's job); measure against sankoch's own
+  benchmarks before filing — "narrow deps, not upstream blame" applies to speed
+  as much as to size. The decode-throughput issue stays open on this.
+- **What 1.4.1 left in chitra's PNG path**: Paeth on photographic rows is
+  ~17 ns/byte (arithmetic-bound; the pixel path is no faster there), and the
+  RGBA8 colour pass is a copy that unfiltering straight into the output buffer
+  would remove (2.5 ms of a 1080p screenshot).
+- **JPEG speed, what 1.4.1 left.** The issue's 4:4:4 file is ~5.5× Rust's
+  `image`, inside selah's range. Photos split roughly evenly between entropy
+  decoding, IDCT, upsampling and colour (~20 ms each at 2 MP), each near
+  Cyrius's ~1 ns-per-operation floor; a combined lookahead that also yields the
+  coefficient value (stb_image's "fast AC") is the next measurable entropy cut.
+  The progressive driver calls a function per block per scan and is not tuned.
 - **Downstream consumers green on 1.4.x.** mabda, kii, jalwa, aethersafha and
   crab pin `1.0.3`; selah is the first on 1.4.x. Re-pinning needs no manifest
   change, but four things are checked while doing it: kii's error mapping (a

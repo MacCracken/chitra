@@ -69,6 +69,31 @@ fn _chitra_png_scale16(v): i64 {
 }
 
 # ================================================================
+# Expand PLTE (+ tRNS alpha) into 256 little-endian RGBA words at `tab`
+# (1,024 bytes). Entries at or past `entry_count` are zero and never read: every
+# caller rejects such an index before the lookup. tRNS supplies alpha for the
+# first `trns_len` entries; the rest are opaque (§ 11.3.2).
+fn _chitra_png_palette_table(tab, plte_ptr, entry_count, trns_ptr, trns_len): i64 {
+    var k = 0;
+    var a = 0;
+    var pe = 0;
+    while (k < 256) {
+        store32(tab + k * 4, 0);
+        k = k + 1;
+    }
+    k = 0;
+    while (k < entry_count) {
+        if (k < 256) {
+            pe = plte_ptr + k * 3;
+            a = 255;
+            if (k < trns_len) { a = load8(trns_ptr + k); }
+            store32(tab + k * 4, load8(pe) | (load8(pe + 1) << 8) | (load8(pe + 2) << 16) | (a << 24));
+        }
+        k = k + 1;
+    }
+    return 0;
+}
+
 fn _chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
     store64(err_out, 0);
 
@@ -188,21 +213,18 @@ fn _chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
                 store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
                 return 0;
             }
+            var stab[1024];                      # 256 RGBA words, see the depth-8 palette path
+            _chitra_png_palette_table(&stab, plte_ptr, entry_count, trns_ptr, trns_len);
             var py2 = 0;
             while (py2 < height) {
                 var prowp = scan + py2 * row_bytes;
                 var px3 = 0;
+                var po = out + py2 * width * 4;
                 while (px3 < width) {
                     var idx = _chitra_get_subbyte(prowp, px3, bit_depth);
                     if (idx >= entry_count) { store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK)); return 0; }
-                    var pe = plte_ptr + idx * 3;
-                    var pa = 255;
-                    if (has_trns == 1 && idx < trns_len) { pa = load8(trns_ptr + idx); }
-                    var po = out + (py2 * width + px3) * 4;
-                    store8(po + 0, load8(pe + 0));
-                    store8(po + 1, load8(pe + 1));
-                    store8(po + 2, load8(pe + 2));
-                    store8(po + 3, pa);
+                    store32(po, load32(&stab + idx * 4));
+                    po = po + 4;
                     px3 = px3 + 1;
                 }
                 py2 = py2 + 1;
@@ -268,6 +290,21 @@ fn _chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
             key_b = load8(trns_ptr + 4) * 256 + load8(trns_ptr + 5);
         }
         var i = 0;
+        # 1.4.1: the common case — 8-bit, no colour key — is one word store
+        # per pixel. load16 is little-endian, so it yields R | G << 8.
+        if (bps == 1) {
+            if (has_trns == 0) {
+                var s8 = scan;
+                var o8 = out;
+                while (i < npix) {
+                    store32(o8, load16(s8) | (load8(s8 + 2) << 16) | 4278190080);
+                    s8 = s8 + 3;
+                    o8 = o8 + 4;
+                    i = i + 1;
+                }
+                return out;
+            }
+        }
         while (i < npix) {
             var s = scan + i * 3 * bps;
             var r = load8(s + 0);
@@ -320,22 +357,23 @@ fn _chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
             store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
             return 0;
         }
+        # 1.4.1: the palette is expanded once into 256 RGBA words (entries past
+        # PLTE stay 0 and are never read — the index check below comes first),
+        # so a pixel is one compare, one load and one store.
+        var tab[1024];
+        _chitra_png_palette_table(&tab, plte_ptr, entry_count, trns_ptr, trns_len);
         var i = 0;
+        var o = out;
+        var idx = 0;
         while (i < npix) {
-            var idx = load8(scan + i);
+            idx = load8(scan + i);
             # Every index must be a valid palette entry (reject OOB).
             if (idx >= entry_count) {
                 store64(err_out, chitra_err(CHITRA_ERR_BAD_CHUNK));
                 return 0;
             }
-            var pe = plte_ptr + idx * 3;
-            var a = 255;
-            if (has_trns == 1 && idx < trns_len) { a = load8(trns_ptr + idx); }
-            var o = out + i * 4;
-            store8(o + 0, load8(pe + 0));
-            store8(o + 1, load8(pe + 1));
-            store8(o + 2, load8(pe + 2));
-            store8(o + 3, a);
+            store32(o, load32(&tab + idx * 4));
+            o = o + 4;
             i = i + 1;
         }
         return out;
@@ -365,6 +403,15 @@ fn _chitra_png_color_to_rgba8(raw, src, len, err_out): i64 {
     # ---- truecolor+alpha (6): (r,g,b,a) -> high byte per channel ----
     if (color_type == 6) {
         var i = 0;
+        # 1.4.1: 8-bit RGBA is already canonical — copy two pixels per step.
+        if (bps == 1) {
+            while (i + 2 <= npix) {
+                store64(out + i * 4, load64(scan + i * 4));
+                i = i + 2;
+            }
+            if (i < npix) { store32(out + i * 4, load32(scan + i * 4)); }
+            return out;
+        }
         while (i < npix) {
             var s = scan + i * 4 * bps;
             var o = out + i * 4;

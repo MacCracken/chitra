@@ -5334,7 +5334,156 @@ fn test_png5_chunk_length_cap() {
     return 0;
 }
 
+# ================================================================
+# 1.4.1: the word-at-a-time unfilter paths against the spec, byte by byte.
+#
+# _chitra_unfilter_row now moves 8 bytes per step for None / Up, a pixel per
+# step for Sub / Average / Paeth at 3 and 4 bytes per pixel, and takes two
+# whole-pixel Paeth shortcuts. This cell holds every path to an independent
+# reference written here from PNG § 9 one byte at a time: all five filters,
+# 1 / 2 / 3 / 4 / 6 / 8 bytes per pixel, widths 1..17 pixels (so every word
+# loop meets a tail), random rows and flat rows (the shortcuts), with the
+# output in its own buffer AND in the in-place layout _chitra_unfilter_image
+# uses, where the output starts 1, 2 or 5 bytes BEFORE the input.
+# ⚠ Mutation-checked: a wrong SWAR mask in Up, Sub or Average (bpp 3 and 4),
+# a Paeth shortcut that returns the wrong pixel (bpp 3 and 4), and a
+# pixel-per-step loop that stops one pixel early each fail it. Two mutants
+# are EQUIVALENT and survive by right: Up's 8-byte loop stopping a chunk
+# early hands it to the byte tail, and `up == left` is itself a valid Paeth
+# shortcut (a = b in every lane makes pa = pb <= pc, so it picks left).
+# ================================================================
+var _uf_seed = 12345;
+fn _uf_next(): i64 {
+    _uf_seed = _uf_seed * 6364136223846793005 + 1442695040888963407;
+    return (_uf_seed >> 33) & 255;
+}
+
+fn _uf_ref(prev, inp, out, n, bpp, ft): i64 {
+    var i = 0;
+    var a = 0;
+    var b = 0;
+    var c = 0;
+    var p = 0;
+    var pa = 0;
+    var pb = 0;
+    var pc = 0;
+    var pr = 0;
+    while (i < n) {
+        a = 0;
+        c = 0;
+        if (i >= bpp) {
+            a = load8(out + i - bpp);
+            c = load8(prev + i - bpp);
+        }
+        b = load8(prev + i);
+        pr = 0;
+        if (ft == 1) { pr = a; }
+        if (ft == 2) { pr = b; }
+        if (ft == 3) { pr = (a + b) / 2; }
+        if (ft == 4) {
+            p = a + b - c;
+            pa = p - a;
+            if (pa < 0) { pa = 0 - pa; }
+            pb = p - b;
+            if (pb < 0) { pb = 0 - pb; }
+            pc = p - c;
+            if (pc < 0) { pc = 0 - pc; }
+            pr = c;
+            if (pb <= pc) { pr = b; }
+            if (pa <= pb) {
+                if (pa <= pc) { pr = a; }
+            }
+        }
+        store8(out + i, (load8(inp + i) + pr) & 255);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn test_unfilter_word_paths_match_the_spec() {
+    var bpps = alloc(48);
+    store64(bpps, 1);
+    store64(bpps + 8, 2);
+    store64(bpps + 16, 3);
+    store64(bpps + 24, 4);
+    store64(bpps + 32, 6);
+    store64(bpps + 40, 8);
+    var prev = alloc(256);
+    var inp = alloc(256);
+    var want = alloc(256);
+    var got = alloc(256);
+    var lay = alloc(512);
+    var bad = 0;
+    var cases = 0;
+    var bi = 0;
+    var bpp = 0;
+    var w = 0;
+    var n = 0;
+    var ft = 0;
+    var flat = 0;
+    var d = 0;
+    var k = 0;
+    while (bi < 6) {
+        bpp = load64(bpps + bi * 8);
+        w = 1;
+        while (w <= 17) {
+            n = w * bpp;
+            flat = 0;
+            while (flat < 2) {
+                ft = 0;
+                while (ft <= 4) {
+                    k = 0;
+                    while (k < n) {
+                        if (flat == 0) {
+                            store8(prev + k, _uf_next());
+                            store8(inp + k, _uf_next());
+                        } else {
+                            store8(prev + k, 90 + (k % bpp));
+                            store8(inp + k, (k / bpp) & 3);
+                        }
+                        k = k + 1;
+                    }
+                    _uf_ref(prev, inp, want, n, bpp, ft);
+                    # separate output buffer
+                    _chitra_unfilter_row(prev, inp, got, n, bpp, ft);
+                    k = 0;
+                    while (k < n) {
+                        if (load8(got + k) != load8(want + k)) { bad = bad + 1; }
+                        k = k + 1;
+                    }
+                    cases = cases + 1;
+                    # in place: output d bytes before the input
+                    d = 1;
+                    while (d <= 5) {
+                        k = 0;
+                        while (k < n) {
+                            store8(lay + 8 + d + k, load8(inp + k));
+                            k = k + 1;
+                        }
+                        _chitra_unfilter_row(prev, lay + 8 + d, lay + 8, n, bpp, ft);
+                        k = 0;
+                        while (k < n) {
+                            if (load8(lay + 8 + k) != load8(want + k)) { bad = bad + 1; }
+                            k = k + 1;
+                        }
+                        cases = cases + 1;
+                        if (d == 2) { d = 5; } else { d = d + 1; }
+                    }
+                    ft = ft + 1;
+                }
+                flat = flat + 1;
+            }
+            w = w + 1;
+        }
+        bi = bi + 1;
+    }
+    assert_eq(cases, 6 * 17 * 2 * 5 * 4, "unfilter word paths: every bpp x width x content x filter x layout ran");
+    assert_eq(bad, 0, "unfilter word paths: every byte equals the byte-at-a-time PNG § 9 reference");
+    return 0;
+}
+
 fn main() {
+    test_unfilter_word_paths_match_the_spec();
     # ⛔ MUST STAY FIRST — see the comment on this test. It detects displacement
     # itself, which is how the B-12 additions were caught when they landed above it.
     test_crc_table_oom_is_reported_not_dereferenced();

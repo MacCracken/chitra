@@ -543,7 +543,7 @@ fn _chitra_jpeg_decode_block(reader, dct, act, pred, zz_out, err_out): i64 {
         store64(zz_out + i * 8, 0);
         i = i + 1;
     }
-    return _chitra_jpeg_decode_coefs(reader, dct, act, pred, 0, zz_out, err_out);
+    return _chitra_jpeg_decode_coefs(reader, dct, act, pred, 0, zz_out, 0, err_out);
 }
 
 # The entropy decode of one block (T.81 § F.2.2), writing into `coef`:
@@ -551,7 +551,9 @@ fn _chitra_jpeg_decode_block(reader, dct, act, pred, zz_out, err_out): i64 {
 #   quant != 0  coefficients DEQUANTIZED by `quant` (64 i64, zig-zag order)
 #               and placed in NATURAL order, ready for _chitra_jpeg_idct_nat.
 # Only non-zero coefficients are written: `coef` must be all-zero on entry,
-# which _chitra_jpeg_idct_nat restores after reading it.
+# which _chitra_jpeg_idct_nat restores after reading it. If `nzac_out` is not
+# 0 it receives 1 when any AC coefficient was stored, else 0 (1.4.1: a block
+# with none is a flat fill of its DC, _chitra_jpeg_dc_fill, and skips the IDCT).
 #
 # 1.4.0: the AC loop keeps the bit buffer in locals and decodes each symbol by
 # the lookahead table, refilling when fewer than 32 bits remain — enough for a
@@ -560,7 +562,7 @@ fn _chitra_jpeg_decode_block(reader, dct, act, pred, zz_out, err_out): i64 {
 # The stored DC coefficient is the predictor wrapped to 16 bits, as libjpeg's
 # JCOEF stores it; valid files never come near the wrap, and it bounds every
 # product the IDCT forms from a hostile DC that drifts block after block.
-fn _chitra_jpeg_decode_coefs(reader, dct, act, pred, quant, coef, err_out): i64 {
+fn _chitra_jpeg_decode_coefs(reader, dct, act, pred, quant, coef, nzac_out, err_out): i64 {
     store64(err_out, 0);
     var zzt = _chitra_jpeg_zigzag_table();
     var t = _chitra_jpeg_decode(reader, dct);
@@ -586,6 +588,7 @@ fn _chitra_jpeg_decode_coefs(reader, dct, act, pred, quant, coef, err_out): i64 
     var L = 0;
     var v = 0;
     var bad = 0;
+    var nzac = 0;
     var done = 0;
     while (done == 0) {
         if (k > 63) { done = 1; }
@@ -650,6 +653,7 @@ fn _chitra_jpeg_decode_coefs(reader, dct, act, pred, quant, coef, err_out): i64 
                         cnt = cnt - s;
                     }
                     if (v < (1 << (s - 1))) { v = v - (1 << s) + 1; }
+                    nzac = 1;
                     if (quant == 0) {
                         store64(coef + k * 8, v);
                     } else {
@@ -663,6 +667,7 @@ fn _chitra_jpeg_decode_coefs(reader, dct, act, pred, quant, coef, err_out): i64 
     store64(reader + _CHITRA_BR_BUF, buf);
     store64(reader + _CHITRA_BR_CNT, cnt);
     if (eod == 1) { store64(reader + _CHITRA_BR_EOD, 1); }
+    if (nzac_out != 0) { store64(nzac_out, nzac); }
     if (bad == 1) {
         store64(err_out, chitra_err(CHITRA_ERR_JPEG_ENTROPY));
         return 0;
