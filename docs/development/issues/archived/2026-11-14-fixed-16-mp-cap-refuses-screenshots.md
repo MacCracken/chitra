@@ -1,7 +1,7 @@
-# The fixed 16.7-megapixel cap refuses screenshots the caller has budgeted for — fixed in 1.4.0
+# The fixed 16.7-megapixel cap refuses screenshots the caller has budgeted for — RESOLVED
 
 **Status:** 🟢 **FIXED in 1.4.0** — under a budget the budget governs size
-([ADR 0015](../../adr/0015-the-decode-context.md)).
+([ADR 0015](../../../adr/0015-the-decode-context.md)).
 **Filed:** 2026-11-14, by **selah** (Rust → Cyrius port, M3: ledger L17).
 **Affects:** PNG, JPEG, BMP and GIF images over 16,777,216 pixels: an 8K screenshot (7680 × 4320 = 33.2 MP), three 4K
 monitors side by side (11520 × 2160 = 24.9 MP), a tall full-page web capture (1920 × 9000 = 17.3 MP).

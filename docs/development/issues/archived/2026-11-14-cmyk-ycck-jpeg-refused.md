@@ -1,7 +1,7 @@
-# CMYK and YCCK JPEGs are refused; a consumer has no way to get their pixels — fixed in 1.4.0
+# CMYK and YCCK JPEGs are refused; a consumer has no way to get their pixels — RESOLVED
 
 **Status:** 🟢 **FIXED in 1.4.0** — `chitra_jpeg_decode_cmyk` returns the samples
-([ADR 0014](../../adr/0014-cmyk-samples-not-colours.md)).
+([ADR 0014](../../../adr/0014-cmyk-samples-not-colours.md)).
 **Filed:** 2026-11-14, by **selah** (Rust → Cyrius port, M0 decode baseline: `selah/docs/development/port-parity.md`
 §2 F5).
 **Affects:** Adobe CMYK / YCCK JPEGs (APP14).

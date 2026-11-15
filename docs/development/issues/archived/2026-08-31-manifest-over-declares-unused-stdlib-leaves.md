@@ -1,4 +1,4 @@
-# `src/lib.cyr` included `args`, `flags` and `vec`, which are referenced nowhere — and consumers paid for them
+# `src/lib.cyr` included `args`, `flags` and `vec`, which are referenced nowhere — and consumers paid for them — RESOLVED
 
 **Status:** 🟢 **FIXED in 1.0.1.** Removed from `src/lib.cyr` (and from `[deps].stdlib`, kept in
 step). `dist/chitra.deps` drops from 13 leaves to 10.

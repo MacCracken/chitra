@@ -1,7 +1,7 @@
-# Box chroma upsampling reproduces a subsampled JPEG less accurately than interpolated upsampling — fixed in 1.4.0
+# Box chroma upsampling reproduces a subsampled JPEG less accurately than interpolated upsampling — RESOLVED
 
 **Status:** 🟢 **FIXED in 1.4.0** — interpolated upsampling, libjpeg-turbo's filters bit for bit, held to
-`djpeg` ([ADR 0012](../../adr/0012-interpolated-chroma-upsampling.md)).
+`djpeg` ([ADR 0012](../../../adr/0012-interpolated-chroma-upsampling.md)).
 **Filed:** 2026-11-14, by **selah** (its Rust → Cyrius port, M0 decode baseline:
 `selah/docs/development/port-parity.md` §2 F1).
 **Affects:** every chroma-subsampled JPEG (4:2:0, 4:2:2, 4:4:0, any `Hi,Vi` > 1) — that is, most real-world JPEGs.

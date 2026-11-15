@@ -1,7 +1,7 @@
-# A 32-bpp BI_RGB BMP's unused fourth byte is read as alpha whenever any of it is non-zero — fixed in 1.4.0
+# A 32-bpp BI_RGB BMP's unused fourth byte is read as alpha whenever any of it is non-zero — RESOLVED
 
 **Status:** 🟢 **FIXED in 1.4.0** — 32-bpp `BI_RGB` is opaque; alpha is read only where a mask declares it
-([ADR 0011](../../adr/0011-bmp-samples-mean-what-the-format-says.md)).
+([ADR 0011](../../../adr/0011-bmp-samples-mean-what-the-format-says.md)).
 **Filed:** 2026-11-14, by **selah** (Rust → Cyrius port, M0 decode baseline: `selah/docs/development/port-parity.md`
 §2 F4).
 **Affects:** 32-bpp `BI_RGB` BMPs whose fourth byte is not all zero.

@@ -1,7 +1,9 @@
-# PNG and JPEG decoding run about 20× slower than Rust's `image`, which puts a 4K screenshot at about 2 s — addressed in 1.4.0
+# PNG and JPEG decoding run about 20× slower than Rust's `image`, which puts a 4K screenshot at about 2 s — partly fixed in 1.4.0, open for PNG
 
-**Status:** 🟢 **ADDRESSED in 1.4.0** — JPEG 2.6–3.4× faster, PNG 1.25×; what remains is recorded on the
-roadmap (1.4.x maintenance).
+**Status:** 🟡 **PARTLY FIXED in 1.4.0, still OPEN for PNG** — JPEG is 2.6–3.4× faster and now ~5.4× Rust's
+`image`, inside the 2.5–7× range this report measured for selah's other ported paths. PNG is 1.25× faster but still
+~11×, and on a large file the remaining time is mostly sankoch's inflate. Not archived until PNG is in range; what
+remains is on the roadmap (1.4.x maintenance).
 **Filed:** 2026-11-14, by **selah** (Rust → Cyrius port, M3 benches: `selah/docs/benchmarks-rust-v-cyrius.md`).
 **Affects:** every decode. selah decodes a whole screenshot on every annotate, redact and convert call.
 **Severity:** Medium for selah: its MCP tools answer an agent interactively, and a 4K JPEG now takes seconds.

@@ -1,6 +1,6 @@
-# Progressive JPEG (SOF2) now has a consumer that needs it: selah — fixed in 1.4.0
+# Progressive JPEG (SOF2) now has a consumer that needs it: selah — RESOLVED
 
-**Status:** 🟢 **FIXED in 1.4.0** — progressive JPEG decodes ([ADR 0013](../../adr/0013-progressive-jpeg.md)).
+**Status:** 🟢 **FIXED in 1.4.0** — progressive JPEG decodes ([ADR 0013](../../../adr/0013-progressive-jpeg.md)).
 **Filed:** 2026-11-14, by **selah** (Rust → Cyrius port: `selah/docs/development/selah-port-plan.md`, ADR 0002 #2).
 **Affects:** progressive JPEGs — common on the web (browsers and image optimisers write them), and so common in what
 users screenshot, save and annotate.

@@ -19,7 +19,8 @@ JPEGs, 16-bpp BMPs and 32-bpp `BI_RGB` BMPs — the first toward `djpeg`, the
 other two toward the format's own definition (ADRs 0011 and 0012 say why that
 is a repair, not a break). Every issue was filed by **selah**, the AGNOS
 screenshot / annotation library, measuring its Rust → Cyrius port against Rust's
-`image`; each `docs/development/issues/2026-11-14-*.md` now records its fix.
+`image`; each report now records its fix — seven in `docs/development/issues/archived/`, and the throughput
+one, which stays open for PNG, in `docs/development/issues/`.
 
 ### Added — progressive JPEG (SOF2) — [ADR 0013](docs/adr/0013-progressive-jpeg.md)
 
@@ -1006,7 +1007,7 @@ Measured with one scratch consumer whose own `[deps].stdlib` is **empty**, decod
 Both decode correctly. A kii-shaped consumer that also declares `sankoch` and `thread` itself links
 clean with no duplicate-definition warning. The five unused includes stay in `src/lib.cyr`: removing
 them would change nothing a consumer links, and its header comment — which said this list *was* the
-consumer's bill — is corrected. [The issue](docs/development/issues/2026-08-31-manifest-over-declares-unused-stdlib-leaves.md)
+consumer's bill — is corrected. [The issue](docs/development/issues/archived/2026-08-31-manifest-over-declares-unused-stdlib-leaves.md)
 is closed with the re-review appended.
 
 ### Fixed — the B-1 regression test was pinned to sankoch's allocation order

@@ -1,7 +1,7 @@
-# BMP channels narrower than 8 bits are widened by bit replication, which is not the nearest 8-bit value — fixed in 1.4.0
+# BMP channels narrower than 8 bits are widened by bit replication, which is not the nearest 8-bit value — RESOLVED
 
 **Status:** 🟢 **FIXED in 1.4.0** — sub-8-bit channels round to the nearest level
-([ADR 0011](../../adr/0011-bmp-samples-mean-what-the-format-says.md)).
+([ADR 0011](../../../adr/0011-bmp-samples-mean-what-the-format-says.md)).
 **Filed:** 2026-11-14, by **selah** (Rust → Cyrius port, M0 decode baseline: `selah/docs/development/port-parity.md`
 §2 F3).
 **Affects:** 16-bpp BMPs (5-5-5, 5-6-5 bitfields) and any bitfield mask narrower than 8 bits.

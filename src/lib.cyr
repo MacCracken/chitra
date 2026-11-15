@@ -21,7 +21,7 @@
 # actually REFERENCES and compile-verifies the bundle against them: it is `sankoch`, `alloc`,
 # `string` whatever this list says (proved by trimming this list to five and getting the identical
 # sidecar). `assert`, `bench`, `fmt`, `io` and `str` below are called by nothing in src/ and now cost
-# only chitra's own builds. See docs/development/issues/2026-08-31-*.md.
+# only chitra's own builds. See docs/development/issues/archived/2026-08-31-*.md.
 # ⇒ Still add an include only when a symbol needs it — and if a future pin reverts the derivation,
 # CI's dist-sync step diffs `dist/chitra.deps` and fails before a consumer is re-billed.
 

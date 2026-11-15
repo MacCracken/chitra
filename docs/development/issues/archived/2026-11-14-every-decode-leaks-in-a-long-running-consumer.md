@@ -1,7 +1,7 @@
-# Every decode's memory is lost for the life of the process; a long-running consumer cannot use chitra safely — fixed in 1.4.0
+# Every decode's memory is lost for the life of the process; a long-running consumer cannot use chitra safely — RESOLVED
 
 **Status:** 🟢 **FIXED in 1.4.0** — `chitra_image_decode_budget_via` takes an `Allocator`, frees every working
-buffer, and `chitra_image_free` is real for its images ([ADR 0015](../../adr/0015-the-decode-context.md)).
+buffer, and `chitra_image_free` is real for its images ([ADR 0015](../../../adr/0015-the-decode-context.md)).
 **Filed:** 2026-11-14, by **selah** (its Rust → Cyrius port, M3: `selah/docs/development/selah-port-plan.md` §6,
 ledger L16).
 **Affects:** any consumer that decodes more than a bounded number of images in one process: selah's MCP server (one
